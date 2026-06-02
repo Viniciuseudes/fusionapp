@@ -14,67 +14,112 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { AlertCircle, ArrowLeft } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowLeft,
+  Stethoscope,
+  Building2,
+  LogIn,
+} from "lucide-react";
+
+type AuthStep = "gateway" | "login" | "register_professional";
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [fullName, setFullName] = useState("");
-  const [isSignUp, setIsSignUp] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
   const router = useRouter();
   const supabase = createClient();
 
-  const handleAuth = async (e: React.FormEvent) => {
+  const [step, setStep] = useState<AuthStep>("gateway");
+
+  // States para formulários
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Função unificada de Login com Redirecionamento Inteligente
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
 
-    if (isSignUp) {
+    try {
+      const { data: authData, error: authError } =
+        await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+
+      if (authError) throw authError;
+
+      // Busca o role do usuário na tabela profiles
+      if (authData.user) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", authData.user.id)
+          .single();
+
+        // Redirecionamento inteligente baseado no Role
+        if (profile?.role === "host") {
+          router.push("/host");
+        } else {
+          router.push("/dashboard");
+        }
+        router.refresh();
+      }
+    } catch (err: any) {
+      setError("E-mail ou senha incorretos.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Função de Cadastro APENAS para Profissionais
+  const handleRegisterProfessional = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+
+    try {
       const { error } = await supabase.auth.signUp({
         email,
         password,
-        options: { data: { full_name: fullName } },
+        options: {
+          data: {
+            full_name: fullName,
+            role: "user", // Define explicitamente como profissional
+          },
+        },
       });
 
-      if (error) {
-        setError(error.message);
-      } else {
-        alert("Conta criada com sucesso! Faça o login agora.");
-        setIsSignUp(false);
-      }
-    } else {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      if (error) throw error;
 
-      if (error) {
-        setError("E-mail ou senha incorretos.");
-      } else {
-        router.push("/dashboard");
-        router.refresh();
-      }
+      alert("Conta criada com sucesso! Faça o login agora.");
+      setStep("login");
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 p-4">
-      {/* Botão de Voltar estilo App */}
+      {/* Botão de Voltar */}
       <div className="w-full max-w-md mb-4 flex justify-start">
         <button
-          onClick={() => router.push("/")}
+          onClick={() =>
+            step === "gateway" ? router.push("/") : setStep("gateway")
+          }
           className="flex items-center text-sm font-bold text-slate-500 hover:text-slate-900 transition-colors"
         >
-          <ArrowLeft className="w-4 h-4 mr-1" /> Voltar para o Início
+          <ArrowLeft className="w-4 h-4 mr-1" />
+          {step === "gateway" ? "Voltar para o Início" : "Voltar para Opções"}
         </button>
       </div>
 
       <Card className="w-full max-w-md shadow-xl border-slate-100 rounded-2xl overflow-hidden">
-        {/* Detalhe de cor no topo do cartão para dar um ar premium */}
         <div className="h-2 w-full bg-primary" />
 
         <CardHeader className="space-y-2 text-center pt-8 pb-6">
@@ -85,97 +130,164 @@ export default function LoginPage() {
             Fusion Clinic
           </CardTitle>
           <CardDescription className="text-slate-500 font-medium">
-            {isSignUp
-              ? "Crie sua conta para reservar espaços premium"
-              : "Acesse seu painel e sua carteira digital"}
+            {step === "gateway" && "Como você deseja acessar a plataforma?"}
+            {step === "login" && "Acesse seu painel"}
+            {step === "register_professional" &&
+              "Crie sua conta de Profissional"}
           </CardDescription>
         </CardHeader>
 
-        <form onSubmit={handleAuth}>
-          <CardContent className="space-y-4 px-6">
-            {error && (
-              <div className="flex items-center gap-2 bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <p>{error}</p>
-              </div>
-            )}
+        <CardContent className="px-6 pb-8">
+          {error && (
+            <div className="flex items-center gap-2 bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium mb-4">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <p>{error}</p>
+            </div>
+          )}
 
-            {isSignUp && (
+          {/* PASSO 1: BIFURCAÇÃO (GATEWAY) */}
+          {step === "gateway" && (
+            <div className="space-y-4">
+              <Button
+                onClick={() => setStep("login")}
+                className="w-full h-14 justify-start text-left bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow-sm"
+              >
+                <LogIn className="w-5 h-5 mr-3 text-slate-300" />
+                <div>
+                  <div className="font-bold">Já tenho uma conta</div>
+                  <div className="text-xs text-slate-400 font-normal">
+                    Fazer login no sistema
+                  </div>
+                </div>
+              </Button>
+
+              <div className="relative py-2">
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t border-slate-200" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-white px-2 text-slate-400 font-bold">
+                    Ainda não tem conta?
+                  </span>
+                </div>
+              </div>
+
+              <Button
+                onClick={() => setStep("register_professional")}
+                variant="outline"
+                className="w-full h-14 justify-start text-left border-slate-200 hover:bg-slate-50 hover:text-primary rounded-xl"
+              >
+                <Stethoscope className="w-5 h-5 mr-3 text-slate-400" />
+                <div>
+                  <div className="font-bold">Sou Profissional</div>
+                  <div className="text-xs text-slate-500 font-normal">
+                    Quero reservar salas
+                  </div>
+                </div>
+              </Button>
+
+              <Button
+                onClick={() => router.push("/host/register")}
+                variant="outline"
+                className="w-full h-14 justify-start text-left border-slate-200 hover:bg-slate-50 hover:text-primary rounded-xl"
+              >
+                <Building2 className="w-5 h-5 mr-3 text-slate-400" />
+                <div>
+                  <div className="font-bold">Sou Anfitrião</div>
+                  <div className="text-xs text-slate-500 font-normal">
+                    Quero cadastrar minha clínica
+                  </div>
+                </div>
+              </Button>
+            </div>
+          )}
+
+          {/* PASSO 2: FORMULÁRIO DE LOGIN UNIFICADO */}
+          {step === "login" && (
+            <form onSubmit={handleLogin} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="fullName" className="text-slate-700 font-bold">
-                  Nome Completo
-                </Label>
+                <Label htmlFor="email">E-mail</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="seu@email.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  className="h-12 bg-slate-50 border-slate-200 rounded-xl"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">Senha</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  className="h-12 bg-slate-50 border-slate-200 rounded-xl"
+                />
+              </div>
+              <Button
+                type="submit"
+                className="w-full h-12 rounded-xl mt-2 font-bold"
+                disabled={loading}
+              >
+                {loading ? "Entrando..." : "Entrar"}
+              </Button>
+            </form>
+          )}
+
+          {/* PASSO 3: FORMULÁRIO DE CADASTRO DE PROFISSIONAL */}
+          {step === "register_professional" && (
+            <form onSubmit={handleRegisterProfessional} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="fullName">Nome Completo</Label>
                 <Input
                   id="fullName"
                   type="text"
                   placeholder="Dr. João Silva"
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
-                  required={isSignUp}
-                  className="h-12 bg-slate-50 border-slate-200 focus-visible:ring-primary rounded-xl"
+                  required
+                  className="h-12 bg-slate-50 border-slate-200 rounded-xl"
                 />
               </div>
-            )}
-
-            <div className="space-y-2">
-              <Label htmlFor="email" className="text-slate-700 font-bold">
-                E-mail
-              </Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="medico@exemplo.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                className="h-12 bg-slate-50 border-slate-200 focus-visible:ring-primary rounded-xl"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="password" className="text-slate-700 font-bold">
-                Senha
-              </Label>
-              <Input
-                id="password"
-                type="password"
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                className="h-12 bg-slate-50 border-slate-200 focus-visible:ring-primary rounded-xl"
-              />
-            </div>
-          </CardContent>
-
-          <CardFooter className="flex flex-col space-y-4 px-6 pb-8 pt-4">
-            <Button
-              type="submit"
-              className="w-full h-12 bg-primary hover:bg-primary/90 text-primary-foreground font-bold text-base rounded-xl shadow-md transition-all active:scale-[0.98]"
-              disabled={loading}
-            >
-              {loading
-                ? "Aguarde..."
-                : isSignUp
-                  ? "Criar Conta"
-                  : "Entrar na Plataforma"}
-            </Button>
-
-            <div className="text-center text-sm font-medium text-slate-500">
-              {isSignUp ? "Já tem uma conta?" : "Ainda não faz parte?"}
-              <button
-                type="button"
-                onClick={() => {
-                  setIsSignUp(!isSignUp);
-                  setError(null);
-                }}
-                className="ml-1.5 font-bold text-primary hover:text-primary/80 transition-colors"
+              <div className="space-y-2">
+                <Label htmlFor="email">E-mail Profissional</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="medico@exemplo.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  className="h-12 bg-slate-50 border-slate-200 rounded-xl"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">Senha</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="Crie uma senha forte"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  className="h-12 bg-slate-50 border-slate-200 rounded-xl"
+                />
+              </div>
+              <Button
+                type="submit"
+                className="w-full h-12 rounded-xl mt-2 font-bold"
+                disabled={loading}
               >
-                {isSignUp ? "Faça login" : "Cadastre-se grátis"}
-              </button>
-            </div>
-          </CardFooter>
-        </form>
+                {loading ? "Criando conta..." : "Criar Conta de Profissional"}
+              </Button>
+            </form>
+          )}
+        </CardContent>
       </Card>
     </div>
   );
