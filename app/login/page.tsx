@@ -6,11 +6,11 @@ import { createClient } from "@/utils/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast"; // <-- Utilizando seu hook de toast
 import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -27,6 +27,7 @@ type AuthStep = "gateway" | "login" | "register_professional";
 export default function LoginPage() {
   const router = useRouter();
   const supabase = createClient();
+  const { toast } = useToast();
 
   const [step, setStep] = useState<AuthStep>("gateway");
 
@@ -52,13 +53,20 @@ export default function LoginPage() {
 
       if (authError) throw authError;
 
-      // Busca o role do usuário na tabela profiles
       if (authData.user) {
-        const { data: profile } = await supabase
+        // Busca o role do usuário na tabela profiles
+        const { data: profile, error: profileError } = await supabase
           .from("profiles")
           .select("role")
           .eq("id", authData.user.id)
           .single();
+
+        if (profileError) throw profileError;
+
+        toast({
+          title: "Bem-vindo de volta!",
+          description: "Login realizado com sucesso.",
+        });
 
         // Redirecionamento inteligente baseado no Role
         if (profile?.role === "host") {
@@ -69,36 +77,44 @@ export default function LoginPage() {
         router.refresh();
       }
     } catch (err: any) {
+      console.error(err);
       setError("E-mail ou senha incorretos.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Função de Cadastro APENAS para Profissionais
+  // Função de Cadastro APENAS para Profissionais (Usuários)
   const handleRegisterProfessional = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
 
     try {
-      const { error } = await supabase.auth.signUp({
+      const { error: signUpError } = await supabase.auth.signUp({
         email,
         password,
         options: {
           data: {
             full_name: fullName,
-            role: "user", // Define explicitamente como profissional
+            role: "user", // Define explicitamente como profissional. O Trigger no SQL fará o resto.
           },
         },
       });
 
-      if (error) throw error;
+      if (signUpError) throw signUpError;
 
-      alert("Conta criada com sucesso! Faça o login agora.");
+      toast({
+        title: "Conta criada com sucesso!",
+        description: "Você já pode fazer login na plataforma.",
+      });
+
       setStep("login");
+      // Limpa os campos após sucesso
+      setPassword("");
     } catch (err: any) {
-      setError(err.message);
+      console.error(err);
+      setError(err.message || "Erro ao criar conta. Tente novamente.");
     } finally {
       setLoading(false);
     }
@@ -186,6 +202,7 @@ export default function LoginPage() {
                 </div>
               </Button>
 
+              {/* Rota direcionada para o registro exclusivo de anfitriões */}
               <Button
                 onClick={() => router.push("/host/register")}
                 variant="outline"
@@ -206,9 +223,9 @@ export default function LoginPage() {
           {step === "login" && (
             <form onSubmit={handleLogin} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="email">E-mail</Label>
+                <Label htmlFor="login-email">E-mail</Label>
                 <Input
-                  id="email"
+                  id="login-email"
                   type="email"
                   placeholder="seu@email.com"
                   value={email}
@@ -218,9 +235,9 @@ export default function LoginPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="password">Senha</Label>
+                <Label htmlFor="login-password">Senha</Label>
                 <Input
-                  id="password"
+                  id="login-password"
                   type="password"
                   placeholder="••••••••"
                   value={password}
@@ -243,9 +260,9 @@ export default function LoginPage() {
           {step === "register_professional" && (
             <form onSubmit={handleRegisterProfessional} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="fullName">Nome Completo</Label>
+                <Label htmlFor="reg-fullName">Nome Completo</Label>
                 <Input
-                  id="fullName"
+                  id="reg-fullName"
                   type="text"
                   placeholder="Dr. João Silva"
                   value={fullName}
@@ -255,9 +272,9 @@ export default function LoginPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="email">E-mail Profissional</Label>
+                <Label htmlFor="reg-email">E-mail Profissional</Label>
                 <Input
-                  id="email"
+                  id="reg-email"
                   type="email"
                   placeholder="medico@exemplo.com"
                   value={email}
@@ -267,9 +284,9 @@ export default function LoginPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="password">Senha</Label>
+                <Label htmlFor="reg-password">Senha</Label>
                 <Input
-                  id="password"
+                  id="reg-password"
                   type="password"
                   placeholder="Crie uma senha forte"
                   value={password}
@@ -283,7 +300,7 @@ export default function LoginPage() {
                 className="w-full h-12 rounded-xl mt-2 font-bold"
                 disabled={loading}
               >
-                {loading ? "Criando conta..." : "Criar Conta de Profissional"}
+                {loading ? "Criando conta..." : "Criar Conta"}
               </Button>
             </form>
           )}

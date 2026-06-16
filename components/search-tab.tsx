@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 import {
   Search,
   SlidersHorizontal,
@@ -12,20 +13,36 @@ import {
   Bell,
   Heart,
   Loader2,
+  Sparkles,
+  Navigation,
+  X,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
 
-// Definimos os tipos diretamente aqui para nos livrarmos do mock-data
 export type RentalType = "hora" | "turno" | "fixo";
 
 export interface Room {
   id: string;
   name: string;
   category: string;
-  pricePerHour: number;
+  priceLabel: string;
+  filterPrice: number;
   image: string;
   rating: string;
   distance: string;
+  modalities: string[];
+  isPartner: boolean;
+  locationString: string;
 }
 
 const rentalTypes: { id: RentalType; label: string }[] = [
@@ -42,15 +59,10 @@ export function SearchTab({ onOpenRoom }: SearchTabProps) {
   const pathname = usePathname();
   const router = useRouter();
   const supabase = createClient();
-
+  const { toast } = useToast();
   const isPublic = pathname === "/";
 
-  // Estados de UI
-  const [searchQuery, setSearchQuery] = useState("");
-  const [rentalType, setRentalType] = useState<RentalType>("hora");
-  const [favorites, setFavorites] = useState<Set<string>>(new Set());
-
-  // Estados de Dados (Supabase)
+  const [loading, setLoading] = useState(true);
   const [dbRooms, setDbRooms] = useState<Room[]>([]);
   const [profile, setProfile] = useState({
     name: "",
@@ -58,59 +70,106 @@ export function SearchTab({ onOpenRoom }: SearchTabProps) {
     notifications: 0,
     location: "Natal, RN",
   });
-  const [loading, setLoading] = useState(true);
+  const [favorites, setFavorites] = useState<Set<string>>(new Set());
 
-  // O EFEITO MÁGICO: Vai à base de dados buscar tudo ao carregar a página
+  const [searchQuery, setSearchQuery] = useState("");
+  const [rentalType, setRentalType] = useState<RentalType>("turno");
+  const [selectedCategory, setSelectedCategory] = useState<string>("Todas");
+  const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
+  const [minPrice, setMinPrice] = useState("");
+  const [maxPrice, setMaxPrice] = useState("");
+  const [usingLocation, setUsingLocation] = useState(false);
+
   useEffect(() => {
     async function fetchData() {
-      // 1. Buscar as Salas Ativas e as suas Categorias de Preço
-      const { data: roomsData, error: roomsError } = await supabase
+      const { data: roomsData } = await supabase
         .from("rooms")
         .select(
-          `
-          id,
-          name,
-          image_url,
-          room_categories (
-            name,
-            credit_cost_per_hour
-          )
-        `,
+          `id, name, image_url, modalities, is_partner, specialty, address_details`,
         )
-        .eq("is_active", true);
+        .eq("is_active", true)
+        .eq("is_paused", false);
 
       if (roomsData) {
-        const formattedRooms = roomsData.map((r: any) => ({
-          id: r.id,
-          name: r.name,
-          category: r.room_categories.name,
-          pricePerHour: r.room_categories.credit_cost_per_hour,
-          image: r.image_url,
-          rating: "5.0", // Fixo por agora até termos sistema de avaliações
-          distance: "2.5 km", // Fixo por agora
-        }));
+        const formattedRooms = roomsData.map((r: any) => {
+          const pricing = r.address_details?.pricing || {};
+          const address = r.address_details || {};
+          const isRoomPartner = r.is_partner === true;
+
+          const locationString = [
+            address.street,
+            address.city,
+            address.neighborhood,
+          ]
+            .filter(Boolean)
+            .join(", ");
+          const displayLocation = address.city || "Localização não informada";
+
+          let label = "Sob consulta";
+          let numPrice = 0;
+
+          if (rentalType === "hora" && pricing.hourly) {
+            label = `R$ ${pricing.hourly}/hora`;
+            numPrice = Number(pricing.hourly);
+          } else if (rentalType === "turno") {
+            const turnos = [pricing.morning, pricing.afternoon, pricing.night]
+              .filter(Boolean)
+              .map(Number);
+            const minTurno = turnos.length > 0 ? Math.min(...turnos) : 0;
+            label = minTurno > 0 ? `R$ ${minTurno}/turno` : "Sob consulta";
+            numPrice = minTurno;
+          } else if (rentalType === "fixo" && pricing.monthly) {
+            label = `R$ ${pricing.monthly}/mês`;
+            numPrice = Number(pricing.monthly);
+          } else {
+            if (pricing.hourly && isRoomPartner) {
+              label = `R$ ${pricing.hourly}/hora`;
+              numPrice = Number(pricing.hourly);
+            } else if (pricing.morning) {
+              label = `R$ ${pricing.morning}/turno`;
+              numPrice = Number(pricing.morning);
+            } else if (pricing.monthly) {
+              label = `R$ ${pricing.monthly}/mês`;
+              numPrice = Number(pricing.monthly);
+            }
+          }
+
+          const rawModalities = Array.isArray(r.modalities) ? r.modalities : [];
+          const finalModalities = isRoomPartner
+            ? Array.from(new Set([...rawModalities, "hora"]))
+            : rawModalities;
+
+          return {
+            id: r.id,
+            name: r.name || "Sala sem nome",
+            category: r.specialty || "Multiuso",
+            priceLabel: label,
+            filterPrice: numPrice,
+            image: r.image_url || "/placeholder.jpg",
+            rating: "5.0",
+            distance: displayLocation,
+            modalities: finalModalities,
+            isPartner: isRoomPartner,
+            locationString: locationString,
+          };
+        });
         setDbRooms(formattedRooms);
       }
 
-      // 2. Se estiver logado, buscar o Nome e o Saldo da Carteira
       if (!isPublic) {
         const {
           data: { user },
         } = await supabase.auth.getUser();
         if (user) {
-          // Busca o perfil
           const { data: profileData } = await supabase
             .from("profiles")
             .select("full_name")
             .eq("id", user.id)
             .single();
-
-          // Calcula o saldo somando as transações da carteira
           const { data: walletData } = await supabase
             .from("wallet_transactions")
             .select("amount")
             .eq("user_id", user.id);
-
           const balance = walletData
             ? walletData.reduce((acc, curr) => acc + Number(curr.amount), 0)
             : 0;
@@ -118,24 +177,49 @@ export function SearchTab({ onOpenRoom }: SearchTabProps) {
           setProfile((prev) => ({
             ...prev,
             name: profileData?.full_name || "Doutor(a)",
-            balance: balance,
+            balance,
           }));
         }
       }
       setLoading(false);
     }
-
     fetchData();
-  }, [isPublic, supabase]);
+  }, [isPublic, supabase, rentalType]);
+
+  const availableCategories = useMemo(() => {
+    const cats = new Set(dbRooms.map((r) => r.category));
+    return ["Todas", ...Array.from(cats)];
+  }, [dbRooms]);
+
+  const requestLocation = () => {
+    if ("geolocation" in navigator) {
+      toast({
+        title: "Buscando localização...",
+        description: "Procurando salas próximas a você.",
+      });
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setUsingLocation(true);
+          toast({
+            title: "Localização Encontrada",
+            description: "Mostrando espaços perto de você.",
+          });
+        },
+        () => {
+          toast({
+            variant: "destructive",
+            title: "Permissão Negada",
+            description:
+              "Ative o GPS no seu navegador para buscar salas próximas.",
+          });
+        },
+      );
+    }
+  };
 
   function toggleFavorite(e: React.MouseEvent, roomId: string) {
     e.stopPropagation();
-
-    if (isPublic) {
-      router.push("/login");
-      return;
-    }
-
+    if (isPublic) return router.push("/login");
     setFavorites((prev) => {
       const next = new Set(prev);
       if (next.has(roomId)) next.delete(roomId);
@@ -144,188 +228,192 @@ export function SearchTab({ onOpenRoom }: SearchTabProps) {
     });
   }
 
-  // Se os dados ainda estiverem a carregar, mostramos um ecrã de loading elegante
+  // --- LÓGICA DE FILTRO 100% BLINDADA CONTRA ERROS DE DADOS NULOS ---
+  const filteredRooms = dbRooms.filter((room) => {
+    const searchLower = (searchQuery || "").toLowerCase();
+
+    // Fallbacks para evitar o erro Cannot read properties of undefined (reading 'toLowerCase')
+    const locStr = (room.locationString || "").toLowerCase();
+    const nameStr = (room.name || "").toLowerCase();
+    const catStr = (room.category || "").toLowerCase();
+
+    const matchesSearch =
+      locStr.includes(searchLower) ||
+      nameStr.includes(searchLower) ||
+      catStr.includes(searchLower);
+
+    const matchesModality = Array.isArray(room.modalities)
+      ? room.modalities.includes(rentalType)
+      : false;
+    const matchesCategory =
+      selectedCategory === "Todas" || room.category === selectedCategory;
+    const passesMinPrice =
+      minPrice === "" || room.filterPrice >= Number(minPrice);
+    const passesMaxPrice =
+      maxPrice === "" || room.filterPrice <= Number(maxPrice);
+
+    return (
+      matchesSearch &&
+      matchesModality &&
+      matchesCategory &&
+      passesMinPrice &&
+      passesMaxPrice
+    );
+  });
+
+  const partnerRooms = filteredRooms.filter((r) => r.isPartner);
+  const regularRooms = filteredRooms.filter((r) => !r.isPartner);
+
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-        <Loader2 className="h-10 w-10 animate-spin text-primary" />
-        <p className="text-slate-500 font-medium">
-          A carregar espaços premium...
-        </p>
+      <div className="flex justify-center items-center min-h-screen bg-slate-50">
+        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
       </div>
     );
   }
 
-  const filteredRooms = dbRooms.filter(
-    (room) =>
-      room.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      room.category.toLowerCase().includes(searchQuery.toLowerCase()),
-  );
-
-  // Apenas para efeito visual, dividimos as salas em duas secções
-  const nearbyRooms = filteredRooms.slice(
-    0,
-    Math.ceil(filteredRooms.length / 2),
-  );
-  const newRooms = filteredRooms.slice(Math.ceil(filteredRooms.length / 2));
-
   return (
-    <div className="flex flex-col pb-20 lg:pb-6 bg-slate-50 min-h-screen">
-      <header className="bg-primary px-4 pb-12 pt-10 lg:px-8 lg:pt-12 rounded-b-[2.5rem] shadow-md">
-        {isPublic ? (
-          <div className="mx-auto max-w-3xl">
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-2">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/20 backdrop-blur-md shadow-inner">
-                  <span className="text-white font-black text-2xl">F</span>
-                </div>
-                <span className="font-bold text-2xl text-white tracking-tight">
-                  Fusion
-                </span>
-              </div>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => router.push("/login")}
-                  className="text-sm font-bold text-white/90 hover:text-white transition-colors"
-                >
-                  Entrar
-                </button>
-                <button
-                  onClick={() => router.push("/login")}
-                  className="bg-white text-primary text-sm font-black px-5 py-2.5 rounded-full shadow-lg hover:scale-105 transition-transform"
-                >
-                  Registar
-                </button>
-              </div>
-            </div>
-            <div>
-              <h1 className="text-3xl font-black text-white mb-2 leading-tight">
-                O seu próximo consultório.
-              </h1>
-              <p className="text-primary-foreground/90 text-sm font-medium">
-                Alugue espaços premium sem burocracia e com cashback.
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div className="mx-auto max-w-3xl">
-            <div className="flex items-center justify-between mb-4">
+    <div className="flex flex-col pb-24 bg-slate-50 min-h-screen relative">
+      <header className="bg-gradient-to-r from-[#f05e23] to-[#d6521e] px-4 pb-16 pt-10 lg:px-8 lg:pt-12 rounded-b-[2.5rem] shadow-lg">
+        {!isPublic && (
+          <div className="mx-auto max-w-5xl">
+            <div className="flex items-center justify-between mb-2">
               <div>
-                <h1 className="text-2xl font-bold text-primary-foreground">
-                  {"Olá, " + profile.name.split(" ")[0] + "!"}
-                </h1>
-                <p className="text-sm text-primary-foreground/80">
-                  Encontre o seu espaço ideal
+                <p className="text-white/80 text-sm font-bold tracking-wide uppercase">
+                  Bem-vindo de volta
                 </p>
+                <h1 className="text-2xl font-black text-white">
+                  {"Dr(a). " + profile.name.split(" ")[0]}
+                </h1>
               </div>
               <div className="flex items-center gap-4">
-                <button
-                  className="relative hover:scale-105 transition-transform"
-                  aria-label="Notificações"
-                >
-                  <Bell className="h-6 w-6 text-primary-foreground" />
-                  {profile.notifications > 0 && (
-                    <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white shadow-sm">
-                      {profile.notifications}
-                    </span>
-                  )}
-                </button>
                 <div className="flex flex-col items-end cursor-pointer hover:opacity-90 transition-opacity">
-                  <span className="text-[10px] text-primary-foreground/70 font-bold uppercase tracking-widest">
-                    Carteira
+                  <span className="text-[10px] text-white/80 font-bold uppercase tracking-widest">
+                    Saldo Fusion
                   </span>
-                  <span className="rounded-full bg-white/20 px-3 py-1 text-sm font-bold text-white backdrop-blur-md shadow-inner border border-white/10 mt-0.5">
-                    {"R$ " + profile.balance.toFixed(2).replace(".", ",")}
+                  <span className="rounded-xl bg-white/20 px-3 py-1.5 text-sm font-bold text-white backdrop-blur-md shadow-inner border border-white/10 mt-0.5">
+                    R$ {profile.balance.toFixed(2).replace(".", ",")}
                   </span>
                 </div>
               </div>
-            </div>
-            <div className="flex items-center gap-1.5 text-primary-foreground/90">
-              <MapPin className="h-4 w-4" />
-              <span className="text-sm font-medium">{profile.location}</span>
             </div>
           </div>
         )}
       </header>
 
-      <div className="mx-auto w-full max-w-3xl px-4 -mt-7 relative z-10">
-        <div className="relative flex items-center shadow-lg rounded-2xl bg-white border border-slate-100 p-1">
-          <Search className="absolute left-4 h-5 w-5 text-slate-400" />
-          <Input
-            placeholder={
-              isPublic
-                ? "Procurar por especialidade ou clínica..."
-                : "Para onde vamos hoje?"
-            }
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="h-12 rounded-xl border-0 bg-transparent pl-12 pr-12 text-base text-slate-900 shadow-none focus-visible:ring-0 placeholder:text-slate-400"
-          />
+      <div className="mx-auto w-full max-w-5xl px-4 -mt-8 relative z-20 sticky top-4">
+        <div className="flex items-center gap-2">
+          <div className="relative flex items-center flex-1 shadow-xl shadow-orange-500/10 rounded-2xl bg-white border border-slate-100 p-1 transition-all focus-within:ring-2 focus-within:ring-[#f05e23]/20">
+            <Search className="absolute left-4 h-5 w-5 text-[#f05e23]" />
+            <Input
+              placeholder="Buscar por cidade, bairro ou clínica..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="h-14 rounded-xl border-0 bg-transparent pl-12 text-base text-slate-900 shadow-none focus-visible:ring-0 placeholder:text-slate-400 font-medium"
+            />
+          </div>
           <button
-            className="absolute right-2 bg-slate-50 text-primary hover:bg-primary/10 p-2.5 rounded-xl transition-colors"
-            aria-label="Filtros"
+            onClick={() => setIsFilterModalOpen(true)}
+            className="h-16 w-16 bg-white border border-slate-100 shadow-xl shadow-slate-200/50 rounded-2xl flex items-center justify-center text-slate-600 hover:text-[#f05e23] transition-colors shrink-0"
           >
-            <SlidersHorizontal className="h-5 w-5" />
+            <SlidersHorizontal className="h-6 w-6" />
           </button>
         </div>
       </div>
 
-      <div className="px-4 py-5 lg:px-8 mt-2">
-        <div className="mx-auto flex max-w-3xl gap-1 bg-slate-200/60 p-1 rounded-xl">
-          {rentalTypes.map((type) => {
-            const isActive = rentalType === type.id;
-            return (
-              <button
-                key={type.id}
-                onClick={() => setRentalType(type.id)}
-                className={`flex-1 rounded-lg py-2 text-sm font-bold transition-all ${
-                  isActive
-                    ? "bg-white text-slate-900 shadow-sm"
-                    : "text-slate-500 hover:text-slate-700"
-                }`}
-              >
-                {type.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <section className="px-4 pt-2 lg:px-8">
-        <div className="mx-auto flex max-w-3xl items-center justify-between mb-4">
-          <h2 className="text-lg font-black text-slate-900">Perto de si</h2>
-          <button className="text-sm font-bold text-primary hover:underline">
-            Ver todas
-          </button>
-        </div>
-        <div className="mx-auto max-w-3xl">
-          <div className="flex gap-4 overflow-x-auto pb-4 -mx-4 px-4 lg:mx-0 lg:px-0 scrollbar-hide snap-x">
-            {nearbyRooms.map((room) => (
-              <RoomCard
-                key={room.id}
-                room={room}
-                isFavorited={favorites.has(room.id)}
-                onToggleFavorite={toggleFavorite}
-                onOpen={onOpenRoom}
-              />
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {newRooms.length > 0 && (
-        <section className="px-4 pt-4 lg:px-8">
-          <div className="mx-auto flex max-w-3xl items-center justify-between mb-4">
-            <h2 className="text-lg font-black text-slate-900">
-              Salas em Destaque
-            </h2>
-            <button className="text-sm font-bold text-primary hover:underline">
-              Ver todas
+      <div className="px-4 py-4 mx-auto max-w-5xl w-full">
+        <div className="flex gap-1 bg-slate-200/60 p-1.5 rounded-2xl border border-slate-200/50">
+          {rentalTypes.map((type) => (
+            <button
+              key={type.id}
+              onClick={() => setRentalType(type.id)}
+              className={`flex-1 rounded-xl py-2.5 text-sm font-black transition-all ${
+                rentalType === type.id
+                  ? "bg-white text-slate-900 shadow-sm"
+                  : "text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              {type.label}
             </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="w-full px-4 mb-6">
+        <div className="flex gap-3 overflow-x-auto scrollbar-hide pb-2 max-w-5xl mx-auto">
+          {availableCategories.map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setSelectedCategory(cat)}
+              className={`whitespace-nowrap px-5 py-2.5 rounded-full text-sm font-bold transition-all border ${
+                selectedCategory === cat
+                  ? "bg-slate-900 text-white border-slate-900 shadow-md"
+                  : "bg-white text-slate-600 border-slate-200 hover:border-slate-400"
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {filteredRooms.length === 0 ? (
+        <div className="px-4 max-w-5xl mx-auto w-full">
+          <div className="text-center py-16 bg-white rounded-[2rem] border border-slate-200 shadow-sm flex flex-col items-center">
+            <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4">
+              <Search className="w-8 h-8 text-slate-300" />
+            </div>
+            <h3 className="text-xl font-black text-slate-900 mb-2">
+              Nenhuma sala na região
+            </h3>
+            <p className="text-slate-500 font-medium">
+              Tente buscar por outra cidade ou mudar os filtros.
+            </p>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setSearchQuery("");
+                setSelectedCategory("Todas");
+                setMinPrice("");
+                setMaxPrice("");
+              }}
+              className="mt-6 font-bold rounded-xl h-12 px-6"
+            >
+              Limpar Filtros
+            </Button>
           </div>
-          <div className="mx-auto max-w-3xl">
-            <div className="flex gap-4 overflow-x-auto pb-4 -mx-4 px-4 lg:mx-0 lg:px-0 scrollbar-hide snap-x">
-              {newRooms.map((room) => (
+        </div>
+      ) : (
+        <div className="px-4 max-w-5xl mx-auto w-full space-y-10">
+          {partnerRooms.length > 0 && (
+            <section>
+              <div className="flex items-center gap-2 mb-4">
+                <Sparkles className="w-5 h-5 text-amber-500 fill-amber-500" />
+                <h2 className="text-xl font-black text-slate-900">
+                  Premium Partners
+                </h2>
+              </div>
+              <div className="flex gap-4 overflow-x-auto pb-6 -mx-4 px-4 lg:mx-0 lg:px-0 scrollbar-hide snap-x">
+                {partnerRooms.map((room) => (
+                  <RoomCard
+                    key={room.id}
+                    room={room}
+                    isFavorited={favorites.has(room.id)}
+                    onToggleFavorite={toggleFavorite}
+                    onOpen={onOpenRoom}
+                    horizontal
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
+          <section>
+            <h2 className="text-xl font-black text-slate-900 mb-4">
+              Explorar Espaços
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              {regularRooms.map((room) => (
                 <RoomCard
                   key={room.id}
                   room={room}
@@ -335,9 +423,100 @@ export function SearchTab({ onOpenRoom }: SearchTabProps) {
                 />
               ))}
             </div>
-          </div>
-        </section>
+          </section>
+        </div>
       )}
+
+      <Dialog open={isFilterModalOpen} onOpenChange={setIsFilterModalOpen}>
+        <DialogContent className="sm:max-w-md rounded-[2rem]">
+          <DialogHeader className="border-b border-slate-100 pb-4">
+            <DialogTitle className="text-xl font-black text-slate-900">
+              Filtros Avançados
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-6 py-4">
+            <div className="space-y-3">
+              <Label className="text-sm font-bold text-slate-900 uppercase tracking-wider">
+                Localização
+              </Label>
+              <button
+                onClick={requestLocation}
+                className={`w-full flex items-center justify-between p-4 rounded-xl border-2 transition-all ${usingLocation ? "border-[#f05e23] bg-orange-50 text-[#f05e23]" : "border-slate-200 hover:border-slate-300 text-slate-700"}`}
+              >
+                <div className="flex items-center gap-3">
+                  <Navigation
+                    className={`w-5 h-5 ${usingLocation ? "fill-[#f05e23]" : ""}`}
+                  />
+                  <span className="font-bold text-base">Próximos a mim</span>
+                </div>
+                {usingLocation && (
+                  <Badge className="bg-[#f05e23] hover:bg-[#f05e23] text-white">
+                    Ativado
+                  </Badge>
+                )}
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <Label className="text-sm font-bold text-slate-900 uppercase tracking-wider flex justify-between">
+                <span>Faixa de Preço</span>
+                <span className="text-slate-400 font-medium normal-case">
+                  Modalidade:{" "}
+                  {rentalTypes.find((t) => t.id === rentalType)?.label}
+                </span>
+              </Label>
+              <div className="flex items-center gap-4">
+                <div className="flex-1 relative">
+                  <span className="absolute left-3 top-3.5 text-slate-500 font-medium">
+                    R$
+                  </span>
+                  <Input
+                    type="number"
+                    placeholder="Mínimo"
+                    value={minPrice}
+                    onChange={(e) => setMinPrice(e.target.value)}
+                    className="h-12 pl-10 rounded-xl bg-slate-50 border-slate-200 font-bold"
+                  />
+                </div>
+                <span className="text-slate-400">-</span>
+                <div className="flex-1 relative">
+                  <span className="absolute left-3 top-3.5 text-slate-500 font-medium">
+                    R$
+                  </span>
+                  <Input
+                    type="number"
+                    placeholder="Máximo"
+                    value={maxPrice}
+                    onChange={(e) => setMaxPrice(e.target.value)}
+                    className="h-12 pl-10 rounded-xl bg-slate-50 border-slate-200 font-bold"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="border-t border-slate-100 pt-4 flex flex-row gap-3">
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setMinPrice("");
+                setMaxPrice("");
+                setUsingLocation(false);
+              }}
+              className="flex-1 font-bold text-slate-500 hover:bg-slate-100 h-12 rounded-xl"
+            >
+              Limpar
+            </Button>
+            <Button
+              onClick={() => setIsFilterModalOpen(false)}
+              className="flex-[2] bg-slate-900 text-white hover:bg-slate-800 font-black h-12 rounded-xl"
+            >
+              Ver resultados ({filteredRooms.length})
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -347,67 +526,74 @@ function RoomCard({
   isFavorited,
   onToggleFavorite,
   onOpen,
+  horizontal = false,
 }: {
   room: Room;
   isFavorited: boolean;
   onToggleFavorite: (e: React.MouseEvent, id: string) => void;
   onOpen?: (room: Room) => void;
+  horizontal?: boolean;
 }) {
   return (
     <button
       onClick={() => onOpen && onOpen(room)}
-      className="group snap-start flex w-[240px] shrink-0 flex-col overflow-hidden rounded-[1.25rem] border border-slate-200 bg-white shadow-sm transition-all hover:shadow-md hover:-translate-y-1 text-left lg:w-[260px]"
+      className={`group flex flex-col overflow-hidden rounded-[1.5rem] bg-white transition-all text-left relative
+        ${horizontal ? "w-[280px] shrink-0 snap-start border-2 border-amber-400 shadow-amber-500/10 hover:shadow-amber-500/20" : "w-full border border-slate-200 shadow-sm hover:shadow-md hover:-translate-y-1"}`}
     >
-      <div className="relative h-40 w-full overflow-hidden bg-slate-100">
+      {room.isPartner && horizontal && (
+        <div className="absolute top-3 left-3 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-lg text-[10px] font-black text-amber-600 uppercase tracking-widest z-10 flex items-center gap-1 shadow-lg border border-amber-100">
+          <Star className="w-3 h-3 fill-amber-500" /> Premium
+        </div>
+      )}
+
+      <div
+        className={`relative w-full overflow-hidden bg-slate-100 ${horizontal ? "h-48" : "h-56"}`}
+      >
         <Image
           src={room.image}
           alt={room.name}
           fill
-          className="object-cover transition-transform duration-500 group-hover:scale-110"
-          sizes="260px"
+          className="object-cover transition-transform duration-700 group-hover:scale-105"
+          sizes="(max-width: 768px) 100vw, 300px"
+          onError={(e: any) => {
+            e.target.src = "/placeholder.jpg";
+          }}
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+        <div className="absolute inset-0 bg-gradient-to-t from-slate-900/60 via-transparent to-transparent" />
 
         <span
           role="button"
           tabIndex={0}
           onClick={(e) => onToggleFavorite(e, room.id)}
-          className="absolute top-3 right-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/90 shadow-sm backdrop-blur-sm hover:scale-110 transition-transform"
+          className="absolute top-3 right-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 shadow-sm backdrop-blur-sm hover:scale-110 transition-transform z-10"
         >
           <Heart
-            className={`h-4 w-4 ${
-              isFavorited ? "fill-red-500 text-red-500" : "text-slate-400"
-            }`}
+            className={`h-4 w-4 ${isFavorited ? "fill-red-500 text-red-500" : "text-slate-400"}`}
           />
-        </span>
-
-        <span className="absolute bottom-3 left-3 rounded-lg bg-primary/95 px-2.5 py-1 text-xs font-bold text-white shadow-sm backdrop-blur-md">
-          {room.category}
         </span>
       </div>
 
-      <div className="flex flex-col gap-1 p-4">
+      <div className="flex flex-col gap-1.5 p-5">
         <div className="flex items-start justify-between gap-2">
-          <h3 className="truncate text-base font-bold text-slate-900">
+          <h3 className="truncate text-lg font-black text-slate-900">
             {room.name}
           </h3>
-          <div className="flex shrink-0 items-center gap-1 bg-amber-50 px-1.5 py-0.5 rounded-md">
-            <Star className="h-3 w-3 fill-amber-500 text-amber-500" />
-            <span className="text-xs font-bold text-amber-700">
+          <div className="flex shrink-0 items-center gap-1 bg-slate-100 px-2 py-1 rounded-lg">
+            <Star className="h-3.5 w-3.5 fill-slate-900 text-slate-900" />
+            <span className="text-xs font-bold text-slate-700">
               {room.rating}
             </span>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium">
+
+        <p className="text-sm font-semibold text-slate-500">{room.category}</p>
+
+        <div className="flex items-center gap-1.5 text-xs text-slate-400 font-medium mt-1 mb-2">
           <MapPin className="h-3.5 w-3.5 shrink-0" />
           <span>{room.distance}</span>
         </div>
-        <p className="mt-2 text-sm">
-          <span className="font-black text-primary text-lg">
-            {"R$ " + room.pricePerHour}
-          </span>
-          <span className="text-slate-500 font-medium">/hora</span>
-        </p>
+
+        <p className="text-base font-black text-slate-900">{room.priceLabel}</p>
       </div>
     </button>
   );

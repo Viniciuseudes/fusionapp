@@ -1,4 +1,8 @@
-import { useState } from "react";
+"use client";
+
+import { useState, useEffect } from "react";
+import { createClient } from "@/utils/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 import {
   ChevronLeft,
   Calendar as CalendarIcon,
@@ -9,7 +13,10 @@ import {
   Trash2,
   PlusCircle,
   ShieldAlert,
+  Loader2,
+  AlertTriangle,
 } from "lucide-react";
+import { ptBR } from "date-fns/locale"; // IMPORTAÇÃO DA TRADUÇÃO
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Calendar } from "@/components/ui/calendar";
@@ -67,11 +74,35 @@ const SHIFTS = [
   { id: "night", label: "Noturno", time: "18h - 22h", icon: "🌙" },
 ];
 
+const checkIsHoliday = (date: Date) => {
+  const d = date.getDate();
+  const m = date.getMonth() + 1;
+  const holidays = [
+    "1/1", // Ano Novo
+    "21/4", // Tiradentes
+    "1/5", // Dia do Trabalho
+    "7/9", // Independência
+    "12/10", // Nossa Senhora
+    "2/11", // Finados
+    "15/11", // Proclamação
+    "25/12", // Natal
+  ];
+  return holidays.includes(`${d}/${m}`);
+};
+
 export function AvailabilityConfig({
   spaceId,
   onBack,
   onSave,
 }: HostAvailabilityProps) {
+  const supabase = createClient();
+  const { toast } = useToast();
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const [confirmCopyDay, setConfirmCopyDay] = useState<number | null>(null);
+
   const [exceptions, setExceptions] = useState<CalendarException[]>([]);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>();
 
@@ -104,7 +135,73 @@ export function AvailabilityConfig({
     })),
   );
 
-  // --- LÓGICA DO HORÁRIO BASE ---
+  useEffect(() => {
+    async function loadRoomConfig() {
+      try {
+        const { data, error } = await supabase
+          .from("rooms")
+          .select("availability")
+          .eq("id", spaceId)
+          .single();
+
+        if (error) throw error;
+
+        if (data?.availability && Object.keys(data.availability).length > 0) {
+          const config = data.availability as any;
+          if (config.weekConfig) setWeekConfig(config.weekConfig);
+          if (config.exceptions) {
+            const parsedExceptions = config.exceptions.map((e: any) => ({
+              ...e,
+              date: new Date(e.date),
+            }));
+            setExceptions(parsedExceptions);
+          }
+        }
+      } catch (err) {
+        console.error("Erro ao carregar os horários da sala:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    if (spaceId) loadRoomConfig();
+  }, [spaceId, supabase]);
+
+  const handleSaveConfigToDatabase = async () => {
+    setSaving(true);
+    try {
+      const payload = {
+        weekConfig,
+        exceptions: exceptions.map((e) => ({
+          ...e,
+          date: e.date.toISOString(),
+        })),
+      };
+
+      const { error } = await supabase
+        .from("rooms")
+        .update({ availability: payload })
+        .eq("id", spaceId);
+
+      if (error) throw error;
+
+      toast({
+        title: "Disponibilidade Atualizada! 🎉",
+        description: "Os horários e exceções foram sincronizados com sucesso.",
+      });
+
+      onSave();
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro ao salvar",
+        description: err.message,
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleToggleDay = (day: number) => {
     setWeekConfig((prev) =>
       prev.map((config) =>
@@ -172,9 +269,12 @@ export function AvailabilityConfig({
     );
   };
 
-  const handleCopyToAllDays = (sourceDay: number) => {
-    const source = weekConfig.find((c) => c.day === sourceDay);
+  const executeCopyAction = () => {
+    if (confirmCopyDay === null) return;
+
+    const source = weekConfig.find((c) => c.day === confirmCopyDay);
     if (!source) return;
+
     setWeekConfig((prev) =>
       prev.map((config) => ({
         ...config,
@@ -184,21 +284,23 @@ export function AvailabilityConfig({
         selectedShifts: [...source.selectedShifts],
       })),
     );
+
+    setConfirmCopyDay(null);
+    toast({
+      title: "Horários Copiados",
+      description: `As configurações de ${source.dayName} foram aplicadas em todos os dias.`,
+    });
   };
 
-  // --- O MOTOR DE INTELIGÊNCIA: DESCOBRE O QUE ESTÁ ABERTO NO DIA ESPECÍFICO ---
   const getBaseAvailableHoursForDate = (date: Date) => {
+    if (checkIsHoliday(date)) return [];
+
     const dayOfWeek = date.getDay();
     const config = weekConfig.find((c) => c.day === dayOfWeek);
-
-    // Se o dia estiver desativado por completo, não tem horas abertas
     if (!config || !config.enabled) return [];
 
-    if (config.rentalType === "hourly") {
-      return config.availableHours;
-    }
+    if (config.rentalType === "hourly") return config.availableHours;
 
-    // Se for por turno, mapeamos os turnos para as horas correspondentes
     let shiftHours: string[] = [];
     if (config.selectedShifts.includes("morning"))
       shiftHours.push("08h-09h", "09h-10h", "10h-11h", "11h-12h");
@@ -209,56 +311,68 @@ export function AvailabilityConfig({
     return shiftHours;
   };
 
-  // --- LÓGICA DE EXCEÇÕES ---
   const handleSelectDateForException = (date: Date | undefined) => {
     if (!date) return;
     setSelectedDate(date);
-
     const existing = exceptions.find(
       (e) => e.date.toDateString() === date.toDateString(),
     );
+
     if (existing) {
       setEditingException({ ...existing });
       setExceptionTab(existing.type);
       setBlockScope(existing.isFullDay ? "full" : "partial");
     } else {
-      setEditingException({ date, type: "block", isFullDay: true, hours: [] });
-      setExceptionTab("block");
-      setBlockScope("full");
+      if (checkIsHoliday(date)) {
+        setEditingException({
+          date,
+          type: "extra",
+          isFullDay: false,
+          hours: [],
+        });
+        setExceptionTab("extra");
+      } else {
+        setEditingException({
+          date,
+          type: "block",
+          isFullDay: true,
+          hours: [],
+        });
+        setExceptionTab("block");
+        setBlockScope("full");
+      }
     }
   };
 
   const handleSaveException = () => {
     if (!editingException) return;
-
     const finalException: CalendarException = {
       ...editingException,
       type: exceptionTab,
     };
-
     if (exceptionTab === "block") {
       finalException.isFullDay = blockScope === "full";
       if (blockScope === "full") finalException.hours = [];
-
-      if (blockScope === "partial" && finalException.hours.length === 0) {
-        alert("Por favor, selecione os horários que deseja bloquear.");
-        return;
-      }
+      if (blockScope === "partial" && finalException.hours.length === 0)
+        return toast({
+          variant: "destructive",
+          title: "Atenção",
+          description: "Selecione os horários para bloquear.",
+        });
     } else {
       finalException.isFullDay = false;
-      if (finalException.hours.length === 0) {
-        alert(
-          "Por favor, selecione os horários que deseja liberar no plantão.",
-        );
-        return;
-      }
+      if (finalException.hours.length === 0)
+        return toast({
+          variant: "destructive",
+          title: "Atenção",
+          description: "Selecione os horários para liberar.",
+        });
     }
 
     const dateStr = finalException.date.toDateString();
     const existingIndex = exceptions.findIndex(
       (e) => e.date.toDateString() === dateStr,
     );
-
     if (existingIndex >= 0) {
       setExceptions((prev) =>
         prev.map((e, i) => (i === existingIndex ? finalException : e)),
@@ -266,7 +380,6 @@ export function AvailabilityConfig({
     } else {
       setExceptions((prev) => [...prev, finalException]);
     }
-
     setEditingException(null);
     setSelectedDate(undefined);
   };
@@ -277,16 +390,29 @@ export function AvailabilityConfig({
     );
   };
 
-  // Arrays computados dinamicamente baseados no dia selecionado
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[50vh] gap-4">
+        <Loader2 className="h-10 w-10 animate-spin text-[#f05e23]" />
+        <p className="text-slate-500 font-medium">
+          Carregando mapa de horários...
+        </p>
+      </div>
+    );
+  }
+
   const baseAvailableHours = editingException
     ? getBaseAvailableHoursForDate(editingException.date)
     : [];
   const baseClosedHours = editingException
     ? ALL_TIME_SLOTS.filter((h) => !baseAvailableHours.includes(h))
     : [];
+  const isSelectedDateHoliday = editingException
+    ? checkIsHoliday(editingException.date)
+    : false;
 
   return (
-    <div className="flex flex-col h-full bg-slate-50 pb-32">
+    <div className="flex flex-col h-full bg-slate-50 pb-32 relative">
       <div className="bg-white border-b border-slate-200 p-4 sticky top-0 z-30 shadow-sm flex items-center justify-between">
         <div className="flex items-center gap-3">
           <button
@@ -305,17 +431,15 @@ export function AvailabilityConfig({
           </div>
         </div>
         <Button
-          onClick={onSave}
-          className="bg-primary hover:bg-primary/90 text-white shadow-sm font-bold"
+          onClick={handleSaveConfigToDatabase}
+          disabled={saving}
+          className="bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-sm font-bold h-10 px-6 transition-colors border-none"
         >
-          Salvar
+          {saving ? "Salvando..." : "Salvar Configuração"}
         </Button>
       </div>
 
       <div className="flex-1 overflow-auto p-4 lg:p-8 max-w-4xl mx-auto w-full space-y-6">
-        {/* ======================================= */}
-        {/* CONFIGURAÇÃO SEMANAL (HORAS E TURNOS) */}
-        {/* ======================================= */}
         <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
           <div className="mb-6">
             <h2 className="text-xl font-black text-slate-900">
@@ -331,14 +455,14 @@ export function AvailabilityConfig({
             {weekConfig.map((config) => (
               <div
                 key={config.day}
-                className={`border rounded-xl overflow-hidden transition-all ${config.enabled ? "border-primary/30 bg-white shadow-sm" : "border-slate-200 bg-slate-50"}`}
+                className={`border rounded-xl overflow-hidden transition-all ${config.enabled ? "border-orange-200 bg-white shadow-sm" : "border-slate-200 bg-slate-50"}`}
               >
-                {/* Header do Dia */}
                 <div className="flex items-center justify-between p-4 bg-slate-50/50 border-b border-slate-100">
                   <div className="flex items-center gap-3">
                     <Switch
                       checked={config.enabled}
                       onCheckedChange={() => handleToggleDay(config.day)}
+                      className="data-[state=checked]:bg-[#f05e23]"
                     />
                     <span
                       className={`font-bold ${config.enabled ? "text-slate-900" : "text-slate-400"}`}
@@ -348,15 +472,14 @@ export function AvailabilityConfig({
                   </div>
                   {config.enabled && (
                     <button
-                      onClick={() => handleCopyToAllDays(config.day)}
-                      className="text-xs font-bold flex items-center gap-1 text-primary hover:underline"
+                      onClick={() => setConfirmCopyDay(config.day)}
+                      className="text-xs font-bold flex items-center gap-1 text-[#f05e23] hover:underline"
                     >
                       <Copy className="w-3.5 h-3.5" /> Copiar p/ todos
                     </button>
                   )}
                 </div>
 
-                {/* Conteúdo do Dia */}
                 {config.enabled && (
                   <div className="p-4 space-y-5">
                     <div>
@@ -368,7 +491,7 @@ export function AvailabilityConfig({
                           onClick={() =>
                             handleChangeRentalType(config.day, "hourly")
                           }
-                          className={`flex-1 py-2 rounded-lg border font-bold text-sm transition-all ${config.rentalType === "hourly" ? "border-primary bg-primary/10 text-primary" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                          className={`flex-1 py-2 rounded-lg border font-bold text-sm transition-all ${config.rentalType === "hourly" ? "border-[#f05e23] bg-orange-50 text-[#f05e23]" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
                         >
                           Por Hora
                         </button>
@@ -376,7 +499,7 @@ export function AvailabilityConfig({
                           onClick={() =>
                             handleChangeRentalType(config.day, "shift")
                           }
-                          className={`flex-1 py-2 rounded-lg border font-bold text-sm transition-all ${config.rentalType === "shift" ? "border-primary bg-primary/10 text-primary" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                          className={`flex-1 py-2 rounded-lg border font-bold text-sm transition-all ${config.rentalType === "shift" ? "border-[#f05e23] bg-orange-50 text-[#f05e23]" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
                         >
                           Por Turno
                         </button>
@@ -395,7 +518,7 @@ export function AvailabilityConfig({
                             }
                             variant="outline"
                             size="sm"
-                            className="h-7 text-xs font-bold"
+                            className="h-7 text-xs font-bold text-slate-700"
                           >
                             Horário Comercial
                           </Button>
@@ -407,10 +530,11 @@ export function AvailabilityConfig({
                             return (
                               <button
                                 key={hour}
+                                type="button"
                                 onClick={() =>
                                   handleToggleHour(config.day, hour)
                                 }
-                                className={`py-2 text-xs font-bold rounded-lg transition-all ${isSelected ? "bg-primary text-primary-foreground shadow-sm" : "bg-white text-slate-500 hover:bg-slate-200 border border-slate-200"}`}
+                                className={`py-2 text-xs font-bold rounded-lg transition-all ${isSelected ? "bg-[#f05e23] text-white shadow-sm" : "bg-white text-slate-500 hover:bg-slate-200 border border-slate-200"}`}
                               >
                                 {hour.split("-")[0]}
                               </button>
@@ -429,20 +553,21 @@ export function AvailabilityConfig({
                           return (
                             <button
                               key={shift.id}
+                              type="button"
                               onClick={() =>
                                 handleToggleShift(config.day, shift.id)
                               }
-                              className={`p-4 rounded-xl border-2 transition-all flex flex-col items-start gap-2 ${isSelected ? "border-primary bg-primary/5" : "border-slate-200 bg-white hover:border-slate-300"}`}
+                              className={`p-4 rounded-xl border-2 transition-all flex flex-col items-start gap-2 ${isSelected ? "border-[#f05e23] bg-orange-50/40" : "border-slate-200 bg-white hover:border-slate-300"}`}
                             >
                               <div className="flex w-full justify-between items-center">
                                 <span className="text-2xl">{shift.icon}</span>
                                 {isSelected && (
-                                  <Check className="w-5 h-5 text-primary" />
+                                  <Check className="w-5 h-5 text-[#f05e23]" />
                                 )}
                               </div>
                               <div className="text-left">
                                 <p
-                                  className={`font-black ${isSelected ? "text-primary" : "text-slate-900"}`}
+                                  className={`font-black ${isSelected ? "text-[#f05e23]" : "text-slate-900"}`}
                                 >
                                   {shift.label}
                                 </p>
@@ -458,7 +583,7 @@ export function AvailabilityConfig({
                   </div>
                 )}
                 {!config.enabled && (
-                  <div className="p-3 text-center bg-slate-50">
+                  <div className="p-4 text-center bg-slate-50">
                     <p className="text-sm font-bold text-slate-400">
                       Sala Fechada neste dia
                     </p>
@@ -469,17 +594,15 @@ export function AvailabilityConfig({
           </div>
         </section>
 
-        {/* ======================================= */}
-        {/* EXCEÇÕES DE CALENDÁRIO (INTELIGENTE) */}
-        {/* ======================================= */}
+        {/* SEÇÃO DE EXCEÇÕES */}
         <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
           <div className="mb-6">
             <h2 className="text-xl font-black text-slate-900">
-              Exceções de Calendário
+              Exceções e Feriados
             </h2>
             <p className="text-sm text-slate-500 font-medium">
-              Bloqueie dias para feriados ou libere horários extras (plantão) em
-              dias que a clínica normalmente não abre.
+              Feriados nacionais são fechados automaticamente. Libere horários
+              extras se desejar funcionar.
             </p>
           </div>
 
@@ -489,10 +612,19 @@ export function AvailabilityConfig({
                 1. Selecione a Data no Calendário
               </Label>
               <div className="border border-slate-200 rounded-xl p-2 bg-slate-50 shadow-inner">
+                {/* CALENDÁRIO COM TRADUÇÃO E DESTAQUE DE FERIADO */}
                 <Calendar
                   mode="single"
                   selected={selectedDate}
                   onSelect={handleSelectDateForException}
+                  locale={ptBR}
+                  modifiers={{
+                    holiday: (date) => checkIsHoliday(date),
+                  }}
+                  modifiersClassNames={{
+                    holiday:
+                      "text-[#f05e23] font-black underline decoration-[#f05e23]/30 underline-offset-4",
+                  }}
                   className="bg-white rounded-lg shadow-sm w-full pointer-events-auto"
                 />
               </div>
@@ -513,7 +645,9 @@ export function AvailabilityConfig({
                     ) : (
                       <PlusCircle className="w-5 h-5" />
                     )}
-                    Configurar Exceção
+                    {isSelectedDateHoliday
+                      ? "Feriado Nacional"
+                      : "Configurar Exceção"}
                   </h3>
                   <button
                     onClick={() => {
@@ -527,7 +661,7 @@ export function AvailabilityConfig({
                 </div>
 
                 <p
-                  className={`font-bold mb-4 ${exceptionTab === "block" ? "text-red-800" : "text-emerald-800"}`}
+                  className={`font-bold mb-2 capitalize ${exceptionTab === "block" ? "text-red-800" : "text-emerald-800"}`}
                 >
                   {editingException.date.toLocaleDateString("pt-BR", {
                     weekday: "long",
@@ -536,7 +670,13 @@ export function AvailabilityConfig({
                   })}
                 </p>
 
-                {/* Tabs de Ação */}
+                {isSelectedDateHoliday && (
+                  <p className="text-xs font-bold text-amber-700 bg-amber-100 p-2 rounded-md mb-4 border border-amber-200">
+                    Este dia está automaticamente fechado por ser feriado. Use a
+                    aba "Liberar Extra" para abrir um plantão.
+                  </p>
+                )}
+
                 <div className="flex gap-2 mb-5 bg-white p-1 rounded-xl border border-slate-200 shadow-sm">
                   <button
                     onClick={() => setExceptionTab("block")}
@@ -553,7 +693,6 @@ export function AvailabilityConfig({
                 </div>
 
                 <div className="space-y-4">
-                  {/* Se for BLOQUEIO */}
                   {exceptionTab === "block" && (
                     <>
                       <div className="flex gap-2">
@@ -581,13 +720,14 @@ export function AvailabilityConfig({
                         <div>
                           {baseAvailableHours.length === 0 ? (
                             <div className="bg-red-100 text-red-700 p-3 rounded-xl text-sm font-bold text-center">
-                              Este dia já está fechado na sua configuração base.
+                              {isSelectedDateHoliday
+                                ? "Já está fechado por conta do feriado."
+                                : "Este dia já está fechado na configuração base."}
                             </div>
                           ) : (
                             <>
                               <p className="text-xs font-bold text-red-700 mb-2 uppercase tracking-wider">
-                                Selecione os horários abertos que deseja
-                                bloquear:
+                                Bloquear horários específicos:
                               </p>
                               <div className="grid grid-cols-4 gap-2">
                                 {baseAvailableHours.map((hour) => {
@@ -596,6 +736,7 @@ export function AvailabilityConfig({
                                   return (
                                     <button
                                       key={hour}
+                                      type="button"
                                       onClick={() => {
                                         const newHours = isSelected
                                           ? editingException.hours.filter(
@@ -607,7 +748,7 @@ export function AvailabilityConfig({
                                           hours: newHours,
                                         });
                                       }}
-                                      className={`py-1.5 text-xs font-bold rounded-md transition-all ${isSelected ? "bg-red-600 text-white shadow-sm" : "bg-white text-slate-500 hover:bg-slate-200 border border-slate-200"}`}
+                                      className={`py-1.5 text-xs font-bold rounded-md transition-all ${isSelected ? "bg-red-600 text-white" : "bg-white text-slate-500 border border-slate-200"}`}
                                     >
                                       {hour.split("-")[0]}
                                     </button>
@@ -621,18 +762,16 @@ export function AvailabilityConfig({
                     </>
                   )}
 
-                  {/* Se for HORÁRIO EXTRA (LIBERAÇÃO) */}
                   {exceptionTab === "extra" && (
                     <div>
                       {baseClosedHours.length === 0 ? (
                         <div className="bg-emerald-100 text-emerald-700 p-3 rounded-xl text-sm font-bold text-center">
-                          A sala já está totalmente aberta neste dia.
+                          A sala já está aberta totalmente neste dia.
                         </div>
                       ) : (
                         <>
                           <p className="text-xs font-bold text-emerald-700 mb-2 uppercase tracking-wider">
-                            Selecione os horários inativos que deseja abrir
-                            (Plantão):
+                            Liberar horários extras (Plantão):
                           </p>
                           <div className="grid grid-cols-4 gap-2">
                             {baseClosedHours.map((hour) => {
@@ -641,6 +780,7 @@ export function AvailabilityConfig({
                               return (
                                 <button
                                   key={hour}
+                                  type="button"
                                   onClick={() => {
                                     const newHours = isSelected
                                       ? editingException.hours.filter(
@@ -652,7 +792,7 @@ export function AvailabilityConfig({
                                       hours: newHours,
                                     });
                                   }}
-                                  className={`py-1.5 text-xs font-bold rounded-md transition-all ${isSelected ? "bg-emerald-600 text-white shadow-sm" : "bg-white text-slate-500 hover:bg-slate-200 border border-slate-200"}`}
+                                  className={`py-1.5 text-xs font-bold rounded-md transition-all ${isSelected ? "bg-emerald-600 text-white" : "bg-white text-slate-500 border border-slate-200"}`}
                                 >
                                   {hour.split("-")[0]}
                                 </button>
@@ -671,7 +811,7 @@ export function AvailabilityConfig({
                     <Check className="w-5 h-5 mr-2" />{" "}
                     {exceptionTab === "block"
                       ? "Aplicar Bloqueio"
-                      : "Ativar Horário Extra"}
+                      : "Ativar Plantão Extra"}
                   </Button>
                 </div>
               </div>
@@ -682,13 +822,13 @@ export function AvailabilityConfig({
                   Nenhuma data selecionada
                 </h3>
                 <p className="text-sm font-medium text-slate-400 mt-1 max-w-[250px]">
-                  Clique num dia do calendário ao lado para adicionar exceções.
+                  Clique num dia do calendário ao lado para adicionar exceções
+                  ou trabalhar em feriados.
                 </p>
               </div>
             )}
           </div>
 
-          {/* LISTA DE EXCEÇÕES ATIVAS */}
           {exceptions.length > 0 && (
             <div className="mt-8">
               <h3 className="font-bold text-slate-900 mb-3 border-b border-slate-100 pb-2">
@@ -718,7 +858,7 @@ export function AvailabilityConfig({
                         </div>
                         <div>
                           <p
-                            className={`font-bold text-sm ${isBlock ? "text-red-900" : "text-emerald-900"}`}
+                            className={`font-bold text-sm capitalize ${isBlock ? "text-red-900" : "text-emerald-900"}`}
                           >
                             {exc.date.toLocaleDateString("pt-BR")}
                           </p>
@@ -747,6 +887,41 @@ export function AvailabilityConfig({
           )}
         </section>
       </div>
+
+      {confirmCopyDay !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 animate-in zoom-in-95">
+            <div className="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center mb-4 mx-auto">
+              <AlertTriangle className="w-6 h-6 text-[#f05e23]" />
+            </div>
+            <h3 className="text-xl font-black text-center text-slate-900 mb-2">
+              Atenção
+            </h3>
+            <p className="text-center text-slate-500 font-medium mb-6">
+              Você está prestes a copiar toda a configuração de{" "}
+              <strong className="text-slate-800">
+                {weekConfig.find((c) => c.day === confirmCopyDay)?.dayName}
+              </strong>{" "}
+              para <b>todos os outros dias da semana</b>. Deseja continuar?
+            </p>
+            <div className="flex gap-3">
+              <Button
+                variant="outline"
+                className="flex-1 font-bold h-12 rounded-xl border-slate-200 text-slate-600"
+                onClick={() => setConfirmCopyDay(null)}
+              >
+                Cancelar
+              </Button>
+              <Button
+                className="flex-1 font-bold h-12 rounded-xl bg-[#f05e23] hover:bg-[#d6521e] text-white"
+                onClick={executeCopyAction}
+              >
+                Sim, Copiar
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

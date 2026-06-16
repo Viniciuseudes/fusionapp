@@ -6,181 +6,143 @@ import { createClient } from "@/utils/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
+import { useToast } from "@/hooks/use-toast";
 import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { useToast } from "@/components/ui/use-toast";
-import Link from "next/link";
+import { Building2, ArrowLeft, AlertCircle } from "lucide-react";
 
 export default function HostRegisterPage() {
   const router = useRouter();
-  const { toast } = useToast();
   const supabase = createClient();
+  const { toast } = useToast();
 
-  const [isLoading, setIsLoading] = useState(false);
-  const [formData, setFormData] = useState({
-    fullName: "",
-    email: "",
-    phone: "",
-    password: "",
-  });
-  const [termsAccepted, setTermsAccepted] = useState(false);
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
-  };
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!termsAccepted) {
-      toast({
-        title: "Atenção",
-        description: "Você precisa aceitar os Termos de Uso para continuar.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setIsLoading(true);
+    setLoading(true);
+    setError(null);
 
     try {
-      const { data, error } = await supabase.auth.signUp({
-        email: formData.email,
-        password: formData.password,
+      const { error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
         options: {
           data: {
-            full_name: formData.fullName,
-            phone: formData.phone,
-            role: "host",
+            full_name: fullName,
+            role: "host", // <-- Garante que o usuário seja um Anfitrião
           },
         },
       });
 
-      if (error) throw error;
+      if (signUpError) throw signUpError;
 
       toast({
-        title: "Cadastro realizado com sucesso!",
-        description:
-          "Bem-vindo à Fusion Clinic. Redirecionando para o seu painel...",
+        title: "Conta de Anfitrião criada!",
+        description: "Bem-vindo à Fusion Clinic. Configurando seu painel...",
       });
 
+      // O Supabase faz auto-login após o signUp. Redirecionamos para a área restrita.
       router.push("/host");
-    } catch (error: any) {
-      toast({
-        title: "Erro no cadastro",
-        description: error.message || "Ocorreu um erro inesperado.",
-        variant: "destructive",
-      });
+      router.refresh();
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Erro ao criar conta. Verifique os dados.");
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-muted/40 p-4">
-      <Card className="w-full max-w-md shadow-lg">
-        <CardHeader className="space-y-1 text-center">
-          <CardTitle className="text-2xl font-bold tracking-tight">
-            Torne-se um Anfitrião
+    <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 p-4">
+      <div className="w-full max-w-md mb-4 flex justify-start">
+        <button
+          onClick={() => router.push("/login")}
+          className="flex items-center text-sm font-bold text-slate-500 hover:text-slate-900 transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4 mr-1" />
+          Voltar para o Login
+        </button>
+      </div>
+
+      <Card className="w-full max-w-md shadow-xl border-slate-100 rounded-2xl overflow-hidden">
+        <div className="h-2 w-full bg-slate-900" />
+
+        <CardHeader className="space-y-2 text-center pt-8 pb-6">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 mb-2">
+            <Building2 className="w-6 h-6 text-slate-900" />
+          </div>
+          <CardTitle className="text-2xl font-black text-slate-900 tracking-tight">
+            Seja um Anfitrião
           </CardTitle>
-          <CardDescription>
-            Cadastre seu espaço e conecte-se a profissionais de saúde.
+          <CardDescription className="text-slate-500 font-medium">
+            Cadastre seus espaços e maximize sua rentabilidade.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+
+        <CardContent className="px-6 pb-8">
+          {error && (
+            <div className="flex items-center gap-2 bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium mb-4">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <p>{error}</p>
+            </div>
+          )}
+
           <form onSubmit={handleRegister} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="fullName">Nome Completo</Label>
+              <Label htmlFor="fullName">Nome do Responsável ou Clínica</Label>
               <Input
                 id="fullName"
-                name="fullName"
-                placeholder="Dr. João Silva"
-                value={formData.fullName}
-                onChange={handleChange}
+                type="text"
+                placeholder="Ex: Clínica Bem Estar"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
                 required
+                className="h-12 bg-slate-50 border-slate-200 rounded-xl"
               />
             </div>
-
             <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email">E-mail Comercial</Label>
               <Input
                 id="email"
-                name="email"
                 type="email"
-                placeholder="joao@clinica.com"
-                value={formData.email}
-                onChange={handleChange}
+                placeholder="contato@clinica.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 required
+                className="h-12 bg-slate-50 border-slate-200 rounded-xl"
               />
             </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="phone">Telefone (WhatsApp)</Label>
-              <Input
-                id="phone"
-                name="phone"
-                type="tel"
-                placeholder="(84) 99999-9999"
-                value={formData.phone}
-                onChange={handleChange}
-                required
-              />
-            </div>
-
             <div className="space-y-2">
               <Label htmlFor="password">Senha</Label>
               <Input
                 id="password"
-                name="password"
                 type="password"
-                value={formData.password}
-                onChange={handleChange}
+                placeholder="Crie uma senha segura"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
                 required
+                className="h-12 bg-slate-50 border-slate-200 rounded-xl"
               />
             </div>
-
-            <div className="flex items-top space-x-2 pt-2">
-              <Checkbox
-                id="terms"
-                checked={termsAccepted}
-                onCheckedChange={(checked) =>
-                  setTermsAccepted(checked as boolean)
-                }
-              />
-              <div className="grid gap-1.5 leading-none">
-                <label
-                  htmlFor="terms"
-                  className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-                >
-                  Aceito os{" "}
-                  <Link href="/termos" className="text-primary hover:underline">
-                    Termos de Uso
-                  </Link>
-                </label>
-              </div>
-            </div>
-
-            <Button type="submit" className="w-full mt-4" disabled={isLoading}>
-              {isLoading ? "Cadastrando..." : "Criar conta de Anfitrião"}
+            <Button
+              type="submit"
+              className="w-full h-12 rounded-xl mt-2 font-bold bg-slate-900 hover:bg-slate-800"
+              disabled={loading}
+            >
+              {loading ? "Criando painel..." : "Criar Conta de Anfitrião"}
             </Button>
           </form>
         </CardContent>
-        <CardFooter className="flex justify-center">
-          <p className="text-sm text-muted-foreground">
-            Já possui uma conta?{" "}
-            <Link href="/login" className="text-primary hover:underline">
-              Faça login
-            </Link>
-          </p>
-        </CardFooter>
       </Card>
     </div>
   );
