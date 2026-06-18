@@ -42,13 +42,15 @@ import {
   Wind,
   Car,
   ShieldCheck,
-  Clock,
-  ShieldAlert,
   Check,
   Loader2,
+  Sun,
+  Moon,
+  CalendarDays,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import ReactCrop, { type Crop, type PixelCrop } from "react-image-crop";
+// @ts-ignore
 import "react-image-crop/dist/ReactCrop.css";
 
 type RoomImage = {
@@ -68,7 +70,6 @@ const AMENITIES_LIST = [
   { id: "security", label: "Segurança 24h", icon: ShieldCheck },
 ];
 
-// Dicionário prático para converter o nome do estado retornado pela API na UF de duas letras
 const STATE_MAP: Record<string, string> = {
   acre: "AC",
   alagoas: "AL",
@@ -148,6 +149,8 @@ export function HostSpaceForm({
   const [modalities, setModalities] = useState<string[]>(["turno", "fixo"]);
   const [prices, setPrices] = useState({
     hourly: "",
+    afterHours: "", // NOVO: Precificação Noturna
+    weekend: "", // NOVO: Precificação Fim de Semana
     morning: "",
     afternoon: "",
     night: "",
@@ -168,7 +171,6 @@ export function HostSpaceForm({
   const [completedCrop, setCompletedCrop] = useState<PixelCrop | null>(null);
   const imageRef = useRef<HTMLImageElement>(null);
 
-  // Carregar dados se for modo Edição
   useEffect(() => {
     if (initialData) {
       setName(initialData.name || "");
@@ -197,6 +199,8 @@ export function HostSpaceForm({
         if (ad.pricing) {
           setPrices({
             hourly: ad.pricing.hourly || "",
+            afterHours: ad.pricing.afterHours || "",
+            weekend: ad.pricing.weekend || "",
             morning: ad.pricing.morning || "",
             afternoon: ad.pricing.afternoon || "",
             night: ad.pricing.night || "",
@@ -229,17 +233,14 @@ export function HostSpaceForm({
     }
   }, [initialData]);
 
-  // MOTOR DE BUSCA EM TEMPO REAL (DEBOUNCE / AUTOCOMPLETE)
   useEffect(() => {
     if (addressSearch.length < 4) {
       setAddressSuggestions([]);
       return;
     }
-
     const delayDebounceFn = setTimeout(async () => {
       setIsSearchingAddress(true);
       try {
-        // Consultando o motor geográfico focado no Brasil
         const response = await fetch(
           `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=br&q=${encodeURIComponent(addressSearch)}`,
         );
@@ -250,16 +251,13 @@ export function HostSpaceForm({
       } finally {
         setIsSearchingAddress(false);
       }
-    }, 500); // Aguarda 500ms após o usuário parar de digitar para disparar a API
+    }, 500);
 
     return () => clearTimeout(delayDebounceFn);
   }, [addressSearch]);
 
-  // QUANTDO O ANFITRIÃO CLICA NA SUGESTÃO DE ENDEREÇO
   const handleSelectSuggestion = (place: any) => {
     const addr = place.address;
-
-    // Destrincha o retorno da API para preencher os inputs corretos automaticamente
     const localStreet = addr.road || addr.pedestrian || addr.avenue || "";
     const localNeighborhood =
       addr.suburb || addr.neighbourhood || addr.district || "";
@@ -272,7 +270,6 @@ export function HostSpaceForm({
     setCity(localCity);
     setStateUF(localUF);
 
-    // Atualiza a barra de pesquisa com o texto clicado e fecha o dropdown
     setAddressSearch(place.display_name);
     setShowSuggestions(false);
 
@@ -309,6 +306,7 @@ export function HostSpaceForm({
     setImages((prev) =>
       prev.map((img) => ({ ...img, isCover: img.id === id })),
     );
+
   const openCropModal = (id: string) => {
     setCroppingId(id);
     setCrop({ unit: "%", width: 80, height: 80, x: 10, y: 10 });
@@ -431,7 +429,15 @@ export function HostSpaceForm({
         area,
         amenities,
         policies: { min_notice: minNotice, cancellation: cancellationPolicy },
-        pricing: prices,
+        pricing: {
+          hourly: prices.hourly ? Number(prices.hourly) : null,
+          afterHours: prices.afterHours ? Number(prices.afterHours) : null,
+          weekend: prices.weekend ? Number(prices.weekend) : null,
+          morning: prices.morning ? Number(prices.morning) : null,
+          afternoon: prices.afternoon ? Number(prices.afternoon) : null,
+          night: prices.night ? Number(prices.night) : null,
+          monthly: prices.monthly ? Number(prices.monthly) : null,
+        },
         gallery: filteredGallery,
       };
 
@@ -646,7 +652,7 @@ export function HostSpaceForm({
               </div>
             </section>
 
-            {/* SEÇÃO 3: LOCALIZAÇÃO AUTOCOMPLETE (iFOOD STYLE) */}
+            {/* SEÇÃO 3: LOCALIZAÇÃO AUTOCOMPLETE */}
             <section className="space-y-6 relative">
               <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
                 <MapPin className="w-5 h-5 text-slate-400" />
@@ -654,8 +660,6 @@ export function HostSpaceForm({
                   3. Endereço e Estrutura
                 </h3>
               </div>
-
-              {/* Barra de Busca Inteligente */}
               <div className="space-y-2 relative">
                 <Label className="text-slate-700 font-bold">
                   Buscar Endereço Completo{" "}
@@ -677,8 +681,6 @@ export function HostSpaceForm({
                     <Loader2 className="absolute right-3.5 h-5 w-5 animate-spin text-slate-400" />
                   )}
                 </div>
-
-                {/* Dropdown Flutuante de Sugestões */}
                 {showSuggestions && addressSuggestions.length > 0 && (
                   <div className="absolute z-50 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 w-full max-h-60 overflow-y-auto divide-y divide-slate-100">
                     {addressSuggestions.map((place) => (
@@ -695,7 +697,6 @@ export function HostSpaceForm({
                 )}
               </div>
 
-              {/* Grid de confirmação dos campos (iFood abre a confirmação travada) */}
               <div className="grid grid-cols-1 md:grid-cols-12 gap-4 bg-slate-50/70 p-5 rounded-2xl border border-slate-200">
                 <div className="space-y-2 md:col-span-9">
                   <Label className="text-slate-500 font-bold">
@@ -720,7 +721,6 @@ export function HostSpaceForm({
                     className="h-11 bg-white border-orange-300 ring-orange-100 font-bold"
                   />
                 </div>
-
                 <div className="space-y-2 md:col-span-4">
                   <Label className="text-slate-500 font-bold">Bairro</Label>
                   <Input
@@ -750,7 +750,6 @@ export function HostSpaceForm({
                 </div>
               </div>
 
-              {/* Capacidade e Área */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Capacidade</Label>
@@ -780,7 +779,6 @@ export function HostSpaceForm({
                 </div>
               </div>
 
-              {/* COMODIDADES */}
               <div className="space-y-3 pt-2">
                 <Label className="text-base font-bold text-slate-900">
                   Comodidades Inclusas
@@ -809,7 +807,7 @@ export function HostSpaceForm({
             {/* SEÇÃO 4: POLÍTICAS */}
             <section className="space-y-4">
               <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
-                <ShieldAlert className="w-5 h-5 text-slate-400" />
+                <AlertTriangle className="w-5 h-5 text-slate-400" />
                 <h3 className="text-lg font-bold text-slate-800">
                   4. Políticas da Sala
                 </h3>
@@ -862,11 +860,13 @@ export function HostSpaceForm({
                   5. Modalidades e Valores
                 </h3>
               </div>
+
               <div className="grid grid-cols-1 gap-6 bg-slate-50 p-5 rounded-xl border border-slate-200">
+                {/* Disponibilizar por Hora (Precificação Dinâmica) */}
                 <div
-                  className={`space-y-4 p-4 rounded-xl border ${isPartner ? "bg-amber-50/50 border-amber-200" : "bg-white border-slate-200"}`}
+                  className={`space-y-4 p-5 rounded-xl border ${isPartner ? "bg-white border-amber-200 shadow-sm" : "bg-white border-slate-200 opacity-80"}`}
                 >
-                  <div className="flex items-center space-x-2">
+                  <div className="flex items-center space-x-2 border-b border-slate-100 pb-4">
                     <Checkbox
                       id="hora"
                       disabled={!isPartner}
@@ -883,7 +883,7 @@ export function HostSpaceForm({
                       htmlFor="hora"
                       className={`font-bold text-base cursor-pointer flex items-center gap-2 ${!isPartner && "text-slate-400"}`}
                     >
-                      Disponibilizar por Hora
+                      Disponibilizar por Hora (Dinâmico)
                       {!isPartner ? (
                         <Badge
                           variant="outline"
@@ -896,23 +896,108 @@ export function HostSpaceForm({
                       )}
                     </Label>
                   </div>
+
                   {modalities.includes("hora") && isPartner && (
-                    <div className="pl-6 w-full sm:w-1/3">
-                      <Label className="text-xs font-semibold text-amber-700 uppercase tracking-wider">
-                        Valor por Hora (R$)
-                      </Label>
-                      <Input
-                        placeholder="Ex: 50"
-                        value={prices.hourly}
-                        onChange={(e) =>
-                          setPrices({ ...prices, hourly: e.target.value })
-                        }
-                        className="h-10 bg-white border-amber-200"
-                      />
+                    <div className="pt-2">
+                      <p className="text-sm text-slate-500 font-medium mb-5">
+                        Maximize seus lucros definindo valores estratégicos para
+                        diferentes períodos.
+                      </p>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                        {/* Card 1: Horário Comercial */}
+                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
+                          <div className="absolute top-0 left-0 w-1 h-full bg-[#f05e23]" />
+                          <div className="flex items-center gap-2 mb-1">
+                            <Sun className="w-4 h-4 text-[#f05e23]" />
+                            <h4 className="font-bold text-slate-900 text-sm">
+                              Comercial
+                            </h4>
+                          </div>
+                          <p className="text-[10px] text-slate-500 font-medium mb-3">
+                            Seg a Sex (08h às 18h)
+                          </p>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-black">
+                              R$
+                            </span>
+                            <Input
+                              type="number"
+                              required
+                              placeholder="45"
+                              value={prices.hourly}
+                              onChange={(e) =>
+                                setPrices({ ...prices, hourly: e.target.value })
+                              }
+                              className="w-full pl-9 h-11 bg-slate-50 border-slate-200 font-bold"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Card 2: Horário Noturno */}
+                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Moon className="w-4 h-4 text-indigo-500" />
+                            <h4 className="font-bold text-slate-900 text-sm">
+                              Noturno
+                            </h4>
+                          </div>
+                          <p className="text-[10px] text-slate-500 font-medium mb-3">
+                            Seg a Sex (18h às 08h)
+                          </p>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-black">
+                              R$
+                            </span>
+                            <Input
+                              type="number"
+                              placeholder="Ex: 55"
+                              value={prices.afterHours}
+                              onChange={(e) =>
+                                setPrices({
+                                  ...prices,
+                                  afterHours: e.target.value,
+                                })
+                              }
+                              className="w-full pl-9 h-11 bg-slate-50 border-slate-200 font-bold focus:border-indigo-500 focus:ring-indigo-500/20"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Card 3: Final de Semana */}
+                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                          <div className="flex items-center gap-2 mb-1">
+                            <CalendarDays className="w-4 h-4 text-emerald-500" />
+                            <h4 className="font-bold text-slate-900 text-sm">
+                              Fim de Semana
+                            </h4>
+                          </div>
+                          <p className="text-[10px] text-slate-500 font-medium mb-3">
+                            Sábados e Domingos
+                          </p>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-black">
+                              R$
+                            </span>
+                            <Input
+                              type="number"
+                              placeholder="Ex: 65"
+                              value={prices.weekend}
+                              onChange={(e) =>
+                                setPrices({
+                                  ...prices,
+                                  weekend: e.target.value,
+                                })
+                              }
+                              className="w-full pl-9 h-11 bg-slate-50 border-slate-200 font-bold focus:border-emerald-500 focus:ring-emerald-500/20"
+                            />
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
 
+                {/* Disponibilizar por Turno */}
                 <div className="space-y-4">
                   <div className="flex items-center space-x-2">
                     <Checkbox
@@ -934,7 +1019,7 @@ export function HostSpaceForm({
                     </Label>
                   </div>
                   {modalities.includes("turno") && (
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pl-6">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pl-7">
                       <div className="space-y-1">
                         <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
                           Manhã (R$)
@@ -945,7 +1030,7 @@ export function HostSpaceForm({
                           onChange={(e) =>
                             setPrices({ ...prices, morning: e.target.value })
                           }
-                          className="h-10 bg-white"
+                          className="h-11 bg-white"
                         />
                       </div>
                       <div className="space-y-1">
@@ -958,7 +1043,7 @@ export function HostSpaceForm({
                           onChange={(e) =>
                             setPrices({ ...prices, afternoon: e.target.value })
                           }
-                          className="h-10 bg-white"
+                          className="h-11 bg-white"
                         />
                       </div>
                       <div className="space-y-1">
@@ -971,7 +1056,7 @@ export function HostSpaceForm({
                           onChange={(e) =>
                             setPrices({ ...prices, night: e.target.value })
                           }
-                          className="h-10 bg-white"
+                          className="h-11 bg-white"
                         />
                       </div>
                     </div>
@@ -980,6 +1065,7 @@ export function HostSpaceForm({
 
                 <div className="h-px bg-slate-200 w-full" />
 
+                {/* Contrato Fixo */}
                 <div className="space-y-3">
                   <div className="flex items-center space-x-2">
                     <Checkbox
@@ -1001,7 +1087,7 @@ export function HostSpaceForm({
                     </Label>
                   </div>
                   {modalities.includes("fixo") && (
-                    <div className="pl-6 w-full sm:w-1/3">
+                    <div className="pl-7 w-full sm:w-1/3">
                       <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
                         Valor Mensal (R$)
                       </Label>
@@ -1011,7 +1097,7 @@ export function HostSpaceForm({
                         onChange={(e) =>
                           setPrices({ ...prices, monthly: e.target.value })
                         }
-                        className="h-10 bg-white"
+                        className="h-11 bg-white"
                       />
                     </div>
                   )}
