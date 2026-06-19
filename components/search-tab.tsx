@@ -10,12 +10,10 @@ import {
   SlidersHorizontal,
   Star,
   MapPin,
-  Bell,
   Heart,
   Loader2,
   Sparkles,
   Navigation,
-  X,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -70,6 +68,7 @@ export function SearchTab({ onOpenRoom }: SearchTabProps) {
     notifications: 0,
     location: "Natal, RN",
   });
+
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -105,39 +104,55 @@ export function SearchTab({ onOpenRoom }: SearchTabProps) {
             .join(", ");
           const displayLocation = address.city || "Localização não informada";
 
+          // CORREÇÃO: Lê estritamente as modalidades que vêm do banco de dados (Checkbox do Host)
+          const finalModalities = Array.isArray(r.modalities)
+            ? r.modalities
+            : [];
+
           let label = "Sob consulta";
           let numPrice = 0;
 
-          if (rentalType === "hora" && pricing.hourly) {
+          if (
+            rentalType === "hora" &&
+            pricing.hourly &&
+            finalModalities.includes("hora")
+          ) {
             label = `R$ ${pricing.hourly}/hora`;
             numPrice = Number(pricing.hourly);
-          } else if (rentalType === "turno") {
+          } else if (
+            rentalType === "turno" &&
+            finalModalities.includes("turno")
+          ) {
             const turnos = [pricing.morning, pricing.afternoon, pricing.night]
               .filter(Boolean)
               .map(Number);
             const minTurno = turnos.length > 0 ? Math.min(...turnos) : 0;
             label = minTurno > 0 ? `R$ ${minTurno}/turno` : "Sob consulta";
             numPrice = minTurno;
-          } else if (rentalType === "fixo" && pricing.monthly) {
+          } else if (
+            rentalType === "fixo" &&
+            pricing.monthly &&
+            finalModalities.includes("fixo")
+          ) {
             label = `R$ ${pricing.monthly}/mês`;
             numPrice = Number(pricing.monthly);
           } else {
-            if (pricing.hourly && isRoomPartner) {
+            // Fallback seguro baseado nas modalidades ativas
+            if (finalModalities.includes("hora") && pricing.hourly) {
               label = `R$ ${pricing.hourly}/hora`;
               numPrice = Number(pricing.hourly);
-            } else if (pricing.morning) {
-              label = `R$ ${pricing.morning}/turno`;
-              numPrice = Number(pricing.morning);
-            } else if (pricing.monthly) {
+            } else if (
+              finalModalities.includes("turno") &&
+              (pricing.morning || pricing.afternoon)
+            ) {
+              const val = pricing.morning || pricing.afternoon;
+              label = `R$ ${val}/turno`;
+              numPrice = Number(val);
+            } else if (finalModalities.includes("fixo") && pricing.monthly) {
               label = `R$ ${pricing.monthly}/mês`;
               numPrice = Number(pricing.monthly);
             }
           }
-
-          const rawModalities = Array.isArray(r.modalities) ? r.modalities : [];
-          const finalModalities = isRoomPartner
-            ? Array.from(new Set([...rawModalities, "hora"]))
-            : rawModalities;
 
           return {
             id: r.id,
@@ -174,6 +189,12 @@ export function SearchTab({ onOpenRoom }: SearchTabProps) {
             ? walletData.reduce((acc, curr) => acc + Number(curr.amount), 0)
             : 0;
 
+          const { data: favData } = await supabase
+            .from("favorites")
+            .select("room_id")
+            .eq("user_id", user.id);
+          if (favData) setFavorites(new Set(favData.map((f) => f.room_id)));
+
           setProfile((prev) => ({
             ...prev,
             name: profileData?.full_name || "Doutor(a)",
@@ -198,7 +219,7 @@ export function SearchTab({ onOpenRoom }: SearchTabProps) {
         description: "Procurando salas próximas a você.",
       });
       navigator.geolocation.getCurrentPosition(
-        (position) => {
+        () => {
           setUsingLocation(true);
           toast({
             title: "Localização Encontrada",
@@ -209,30 +230,68 @@ export function SearchTab({ onOpenRoom }: SearchTabProps) {
           toast({
             variant: "destructive",
             title: "Permissão Negada",
-            description:
-              "Ative o GPS no seu navegador para buscar salas próximas.",
+            description: "Ative o GPS no navegador.",
           });
         },
       );
     }
   };
 
-  function toggleFavorite(e: React.MouseEvent, roomId: string) {
+  async function toggleFavorite(e: React.MouseEvent, roomId: string) {
     e.stopPropagation();
-    if (isPublic) return router.push("/login");
+    if (isPublic) {
+      toast({
+        title: "Acesso restrito",
+        description: "Faça login para favoritar.",
+      });
+      return router.push("/login");
+    }
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return router.push("/login");
+
+    const isFavorited = favorites.has(roomId);
+
     setFavorites((prev) => {
       const next = new Set(prev);
-      if (next.has(roomId)) next.delete(roomId);
+      if (isFavorited) next.delete(roomId);
       else next.add(roomId);
       return next;
     });
+
+    try {
+      if (isFavorited) {
+        const { error } = await supabase
+          .from("favorites")
+          .delete()
+          .eq("user_id", user.id)
+          .eq("room_id", roomId);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from("favorites")
+          .insert({ user_id: user.id, room_id: roomId });
+        if (error) throw error;
+      }
+    } catch (error) {
+      setFavorites((prev) => {
+        const next = new Set(prev);
+        if (isFavorited) next.add(roomId);
+        else next.delete(roomId);
+        return next;
+      });
+      toast({
+        variant: "destructive",
+        title: "Erro",
+        description: "Não foi possível salvar.",
+      });
+    }
   }
 
-  // --- LÓGICA DE FILTRO 100% BLINDADA CONTRA ERROS DE DADOS NULOS ---
   const filteredRooms = dbRooms.filter((room) => {
     const searchLower = (searchQuery || "").toLowerCase();
-
-    // Fallbacks para evitar o erro Cannot read properties of undefined (reading 'toLowerCase')
     const locStr = (room.locationString || "").toLowerCase();
     const nameStr = (room.name || "").toLowerCase();
     const catStr = (room.category || "").toLowerCase();
@@ -242,9 +301,11 @@ export function SearchTab({ onOpenRoom }: SearchTabProps) {
       nameStr.includes(searchLower) ||
       catStr.includes(searchLower);
 
+    // CORREÇÃO: A sala só aparece se tiver a modalidade exata selecionada no filtro do topo
     const matchesModality = Array.isArray(room.modalities)
       ? room.modalities.includes(rentalType)
       : false;
+
     const matchesCategory =
       selectedCategory === "Todas" || room.category === selectedCategory;
     const passesMinPrice =
@@ -364,10 +425,10 @@ export function SearchTab({ onOpenRoom }: SearchTabProps) {
               <Search className="w-8 h-8 text-slate-300" />
             </div>
             <h3 className="text-xl font-black text-slate-900 mb-2">
-              Nenhuma sala na região
+              Nenhuma sala disponível nesta modalidade
             </h3>
             <p className="text-slate-500 font-medium">
-              Tente buscar por outra cidade ou mudar os filtros.
+              Tente buscar por outra localização ou mudar os filtros.
             </p>
             <Button
               variant="outline"
@@ -568,7 +629,7 @@ function RoomCard({
           className="absolute top-3 right-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 shadow-sm backdrop-blur-sm hover:scale-110 transition-transform z-10"
         >
           <Heart
-            className={`h-4 w-4 ${isFavorited ? "fill-red-500 text-red-500" : "text-slate-400"}`}
+            className={`h-4 w-4 transition-colors ${isFavorited ? "fill-red-500 text-red-500" : "text-slate-400"}`}
           />
         </span>
       </div>

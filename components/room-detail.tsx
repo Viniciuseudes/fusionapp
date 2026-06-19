@@ -40,6 +40,8 @@ import {
   Sparkles,
   Grid,
   Share,
+  Shield,
+  MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -58,22 +60,36 @@ interface RoomDetailProps {
   roomId?: string | any;
   room?: any;
   onBack: () => void;
+  initialModality?: "hora" | "turno" | "fixo";
 }
 
 export function RoomDetail(props: RoomDetailProps) {
-  const { onBack } = props;
+  const { onBack, initialModality = "hora" } = props;
   const supabase = createClient();
   const { toast } = useToast();
 
   const [loading, setLoading] = useState(true);
-  const [bookingLoading, setBookingLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
   const [roomData, setRoomData] = useState<any>(null);
 
+  // ABA ATIVA (Controle de Modalidade)
+  const [activeTab, setActiveTab] = useState<"hora" | "turno" | "fixo">("hora");
+
+  // ESTADOS: POR HORA
   const today = startOfToday();
   const [selectedDate, setSelectedDate] = useState<Date>(today);
   const [selectedSlots, setSelectedSlots] = useState<string[]>([]);
+  const [currentMonthView, setCurrentMonthView] = useState<Date>(
+    startOfMonth(today),
+  );
 
-  // ESTADO DE FAVORITOS E COMPARTILHAMENTO
+  // ESTADOS: POR TURNO
+  const [selectedShift, setSelectedShift] = useState<
+    "morning" | "afternoon" | "night" | null
+  >(null);
+  const [selectedDays, setSelectedDays] = useState<number[]>([]);
+
+  // ESTADO DE FAVORITOS, COMPARTILHAMENTO E GALERIA
   const [isFavorited, setIsFavorited] = useState(false);
   const [isFavoriteLoading, setIsFavoriteLoading] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
@@ -82,9 +98,6 @@ export function RoomDetail(props: RoomDetailProps) {
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
   const lightboxRef = useRef<HTMLDivElement>(null);
-  const [currentMonthView, setCurrentMonthView] = useState<Date>(
-    startOfMonth(today),
-  );
 
   // 1. CARREGAMENTO DOS DADOS DA SALA
   useEffect(() => {
@@ -107,7 +120,18 @@ export function RoomDetail(props: RoomDetailProps) {
           .single();
 
         if (error) throw error;
-        if (isMounted) setRoomData(data);
+
+        if (isMounted) {
+          setRoomData(data);
+
+          // Define a aba correta com base no que a sala permite ou no que foi passado
+          const mods = data.modalities || [];
+          if (mods.includes(initialModality)) {
+            setActiveTab(initialModality);
+          } else if (mods.length > 0) {
+            setActiveTab(mods[0]);
+          }
+        }
       } catch (err) {
         console.error("Erro ao buscar sala:", err);
       } finally {
@@ -119,9 +143,9 @@ export function RoomDetail(props: RoomDetailProps) {
     return () => {
       isMounted = false;
     };
-  }, [props.roomId, props.room]);
+  }, [props.roomId, props.room, initialModality]);
 
-  // 2. VERIFICAÇÃO DE FAVORITOS (O coração já inicia pintado se for favorito)
+  // 2. VERIFICAÇÃO DE FAVORITOS
   useEffect(() => {
     async function checkFavoriteStatus() {
       const rawInput = props.roomId || props.room;
@@ -134,21 +158,22 @@ export function RoomDetail(props: RoomDetailProps) {
       if (!user) return;
 
       const { data } = await supabase
-        .from("favorites") // <-- Ajuste aqui se o nome da sua tabela for diferente (ex: saved_rooms)
+        .from("favorites")
         .select("id")
         .eq("user_id", user.id)
         .eq("room_id", idToFetch)
         .maybeSingle();
 
-      if (data) {
-        setIsFavorited(true);
-      }
+      if (data) setIsFavorited(true);
     }
     checkFavoriteStatus();
   }, [props.roomId, props.room]);
 
+  // ==========================================
+  // LÓGICAS: POR HORA
+  // ==========================================
   const availableSlots = useMemo(() => {
-    if (!roomData) return [];
+    if (!roomData || activeTab !== "hora") return [];
     let avail = roomData.availability;
     if (typeof avail === "string") {
       try {
@@ -219,7 +244,7 @@ export function RoomDetail(props: RoomDetailProps) {
       );
 
     return shiftHours;
-  }, [roomData, selectedDate]);
+  }, [roomData, selectedDate, activeTab]);
 
   const getBasePrice = () => {
     let address = roomData?.address_details || {};
@@ -266,7 +291,7 @@ export function RoomDetail(props: RoomDetailProps) {
     return commercialRate;
   };
 
-  const totalCost = selectedSlots.reduce(
+  const totalHourlyCost = selectedSlots.reduce(
     (acc, slotKey) => acc + getSlotPrice(slotKey),
     0,
   );
@@ -279,59 +304,121 @@ export function RoomDetail(props: RoomDetailProps) {
     );
   };
 
-  const handleBooking = async () => {
-    if (selectedSlots.length === 0)
+  // ==========================================
+  // LÓGICAS: POR TURNO E FIXO
+  // ==========================================
+  const getPricingData = () => {
+    let address = roomData?.address_details || {};
+    if (typeof address === "string") {
+      try {
+        address = JSON.parse(address);
+      } catch (e) {
+        address = {};
+      }
+    }
+    return address.pricing || {};
+  };
+
+  const pricingData = getPricingData();
+  const shiftPrice = selectedShift
+    ? Number(pricingData[selectedShift] || 0)
+    : 0;
+  const totalShiftCost = shiftPrice * selectedDays.length;
+
+  const toggleDay = (day: number) => {
+    setSelectedDays((prev) =>
+      prev.includes(day)
+        ? prev.filter((d) => d !== day)
+        : [...prev, day].sort(),
+    );
+  };
+
+  // ==========================================
+  // AÇÃO PRINCIPAL (Reserva ou Negociação)
+  // ==========================================
+  const handleAction = async () => {
+    if (activeTab === "hora" && selectedSlots.length === 0) {
       return toast({
         variant: "destructive",
         title: "Atenção",
         description: "Selecione pelo menos um horário.",
       });
-    setBookingLoading(true);
+    }
+    if (
+      activeTab === "turno" &&
+      (!selectedShift || selectedDays.length === 0)
+    ) {
+      return toast({
+        variant: "destructive",
+        title: "Atenção",
+        description: "Selecione um turno e ao menos um dia da semana.",
+      });
+    }
+
+    setActionLoading(true);
     try {
       const {
         data: { user },
         error: userError,
       } = await supabase.auth.getUser();
       if (userError || !user)
-        throw new Error("Você precisa estar logado para agendar.");
+        throw new Error("Você precisa estar logado para prosseguir.");
 
-      const bookingPayloads = selectedSlots.map((slotKey) => {
-        const [dateStr, slotTime] = slotKey.split("|");
-        const startSlot = slotTime.split(" - ")[0].replace("h", ":");
-        const endSlot = slotTime.split(" - ")[1].replace("h", ":");
-        return {
-          user_id: user.id,
-          room_id: roomData.id,
-          start_time: new Date(`${dateStr}T${startSlot}:00`).toISOString(),
-          end_time: new Date(`${dateStr}T${endSlot}:00`).toISOString(),
-          total_cost: getSlotPrice(slotKey),
-          status: "pending",
-        };
-      });
+      if (activeTab === "hora") {
+        // FLUXO NORMAL (Transacional Direto)
+        const bookingPayloads = selectedSlots.map((slotKey) => {
+          const [dateStr, slotTime] = slotKey.split("|");
+          const startSlot = slotTime.split(" - ")[0].replace("h", ":");
+          const endSlot = slotTime.split(" - ")[1].replace("h", ":");
+          return {
+            user_id: user.id,
+            room_id: roomData.id,
+            start_time: new Date(`${dateStr}T${startSlot}:00`).toISOString(),
+            end_time: new Date(`${dateStr}T${endSlot}:00`).toISOString(),
+            total_cost: getSlotPrice(slotKey),
+            status: "pending",
+          };
+        });
 
-      const { error: bookingError } = await supabase
-        .from("bookings")
-        .insert(bookingPayloads);
-      if (bookingError) throw bookingError;
-      toast({
-        title: "Reservas Solicitadas! 🎉",
-        description: "Seus horários foram enviados para aprovação com sucesso.",
-      });
-      onBack();
+        const { error: bookingError } = await supabase
+          .from("bookings")
+          .insert(bookingPayloads);
+        if (bookingError) throw bookingError;
+        toast({
+          title: "Reservas Solicitadas! 🎉",
+          description:
+            "Seus horários foram enviados para aprovação com sucesso.",
+        });
+        onBack();
+      } else {
+        // FLUXO DE NEGOCIAÇÃO SEGURA (Turno ou Fixo)
+        toast({
+          title: "Iniciando ambiente seguro...",
+          description:
+            "Criando canal de negociação com o anfitrião. Você será redirecionado para o chat.",
+        });
+
+        // Aqui nós criaremos o redirecionamento real para o Chat na próxima etapa da arquitetura.
+        // Simulando o processo para a interface não travar:
+        setTimeout(() => {
+          onBack();
+          // router.push(`/dashboard?tab=chat&new=${roomData.id}`)
+        }, 1500);
+      }
     } catch (err: any) {
       console.error(err);
       toast({
         variant: "destructive",
-        title: "Erro na reserva",
-        description: err.message || "Não foi possível concluir o agendamento.",
+        title: "Erro na operação",
+        description: err.message,
       });
     } finally {
-      setBookingLoading(false);
+      setActionLoading(false);
     }
   };
 
   // ==========================================
-  // MOTOR DE FAVORITOS CONECTADO AO BANCO
+  // FUNÇÕES UTILITÁRIAS DA GALERIA
   // ==========================================
   const handleFavoriteToggle = async () => {
     if (isFavoriteLoading || !roomData) return;
@@ -349,22 +436,18 @@ export function RoomDetail(props: RoomDetailProps) {
     setIsFavoriteLoading(true);
     try {
       if (isFavorited) {
-        // Deleta do banco
         const { error } = await supabase
-          .from("favorites") // <-- Ajuste aqui se a tabela for diferente
+          .from("favorites")
           .delete()
           .eq("user_id", user.id)
           .eq("room_id", roomData.id);
-
         if (error) throw error;
         setIsFavorited(false);
         toast({ description: "Sala removida dos favoritos." });
       } else {
-        // Insere no banco
         const { error } = await supabase
-          .from("favorites") // <-- Ajuste aqui se a tabela for diferente
+          .from("favorites")
           .insert({ user_id: user.id, room_id: roomData.id });
-
         if (error) throw error;
         setIsFavorited(true);
         toast({
@@ -460,10 +543,10 @@ export function RoomDetail(props: RoomDetailProps) {
 
   const monthStart = startOfMonth(currentMonthView);
   const monthEnd = endOfMonth(monthStart);
-  const startDate = startOfWeek(monthStart);
-  const endDate = endOfWeek(monthEnd);
-  const calendarDays = eachDayOfInterval({ start: startDate, end: endDate });
-
+  const calendarDays = eachDayOfInterval({
+    start: startOfWeek(monthStart),
+    end: endOfWeek(monthEnd),
+  });
   const nextMonth = () => setCurrentMonthView(addMonths(currentMonthView, 1));
   const prevMonth = () => setCurrentMonthView(addMonths(currentMonthView, -1));
   const canGoPrevMonth = !isBefore(
@@ -471,6 +554,9 @@ export function RoomDetail(props: RoomDetailProps) {
     startOfMonth(today),
   );
 
+  // ==========================================
+  // RENDERIZAÇÃO
+  // ==========================================
   if (loading) {
     return (
       <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-6 text-center">
@@ -513,6 +599,7 @@ export function RoomDetail(props: RoomDetailProps) {
   const imagesToShow = allImages.slice(0, 5);
   const totalImages = imagesToShow.length;
   const isPartner = roomData.is_partner === true;
+  const roomModalities = roomData.modalities || [];
 
   const displayAmenities =
     Array.isArray(address.amenities) && address.amenities.length > 0
@@ -728,198 +815,392 @@ export function RoomDetail(props: RoomDetailProps) {
           </div>
 
           <div className="md:col-span-5 bg-white md:p-6 md:border md:border-slate-200 md:rounded-2xl md:shadow-lg md:h-fit md:sticky md:top-6 flex flex-col">
-            <section>
-              <div className="flex items-center gap-2 mb-4">
-                <CalendarIcon className="w-5 h-5 text-[#f05e23]" />
-                <h2 className="text-lg font-black text-slate-900">
-                  Agendamento
-                </h2>
-              </div>
+            <div className="flex bg-slate-100 p-1.5 rounded-xl mb-6">
+              {roomModalities.includes("hora") && (
+                <button
+                  onClick={() => setActiveTab("hora")}
+                  className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${activeTab === "hora" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
+                >
+                  Por Hora
+                </button>
+              )}
+              {roomModalities.includes("turno") && (
+                <button
+                  onClick={() => setActiveTab("turno")}
+                  className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${activeTab === "turno" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
+                >
+                  Por Turno
+                </button>
+              )}
+              {roomModalities.includes("fixo") && (
+                <button
+                  onClick={() => setActiveTab("fixo")}
+                  className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${activeTab === "fixo" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
+                >
+                  Mensal (Fixo)
+                </button>
+              )}
+            </div>
 
-              <div className="w-full bg-white rounded-2xl border border-slate-100 p-4 mb-6 shadow-sm">
-                <div className="flex items-center justify-between mb-4">
-                  <button
-                    onClick={prevMonth}
-                    disabled={!canGoPrevMonth}
-                    className={`p-1.5 rounded-full transition-colors ${canGoPrevMonth ? "text-slate-500 hover:bg-slate-100 hover:text-[#f05e23]" : "text-slate-200 cursor-not-allowed"}`}
-                  >
-                    <ChevronLeft className="w-5 h-5" />
-                  </button>
-                  <div className="font-bold text-slate-800 capitalize text-sm">
-                    {format(currentMonthView, "MMMM 'de' yyyy", {
-                      locale: ptBR,
+            {/* SEÇÃO: POR HORA */}
+            {activeTab === "hora" && (
+              <section className="animate-in fade-in">
+                <div className="flex items-center gap-2 mb-4">
+                  <CalendarIcon className="w-5 h-5 text-[#f05e23]" />
+                  <h2 className="text-lg font-black text-slate-900">
+                    Agendamento
+                  </h2>
+                </div>
+
+                <div className="w-full bg-white rounded-2xl border border-slate-100 p-4 mb-6 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <button
+                      onClick={prevMonth}
+                      disabled={!canGoPrevMonth}
+                      className={`p-1.5 rounded-full transition-colors ${canGoPrevMonth ? "text-slate-500 hover:bg-slate-100 hover:text-[#f05e23]" : "text-slate-200 cursor-not-allowed"}`}
+                    >
+                      <ChevronLeft className="w-5 h-5" />
+                    </button>
+                    <div className="font-bold text-slate-800 capitalize text-sm">
+                      {format(currentMonthView, "MMMM 'de' yyyy", {
+                        locale: ptBR,
+                      })}
+                    </div>
+                    <button
+                      onClick={nextMonth}
+                      className="p-1.5 rounded-full text-slate-500 hover:bg-slate-100 hover:text-[#f05e23] transition-colors"
+                    >
+                      <ChevronRight className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-7 text-center mb-2">
+                    {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map(
+                      (d) => (
+                        <div
+                          key={d}
+                          className="text-[10px] font-bold text-slate-400 uppercase"
+                        >
+                          {d}
+                        </div>
+                      ),
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-7 gap-y-2 gap-x-1">
+                    {calendarDays.map((day) => {
+                      const dateStr = format(day, "yyyy-MM-dd");
+                      const isSelected = isSameDay(day, selectedDate);
+                      const isPast =
+                        isBefore(day, today) && !isSameDay(day, today);
+                      const isCurrentMonth = isSameMonth(day, currentMonthView);
+                      const hasSelection = selectedSlots.some((slotKey) =>
+                        slotKey.startsWith(dateStr),
+                      );
+
+                      return (
+                        <button
+                          key={day.toISOString()}
+                          onClick={() => {
+                            if (!isPast) setSelectedDate(day);
+                          }}
+                          disabled={isPast || !isCurrentMonth}
+                          className={`relative h-9 w-full rounded-lg text-xs font-bold flex flex-col items-center justify-center transition-colors
+                            ${!isCurrentMonth ? "invisible" : ""}
+                            ${isPast ? "text-slate-200 cursor-not-allowed" : ""}
+                            ${isSelected ? "bg-[#f05e23] text-white shadow-md shadow-orange-500/30" : ""}
+                            ${!isSelected && !isPast && isCurrentMonth ? "text-slate-700 hover:bg-slate-100" : ""}
+                          `}
+                        >
+                          <span className="relative z-10">
+                            {format(day, "d")}
+                          </span>
+                          {hasSelection && (
+                            <span
+                              className={`absolute bottom-1 w-1 h-1 rounded-full ${isSelected ? "bg-white" : "bg-[#f05e23]"}`}
+                            />
+                          )}
+                        </button>
+                      );
                     })}
                   </div>
-                  <button
-                    onClick={nextMonth}
-                    className="p-1.5 rounded-full text-slate-500 hover:bg-slate-100 hover:text-[#f05e23] transition-colors"
-                  >
-                    <ChevronRight className="w-5 h-5" />
-                  </button>
                 </div>
 
-                <div className="grid grid-cols-7 text-center mb-2">
-                  {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map(
-                    (d) => (
-                      <div
-                        key={d}
-                        className="text-[10px] font-bold text-slate-400 uppercase"
-                      >
-                        {d}
-                      </div>
-                    ),
-                  )}
-                </div>
+                <div className="w-full h-px bg-slate-100 my-4" />
 
-                <div className="grid grid-cols-7 gap-y-2 gap-x-1">
-                  {calendarDays.map((day) => {
-                    const dateStr = format(day, "yyyy-MM-dd");
-                    const isSelected = isSameDay(day, selectedDate);
-                    const isPast =
-                      isBefore(day, today) && !isSameDay(day, today);
-                    const isCurrentMonth = isSameMonth(day, currentMonthView);
-
-                    const hasSelection = selectedSlots.some((slotKey) =>
-                      slotKey.startsWith(dateStr),
-                    );
-
-                    return (
-                      <button
-                        key={day.toISOString()}
-                        onClick={() => {
-                          if (!isPast) setSelectedDate(day);
-                        }}
-                        disabled={isPast || !isCurrentMonth}
-                        className={`relative h-9 w-full rounded-lg text-xs font-bold flex flex-col items-center justify-center transition-colors
-                          ${!isCurrentMonth ? "invisible" : ""}
-                          ${isPast ? "text-slate-200 cursor-not-allowed" : ""}
-                          ${isSelected ? "bg-[#f05e23] text-white shadow-md shadow-orange-500/30" : ""}
-                          ${!isSelected && !isPast && isCurrentMonth ? "text-slate-700 hover:bg-slate-100" : ""}
-                        `}
-                      >
-                        <span className="relative z-10">
-                          {format(day, "d")}
-                        </span>
-                        {hasSelection && (
-                          <span
-                            className={`absolute bottom-1 w-1 h-1 rounded-full ${isSelected ? "bg-white" : "bg-[#f05e23]"}`}
-                          />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="w-full h-px bg-slate-100 my-4" />
-
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-bold text-slate-800 capitalize">
-                  Horários disponíveis{" "}
-                  <span className="font-medium text-slate-500 lowercase">
-                    (
-                    {format(selectedDate, "EEE, dd 'de' MMM", { locale: ptBR })}
-                    )
-                  </span>
-                </h3>
-              </div>
-
-              {availableSlots.length === 0 ? (
-                <div className="text-center py-6 bg-slate-50 rounded-xl border border-slate-100">
-                  <AlertCircle className="w-6 h-6 text-slate-300 mx-auto mb-2" />
-                  <p className="text-slate-500 font-bold text-xs">
-                    Nenhum horário disponível para esta data.
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-2 max-h-[220px] overflow-y-auto pr-1 scrollbar-hide">
-                  {availableSlots.map((slotTime: string) => {
-                    const slotKey = `${format(selectedDate, "yyyy-MM-dd")}|${slotTime}`;
-                    const isSelected = selectedSlots.includes(slotKey);
-                    const slotPrice = getSlotPrice(slotKey);
-
-                    return (
-                      <button
-                        key={slotKey}
-                        onClick={() => toggleSlot(slotKey)}
-                        className={`h-14 rounded-xl flex flex-col items-center justify-center transition-all border-2 ${
-                          isSelected
-                            ? "border-[#f05e23] bg-orange-50"
-                            : "border-slate-100 bg-white hover:border-slate-300"
-                        }`}
-                      >
-                        <span
-                          className={`text-xs font-bold ${isSelected ? "text-[#f05e23]" : "text-slate-700"}`}
-                        >
-                          {slotTime}
-                        </span>
-                        <span
-                          className={`text-[10px] font-semibold mt-0.5 ${isSelected ? "text-[#f05e23]/80" : "text-slate-400"}`}
-                        >
-                          R$ {slotPrice.toFixed(2).replace(".", ",")}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
-
-            <div className="hidden md:block pt-6 border-t border-slate-100 mt-6">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5">
-                    {selectedSlots.length > 0
-                      ? `Total (${selectedSlots.length} horas)`
-                      : "A partir de"}
-                  </p>
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-2xl font-black text-[#f05e23]">
-                      R$ {selectedSlots.length > 0 ? totalCost : getBasePrice()}
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-bold text-slate-800 capitalize">
+                    Horários disponíveis{" "}
+                    <span className="font-medium text-slate-500 lowercase">
+                      (
+                      {format(selectedDate, "EEE, dd 'de' MMM", {
+                        locale: ptBR,
+                      })}
+                      )
                     </span>
+                  </h3>
+                </div>
+
+                {availableSlots.length === 0 ? (
+                  <div className="text-center py-6 bg-slate-50 rounded-xl border border-slate-100">
+                    <AlertCircle className="w-6 h-6 text-slate-300 mx-auto mb-2" />
+                    <p className="text-slate-500 font-bold text-xs">
+                      Nenhum horário disponível para esta data.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2 max-h-[220px] overflow-y-auto pr-1 scrollbar-hide">
+                    {availableSlots.map((slotTime: string) => {
+                      const slotKey = `${format(selectedDate, "yyyy-MM-dd")}|${slotTime}`;
+                      const isSelected = selectedSlots.includes(slotKey);
+                      const slotPrice = getSlotPrice(slotKey);
+
+                      return (
+                        <button
+                          key={slotKey}
+                          onClick={() => toggleSlot(slotKey)}
+                          className={`h-14 rounded-xl flex flex-col items-center justify-center transition-all border-2 ${
+                            isSelected
+                              ? "border-[#f05e23] bg-orange-50"
+                              : "border-slate-100 bg-white hover:border-slate-300"
+                          }`}
+                        >
+                          <span
+                            className={`text-xs font-bold ${isSelected ? "text-[#f05e23]" : "text-slate-700"}`}
+                          >
+                            {slotTime}
+                          </span>
+                          <span
+                            className={`text-[10px] font-semibold mt-0.5 ${isSelected ? "text-[#f05e23]/80" : "text-slate-400"}`}
+                          >
+                            R$ {slotPrice.toFixed(2).replace(".", ",")}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="hidden md:block pt-6 border-t border-slate-100 mt-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5">
+                        {selectedSlots.length > 0
+                          ? `Total (${selectedSlots.length} horas)`
+                          : "A partir de"}
+                      </p>
+                      <div className="flex items-baseline gap-1">
+                        <span className="text-2xl font-black text-[#f05e23]">
+                          R${" "}
+                          {selectedSlots.length > 0
+                            ? totalHourlyCost
+                            : getBasePrice()}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <Button
+                    onClick={handleAction}
+                    disabled={actionLoading || selectedSlots.length === 0}
+                    className={`w-full h-14 rounded-xl font-black transition-all text-base ${selectedSlots.length > 0 ? "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/25 hover:scale-[1.02]" : "bg-slate-100 text-slate-400 shadow-none"}`}
+                  >
+                    {actionLoading ? "Processando..." : "Reservar Agora"}
+                  </Button>
+                </div>
+              </section>
+            )}
+
+            {/* SEÇÃO: POR TURNO */}
+            {activeTab === "turno" && (
+              <section className="animate-in fade-in space-y-6">
+                <div>
+                  <h2 className="text-sm font-black text-slate-900 mb-3">
+                    1. Qual turno deseja alugar?
+                  </h2>
+                  <div className="grid grid-cols-3 gap-3">
+                    {[
+                      {
+                        id: "morning",
+                        label: "Manhã",
+                        price: pricingData.morning,
+                      },
+                      {
+                        id: "afternoon",
+                        label: "Tarde",
+                        price: pricingData.afternoon,
+                      },
+                      { id: "night", label: "Noite", price: pricingData.night },
+                    ].map((t) => (
+                      <button
+                        key={t.id}
+                        onClick={() => setSelectedShift(t.id as any)}
+                        className={`flex flex-col items-center justify-center p-3.5 rounded-xl border-2 transition-all ${selectedShift === t.id ? "border-[#f05e23] bg-orange-50 text-[#f05e23]" : "border-slate-100 hover:border-slate-200 bg-white"}`}
+                      >
+                        <span className="text-xs font-black">{t.label}</span>
+                        <span
+                          className={`text-[10px] font-bold mt-1 ${selectedShift === t.id ? "text-[#f05e23]/70" : "text-slate-400"}`}
+                        >
+                          {t.price ? `R$ ${t.price}` : "--"}
+                        </span>
+                      </button>
+                    ))}
                   </div>
                 </div>
-              </div>
-              <Button
-                onClick={handleBooking}
-                disabled={bookingLoading || selectedSlots.length === 0}
-                className={`w-full h-14 rounded-xl font-black transition-all text-base ${
-                  selectedSlots.length > 0
-                    ? "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/25 hover:scale-[1.02]"
-                    : "bg-slate-100 text-slate-400 shadow-none"
-                }`}
-              >
-                {bookingLoading ? "Processando..." : "Reservar Agora"}
-              </Button>
-            </div>
+
+                <div>
+                  <h2 className="text-sm font-black text-slate-900 mb-3">
+                    2. Quais dias da semana?
+                  </h2>
+                  <div className="flex gap-2 justify-between">
+                    {["D", "S", "T", "Q", "Q", "S", "S"].map((day, i) => (
+                      <button
+                        key={i}
+                        onClick={() => toggleDay(i)}
+                        className={`w-10 h-10 rounded-full text-xs font-black transition-all ${selectedDays.includes(i) ? "bg-slate-900 text-white shadow-md shadow-slate-900/20" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}
+                      >
+                        {day}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-blue-50/50 border border-blue-100 p-4 rounded-xl flex gap-3">
+                  <Shield className="w-5 h-5 text-blue-500 shrink-0" />
+                  <p className="text-xs text-blue-800 font-medium leading-relaxed">
+                    Aluguéis recorrentes são fechados através do nosso{" "}
+                    <strong className="font-black">Chat Seguro</strong>. O
+                    anfitrião avaliará sua proposta e vocês combinarão as chaves
+                    e o contrato na plataforma.
+                  </p>
+                </div>
+
+                <div className="hidden md:block pt-4 border-t border-slate-100">
+                  <div className="flex justify-between items-end mb-4">
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      Estimativa Semanal
+                    </span>
+                    <span className="text-2xl font-black text-slate-900">
+                      R$ {totalShiftCost.toFixed(2)}
+                    </span>
+                  </div>
+                  <Button
+                    onClick={handleAction}
+                    disabled={
+                      actionLoading ||
+                      !selectedShift ||
+                      selectedDays.length === 0
+                    }
+                    className="w-full h-14 rounded-xl font-black bg-slate-900 hover:bg-slate-800 text-white gap-2 transition-all"
+                  >
+                    {actionLoading ? (
+                      "Processando..."
+                    ) : (
+                      <>
+                        <MessageSquare className="w-4 h-4" /> Solicitar Proposta
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </section>
+            )}
+
+            {/* SEÇÃO: MENSAL (FIXO) */}
+            {activeTab === "fixo" && (
+              <section className="animate-in fade-in space-y-6">
+                <div className="text-center py-8 bg-slate-50 rounded-2xl border border-slate-200">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">
+                    Contrato Mensal (Exclusivo)
+                  </p>
+                  <h3 className="text-3xl font-black text-slate-900">
+                    R$ {pricingData.monthly || "--"}
+                  </h3>
+                </div>
+
+                <div className="bg-emerald-50/50 border border-emerald-100 p-4 rounded-xl flex gap-3">
+                  <Shield className="w-5 h-5 text-emerald-600 shrink-0" />
+                  <p className="text-xs text-emerald-800 font-medium leading-relaxed">
+                    O aluguel fixo garante exclusividade total sobre a sala.
+                    Inicie uma negociação segura para definir prazos, reformas,
+                    equipamentos e documentação do contrato.
+                  </p>
+                </div>
+
+                <div className="hidden md:block pt-4 border-t border-slate-100">
+                  <Button
+                    onClick={handleAction}
+                    disabled={actionLoading}
+                    className="w-full h-14 rounded-xl font-black bg-slate-900 hover:bg-slate-800 text-white gap-2 shadow-xl shadow-slate-900/10 transition-all"
+                  >
+                    {actionLoading ? (
+                      "Processando..."
+                    ) : (
+                      <>
+                        <MessageSquare className="w-4 h-4" /> Iniciar Negociação
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </section>
+            )}
           </div>
         </div>
       </div>
 
+      {/* RODAPÉ MOBILE INTELIGENTE (SHAPESHIFTER) */}
       <div className="md:hidden flex-none bg-white border-t border-slate-200 p-4 pb-safe flex items-center justify-between shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)] z-50">
         <div>
           <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5">
-            {selectedSlots.length > 0
-              ? `Total (${selectedSlots.length} h)`
-              : "A partir de"}
+            {activeTab === "hora"
+              ? selectedSlots.length > 0
+                ? `Total (${selectedSlots.length} h)`
+                : "A partir de"
+              : activeTab === "turno"
+                ? "Estimativa Semanal"
+                : "Mensalidade"}
           </p>
           <div className="flex items-baseline gap-1">
-            <span className="text-2xl font-black text-[#f05e23]">
-              R$ {selectedSlots.length > 0 ? totalCost : getBasePrice()}
+            <span
+              className={`text-2xl font-black ${activeTab === "hora" ? "text-[#f05e23]" : "text-slate-900"}`}
+            >
+              R${" "}
+              {activeTab === "hora"
+                ? selectedSlots.length > 0
+                  ? totalHourlyCost
+                  : getBasePrice()
+                : activeTab === "turno"
+                  ? totalShiftCost
+                  : pricingData.monthly || 0}
             </span>
           </div>
         </div>
-        <Button
-          onClick={handleBooking}
-          disabled={bookingLoading || selectedSlots.length === 0}
-          className={`h-14 px-8 rounded-xl font-black transition-all w-[55%] text-base ${
-            selectedSlots.length > 0
-              ? "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/25 active:scale-95"
-              : "bg-slate-100 text-slate-400 shadow-none"
-          }`}
-        >
-          {bookingLoading ? "Processando..." : "Reservar"}
-        </Button>
+
+        {activeTab === "hora" ? (
+          <Button
+            onClick={handleAction}
+            disabled={actionLoading || selectedSlots.length === 0}
+            className={`h-14 px-6 rounded-xl font-black transition-all w-[55%] text-base ${selectedSlots.length > 0 ? "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/25 active:scale-95" : "bg-slate-100 text-slate-400 shadow-none"}`}
+          >
+            {actionLoading ? "Aguarde..." : "Reservar"}
+          </Button>
+        ) : (
+          <Button
+            onClick={handleAction}
+            disabled={
+              actionLoading ||
+              (activeTab === "turno" &&
+                (!selectedShift || selectedDays.length === 0))
+            }
+            className="h-14 px-6 rounded-xl font-black bg-slate-900 text-white w-[55%] text-base flex gap-2 active:scale-95 shadow-xl shadow-slate-900/10"
+          >
+            {actionLoading ? (
+              "Aguarde..."
+            ) : (
+              <>
+                <MessageSquare className="w-4 h-4" /> Negociar
+              </>
+            )}
+          </Button>
+        )}
       </div>
 
       {isAllPhotosOpen && (

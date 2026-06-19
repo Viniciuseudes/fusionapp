@@ -57,8 +57,8 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
         // 3. Mapeia e limpa a resposta para ficar num formato fácil para a interface usar
         if (data) {
           const mappedRooms = data
-            .map((item: any) => item.rooms) // Extrai o objeto da sala
-            .filter(Boolean); // Remove nulos caso alguma sala tenha sido deletada do sistema
+            .map((item: any) => ({ ...item.rooms, favorite_id: item.id })) // Extrai o objeto da sala
+            .filter(Boolean); // Remove nulos caso alguma sala tenha sido deletada
 
           setFavoritedRooms(mappedRooms);
         }
@@ -127,7 +127,7 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
             </div>
           ) : (
             favoritedRooms.map((room) => {
-              // Parse seguro do JSONB de endereço do Supabase
+              // Parse seguro do JSONB de endereço
               let address = room.address_details || {};
               if (typeof address === "string") {
                 try {
@@ -137,7 +137,6 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
                 }
               }
 
-              // Extrai os dados para exibição
               const locationStr = address.city
                 ? `${address.neighborhood ? address.neighborhood + " - " : ""}${address.city}`
                 : "Localização sob consulta";
@@ -148,11 +147,10 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
 
               return (
                 <button
-                  key={room.id}
-                  onClick={() => onOpenRoom(room)} // Passamos o objeto completo (ou o ID) para abrir o detalhe
+                  key={room.favorite_id || room.id}
+                  onClick={() => onOpenRoom(room)}
                   className="flex gap-3 rounded-2xl border border-slate-100 bg-white p-3 text-left shadow-sm transition-all hover:shadow-md hover:border-slate-200 group"
                 >
-                  {/* Foto da Sala */}
                   <div className="relative h-24 w-28 shrink-0 overflow-hidden rounded-xl bg-slate-100">
                     {room.image_url ? (
                       <Image
@@ -169,7 +167,6 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
                     )}
                   </div>
 
-                  {/* Informações */}
                   <div className="flex flex-1 flex-col py-0.5 min-w-0">
                     <h3 className="text-sm font-bold text-slate-900 truncate pr-4">
                       {room.name}
