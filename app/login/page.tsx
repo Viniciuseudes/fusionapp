@@ -300,7 +300,7 @@ export default function LoginPage() {
                 className="w-full h-12 rounded-xl mt-2 font-bold"
                 disabled={loading}
               >
-                {loading ? "Criando conta..." : "Criar Conta"}
+                {loading ? "Criando sua conta..." : "Criar Conta"}
               </Button>
             </form>
           )}
