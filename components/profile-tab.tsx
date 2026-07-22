@@ -337,9 +337,7 @@ export function ProfileTab() {
 
             <Button
               onClick={() => {
-                // Como essa tab é renderizada pelo dashboard, para ir para a busca,
-                // podemos usar um truque recarregando a página, ou se você tiver acesso ao setTab, chamá-lo.
-                // Usando reload para garantir a volta pro catálogo:
+
                 window.location.href = "/dashboard";
               }}
               className="bg-white text-[#f05e23] hover:bg-slate-50 h-14 px-8 rounded-2xl font-black text-lg shadow-lg hover:scale-105 transition-transform"
