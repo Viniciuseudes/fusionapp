@@ -6,7 +6,7 @@ import { createClient } from "@/utils/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useToast } from "@/hooks/use-toast"; // <-- Utilizando seu hook de toast
+import { useToast } from "@/hooks/use-toast";
 import {
   Card,
   CardContent,
@@ -38,7 +38,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Função unificada de Login com Redirecionamento Inteligente
+  // Função unificada de Login com Redirecionamento Inteligente Corrigido
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -61,19 +61,30 @@ export default function LoginPage() {
           .eq("id", authData.user.id)
           .single();
 
-        if (profileError) throw profileError;
+        if (profileError) {
+          console.error("Erro ao buscar role:", profileError);
+          // Fallback seguro: se der erro na busca do perfil, manda pro dashboard de cliente
+          router.push("/dashboard");
+          return;
+        }
 
         toast({
           title: "Bem-vindo de volta!",
           description: "Login realizado com sucesso.",
         });
 
-        // Redirecionamento inteligente baseado no Role
-        if (profile?.role === "host") {
+        const userRole = profile?.role;
+
+        // Redirecionamento inteligente blindado
+        if (userRole === "admin") {
+          router.push("/admin/dashboard");
+        } else if (userRole === "host") {
           router.push("/host");
         } else {
+          // Se for "user", "professional", "client" ou null, vai para o dashboard principal
           router.push("/dashboard");
         }
+
         router.refresh();
       }
     } catch (err: any) {

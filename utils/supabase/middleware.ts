@@ -1,10 +1,10 @@
-import { createServerClient } from '@supabase/ssr'
-import { NextResponse, type NextRequest } from 'next/server'
+import { createServerClient } from "@supabase/ssr";
+import { NextResponse, type NextRequest } from "next/server";
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
-  })
+  });
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -12,38 +12,51 @@ export async function updateSession(request: NextRequest) {
     {
       cookies: {
         getAll() {
-          return request.cookies.getAll()
+          return request.cookies.getAll();
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
+          cookiesToSet.forEach(({ name, value, options }) =>
+            request.cookies.set(name, value)
+          );
           supabaseResponse = NextResponse.next({
             request,
-          })
+          });
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options)
-          )
+          );
         },
       },
     }
-  )
+  );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  const { data: { user } } = await supabase.auth.getUser();
 
-  // 1. Se NÃO tem usuário logado e ele tenta acessar /dashboard, chuta pro /login
-  if (!user && request.nextUrl.pathname.startsWith('/dashboard')) {
-    const url = request.nextUrl.clone()
-    url.pathname = '/login'
-    return NextResponse.redirect(url)
+  // Verifica se o usuário não está logado e tenta acessar rotas protegidas
+  if (
+    !user &&
+    (request.nextUrl.pathname.startsWith("/dashboard") ||
+     request.nextUrl.pathname.startsWith("/host") ||
+     request.nextUrl.pathname.startsWith("/admin/dashboard"))
+  ) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    return NextResponse.redirect(url);
   }
 
-  // 2. Se TEM usuário logado e ele tenta acessar a página de /login, manda ele direto pro painel
-  if (user && request.nextUrl.pathname.startsWith('/login')) {
-    const url = request.nextUrl.clone()
-    url.pathname = '/dashboard'
-    return NextResponse.redirect(url)
+  // Opcional: Se o usuário estiver logado e tentar acessar o /login, manda pro lugar certo
+  if (user && request.nextUrl.pathname === "/login") {
+    const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single();
+    
+    const url = request.nextUrl.clone();
+    if (profile?.role === "admin") {
+      url.pathname = "/admin/dashboard";
+    } else if (profile?.role === "host") {
+      url.pathname = "/host";
+    } else {
+      url.pathname = "/dashboard";
+    }
+    return NextResponse.redirect(url);
   }
 
-  return supabaseResponse
+  return supabaseResponse;
 }

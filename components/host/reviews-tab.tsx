@@ -1,85 +1,179 @@
-import { useState } from "react";
+"use client";
+
+import { useState, useEffect, useMemo } from "react";
 import {
   Star,
   ThumbsUp,
   Flag,
   MoreVertical,
   MessageSquare,
+  Loader2,
+  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import { createClient } from "@/utils/supabase/client";
+import { useToast } from "@/hooks/use-toast";
+import { format } from "date-fns";
+import { ptBR } from "date-fns/locale";
 import Image from "next/image";
 
+// Interface atualizada para espelhar a estrutura do Supabase
 interface Review {
   id: string;
-  guestName: string;
-  guestAvatar: string;
-  spaceName: string;
   rating: number;
   comment: string;
-  date: string;
-  response?: string;
+  host_reply: string | null;
+  created_at: string;
+  guest_name: string;
+  guest_avatar: string;
+  room_name: string;
 }
 
-const mockReviews: Review[] = [
-  {
-    id: "1",
-    guestName: "Dra. Maria Santos",
-    guestAvatar:
-      "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=100&h=100&fit=crop",
-    spaceName: "Consultório Psicanálise",
-    rating: 5,
-    comment:
-      "Espaço excelente! Muito bem equipado, isolamento acústico perfeito. A sala estava impecável.",
-    date: "10 Nov 2025",
-    response:
-      "Obrigado pelo feedback, Dra. Maria! Ficamos felizes com a sua experiência.",
-  },
-  {
-    id: "2",
-    guestName: "Dr. João Pedro Silva",
-    guestAvatar:
-      "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100&h=100&fit=crop",
-    spaceName: "Sala de Reunião Premium",
-    rating: 4,
-    comment:
-      "Ótimo ambiente, internet rápida e café incluído. Apenas o ar condicionado estava um pouco forte no início.",
-    date: "08 Nov 2025",
-  },
-  {
-    id: "3",
-    guestName: "Dra. Ana Costa",
-    guestAvatar:
-      "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop",
-    spaceName: "Consultório Padrão",
-    rating: 5,
-    comment: "Perfeito para os meus atendimentos. Limpo e organizado.",
-    date: "05 Nov 2025",
-  },
-];
-
 export function HostReviewsTab() {
+  const supabase = createClient();
+  const { toast } = useToast();
+
+  const [loading, setLoading] = useState(true);
+  const [reviews, setReviews] = useState<Review[]>([]);
   const [filter, setFilter] = useState<"all" | "5" | "4" | "3" | "2" | "1">(
     "all",
   );
 
-  const averageRating = (
-    mockReviews.reduce((sum, r) => sum + r.rating, 0) / mockReviews.length
-  ).toFixed(1);
-  const totalReviews = mockReviews.length;
+  // Estados para o fluxo de resposta do Anfitrião
+  const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [isSubmittingReply, setIsSubmittingReply] = useState(false);
 
-  const ratingCounts = {
-    5: mockReviews.filter((r) => r.rating === 5).length,
-    4: mockReviews.filter((r) => r.rating === 4).length,
-    3: mockReviews.filter((r) => r.rating === 3).length,
-    2: mockReviews.filter((r) => r.rating === 2).length,
-    1: mockReviews.filter((r) => r.rating === 1).length,
+  useEffect(() => {
+    async function fetchReviews() {
+      setLoading(true);
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user) return;
+
+        // Fazemos o JOIN entre reviews, bookings, rooms (para garantir que a sala é do host atual) e profiles
+        const { data, error } = await supabase
+          .from("reviews")
+          .select(
+            `
+            id,
+            rating,
+            comment,
+            host_reply,
+            created_at,
+            rooms!inner (
+              name,
+              host_id
+            ),
+            profiles!guest_id (
+              full_name,
+              avatar_url
+            )
+          `,
+          )
+          .eq("rooms.host_id", user.id) // Traz apenas as avaliações de salas que pertencem a este host
+          .order("created_at", { ascending: false });
+
+        if (error) throw error;
+
+        // Mapeando o retorno complexo do Supabase para a nossa interface limpa
+        if (data) {
+          const formattedReviews: Review[] = data.map((r: any) => ({
+            id: r.id,
+            rating: r.rating,
+            comment: r.comment,
+            host_reply: r.host_reply,
+            created_at: format(new Date(r.created_at), "dd MMM yyyy", {
+              locale: ptBR,
+            }),
+            guest_name: r.profiles?.full_name || "Profissional",
+            guest_avatar:
+              r.profiles?.avatar_url ||
+              "https://ui-avatars.com/api/?name=" +
+                (r.profiles?.full_name || "P"),
+            room_name: r.rooms?.name || "Sala Excluída",
+          }));
+          setReviews(formattedReviews);
+        }
+      } catch (err) {
+        console.error("Erro ao buscar avaliações:", err);
+        toast({
+          variant: "destructive",
+          title: "Erro",
+          description: "Não foi possível carregar as avaliações.",
+        });
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchReviews();
+  }, [supabase, toast]);
+
+  // Função para salvar a resposta do Anfitrião no banco
+  const handleSubmitReply = async (reviewId: string) => {
+    if (!replyText.trim()) return;
+
+    setIsSubmittingReply(true);
+    try {
+      const { error } = await supabase
+        .from("reviews")
+        .update({ host_reply: replyText })
+        .eq("id", reviewId);
+
+      if (error) throw error;
+
+      // Atualiza a UI localmente sem precisar recarregar
+      setReviews((prev) =>
+        prev.map((r) =>
+          r.id === reviewId ? { ...r, host_reply: replyText } : r,
+        ),
+      );
+
+      toast({
+        title: "Resposta enviada!",
+        description: "Seu comentário agora está público nesta avaliação.",
+      });
+
+      setReplyingTo(null);
+      setReplyText("");
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro ao responder",
+        description: err.message,
+      });
+    } finally {
+      setIsSubmittingReply(false);
+    }
   };
+
+  // Cálculos de métricas
+  const totalReviews = reviews.length;
+  const averageRating =
+    totalReviews > 0
+      ? (reviews.reduce((sum, r) => sum + r.rating, 0) / totalReviews).toFixed(
+          1,
+        )
+      : "0.0";
+
+  const ratingCounts = useMemo(() => {
+    const counts = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+    reviews.forEach((r) => {
+      if (r.rating >= 1 && r.rating <= 5) {
+        counts[r.rating as keyof typeof ratingCounts]++;
+      }
+    });
+    return counts;
+  }, [reviews]);
 
   const filteredReviews =
     filter === "all"
-      ? mockReviews
-      : mockReviews.filter((r) => r.rating === parseInt(filter));
+      ? reviews
+      : reviews.filter((r) => r.rating === parseInt(filter));
 
   const renderStars = (rating: number, size: "sm" | "lg" = "sm") => {
     const starSize = size === "sm" ? "w-4 h-4" : "w-6 h-6";
@@ -88,12 +182,24 @@ export function HostReviewsTab() {
         {[1, 2, 3, 4, 5].map((star) => (
           <Star
             key={star}
-            className={`${starSize} ${star <= rating ? "text-amber-500 fill-amber-500" : "text-slate-200 fill-slate-200"}`}
+            className={`${starSize} ${
+              star <= rating
+                ? "text-amber-500 fill-amber-500"
+                : "text-slate-200 fill-slate-200"
+            }`}
           />
         ))}
       </div>
     );
   };
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center py-32">
+        <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 lg:p-8 animate-in fade-in duration-500 max-w-5xl mx-auto w-full pb-32">
@@ -121,25 +227,29 @@ export function HostReviewsTab() {
 
         {/* Barras de Progresso */}
         <div className="md:col-span-2 bg-white rounded-2xl p-6 shadow-sm border border-slate-200 flex flex-col justify-center space-y-3">
-          {[5, 4, 3, 2, 1].map((rating) => (
-            <div key={rating} className="flex items-center gap-3">
-              <span className="text-sm font-bold text-slate-600 w-3">
-                {rating}
-              </span>
-              <Star className="w-4 h-4 text-amber-500 fill-amber-500 shrink-0" />
-              <div className="flex-1 h-3 bg-slate-100 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-amber-500 rounded-full"
-                  style={{
-                    width: `${(ratingCounts[rating as keyof typeof ratingCounts] / totalReviews) * 100}%`,
-                  }}
-                />
+          {[5, 4, 3, 2, 1].map((rating) => {
+            const count = ratingCounts[rating as keyof typeof ratingCounts];
+            const percentage =
+              totalReviews > 0 ? (count / totalReviews) * 100 : 0;
+
+            return (
+              <div key={rating} className="flex items-center gap-3">
+                <span className="text-sm font-bold text-slate-600 w-3">
+                  {rating}
+                </span>
+                <Star className="w-4 h-4 text-amber-500 fill-amber-500 shrink-0" />
+                <div className="flex-1 h-3 bg-slate-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-amber-500 rounded-full transition-all duration-1000"
+                    style={{ width: `${percentage}%` }}
+                  />
+                </div>
+                <span className="text-xs font-bold text-slate-500 w-8 text-right">
+                  {count}
+                </span>
               </div>
-              <span className="text-xs font-bold text-slate-500 w-8 text-right">
-                {ratingCounts[rating as keyof typeof ratingCounts]}
-              </span>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
@@ -147,7 +257,11 @@ export function HostReviewsTab() {
       <div className="flex gap-2 overflow-x-auto pb-4 scrollbar-hide mb-2">
         <Button
           onClick={() => setFilter("all")}
-          className={`rounded-xl font-bold px-6 ${filter === "all" ? "bg-primary text-white shadow-sm" : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"}`}
+          className={`rounded-xl font-bold px-6 ${
+            filter === "all"
+              ? "bg-primary text-white shadow-sm"
+              : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+          }`}
         >
           Todas
         </Button>
@@ -155,7 +269,11 @@ export function HostReviewsTab() {
           <Button
             key={rating}
             onClick={() => setFilter(rating.toString() as any)}
-            className={`rounded-xl font-bold px-4 ${filter === rating.toString() ? "bg-primary text-white shadow-sm" : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"}`}
+            className={`rounded-xl font-bold px-4 ${
+              filter === rating.toString()
+                ? "bg-primary text-white shadow-sm"
+                : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+            }`}
           >
             <Star className="w-4 h-4 mr-1.5 fill-current" /> {rating}
           </Button>
@@ -172,46 +290,89 @@ export function HostReviewsTab() {
             >
               <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center gap-3">
-                  <div className="relative w-12 h-12 rounded-full overflow-hidden bg-slate-100">
-                    {/* Imagem usando div para mock temporário, no projeto real usar Image do next */}
+                  <div className="relative w-12 h-12 rounded-full overflow-hidden bg-slate-100 shrink-0">
                     <img
-                      src={review.guestAvatar}
-                      alt={review.guestName}
+                      src={review.guest_avatar}
+                      alt={review.guest_name}
                       className="object-cover w-full h-full"
                     />
                   </div>
                   <div>
                     <h3 className="font-black text-slate-900">
-                      {review.guestName}
+                      {review.guest_name}
                     </h3>
                     <p className="text-xs font-medium text-slate-500">
-                      {review.date} •{" "}
+                      {review.created_at} •{" "}
                       <span className="text-primary font-bold">
-                        {review.spaceName}
+                        {review.room_name}
                       </span>
                     </p>
                   </div>
                 </div>
-                {renderStars(review.rating)}
+                <div className="hidden sm:block">
+                  {renderStars(review.rating)}
+                </div>
               </div>
 
+              <div className="sm:hidden mb-3">{renderStars(review.rating)}</div>
+
               <p className="text-slate-700 font-medium text-sm leading-relaxed mb-4">
-                {review.comment}
+                {review.comment || (
+                  <span className="italic text-slate-400">
+                    Nenhum comentário deixado, apenas a nota.
+                  </span>
+                )}
               </p>
 
-              {review.response ? (
+              {/* Lógica de Resposta do Anfitrião */}
+              {review.host_reply ? (
                 <div className="bg-slate-50 border-l-4 border-primary p-4 rounded-r-xl mt-4">
                   <p className="text-xs font-black text-primary uppercase tracking-wider mb-1">
                     Sua Resposta:
                   </p>
                   <p className="text-sm text-slate-700 font-medium">
-                    {review.response}
+                    {review.host_reply}
                   </p>
+                </div>
+              ) : replyingTo === review.id ? (
+                <div className="pt-4 border-t border-slate-100 mt-4 space-y-3 animate-in fade-in">
+                  <Textarea
+                    placeholder="Escreva sua resposta de forma educada e profissional..."
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                    className="min-h-[100px] bg-slate-50 resize-none"
+                    autoFocus
+                  />
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setReplyingTo(null);
+                        setReplyText("");
+                      }}
+                      disabled={isSubmittingReply}
+                    >
+                      Cancelar
+                    </Button>
+                    <Button
+                      onClick={() => handleSubmitReply(review.id)}
+                      disabled={!replyText.trim() || isSubmittingReply}
+                      className="bg-primary hover:bg-primary/90 text-white font-bold"
+                    >
+                      {isSubmittingReply ? (
+                        <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                      ) : (
+                        <Check className="w-4 h-4 mr-2" />
+                      )}
+                      Publicar Resposta
+                    </Button>
+                  </div>
                 </div>
               ) : (
                 <div className="pt-4 border-t border-slate-100 mt-2">
                   <Button
                     variant="outline"
+                    onClick={() => setReplyingTo(review.id)}
                     className="text-primary border-primary/20 hover:bg-primary/5 font-bold"
                   >
                     <MessageSquare className="w-4 h-4 mr-2" /> Responder
@@ -225,7 +386,7 @@ export function HostReviewsTab() {
           <div className="text-center py-16 bg-white rounded-2xl border border-slate-200 border-dashed">
             <Star className="w-12 h-12 text-slate-300 mx-auto mb-3" />
             <p className="text-slate-500 font-medium">
-              Nenhuma avaliação encontrada com este filtro.
+              Nenhuma avaliação encontrada.
             </p>
           </div>
         )}
