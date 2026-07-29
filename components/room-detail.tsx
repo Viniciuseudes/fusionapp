@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import Image from "next/image";
 import { createClient } from "@/utils/supabase/client";
 import { ptBR } from "date-fns/locale";
 import {
   format,
-  addDays,
+  addMonths,
   isSameDay,
   startOfToday,
   startOfMonth,
@@ -15,7 +15,6 @@ import {
   endOfWeek,
   eachDayOfInterval,
   isBefore,
-  addMonths,
   isSameMonth,
 } from "date-fns";
 import {
@@ -31,7 +30,6 @@ import {
   Car,
   ShieldCheck,
   Calendar as CalendarIcon,
-  Clock,
   AlertCircle,
   ChevronRight,
   ChevronLeft,
@@ -42,9 +40,13 @@ import {
   Share,
   Shield,
   MessageSquare,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+
+// Importação do modal e do tipo de resumo
+import { CheckoutModal, CheckoutSummary } from "@/components/checkout-modal";
 
 const AMENITIES_LIST = [
   { id: "wifi", label: "Wi-Fi de alta velocidade", icon: Wifi },
@@ -89,7 +91,12 @@ export function RoomDetail(props: RoomDetailProps) {
   >(null);
   const [selectedDays, setSelectedDays] = useState<number[]>([]);
 
-  // ESTADO DE FAVORITOS, COMPARTILHAMENTO E GALERIA
+  // ESTADOS DO CHECKOUT
+  const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+  const [checkoutSummary, setCheckoutSummary] =
+    useState<CheckoutSummary | null>(null);
+
+  // ESTADO DE FAVORITOS E GALERIA
   const [isFavorited, setIsFavorited] = useState(false);
   const [isFavoriteLoading, setIsFavoriteLoading] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
@@ -99,7 +106,6 @@ export function RoomDetail(props: RoomDetailProps) {
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
   const lightboxRef = useRef<HTMLDivElement>(null);
 
-  // 1. CARREGAMENTO DOS DADOS DA SALA
   useEffect(() => {
     let isMounted = true;
     const rawInput = props.roomId || props.room;
@@ -123,8 +129,6 @@ export function RoomDetail(props: RoomDetailProps) {
 
         if (isMounted) {
           setRoomData(data);
-
-          // Define a aba correta com base no que a sala permite ou no que foi passado
           const mods = data.modalities || [];
           if (mods.includes(initialModality)) {
             setActiveTab(initialModality);
@@ -143,9 +147,8 @@ export function RoomDetail(props: RoomDetailProps) {
     return () => {
       isMounted = false;
     };
-  }, [props.roomId, props.room, initialModality]);
+  }, [props.roomId, props.room, initialModality, supabase]);
 
-  // 2. VERIFICAÇÃO DE FAVORITOS
   useEffect(() => {
     async function checkFavoriteStatus() {
       const rawInput = props.roomId || props.room;
@@ -167,11 +170,8 @@ export function RoomDetail(props: RoomDetailProps) {
       if (data) setIsFavorited(true);
     }
     checkFavoriteStatus();
-  }, [props.roomId, props.room]);
+  }, [props.roomId, props.room, supabase]);
 
-  // ==========================================
-  // LÓGICAS: POR HORA
-  // ==========================================
   const availableSlots = useMemo(() => {
     if (!roomData || activeTab !== "hora") return [];
     let avail = roomData.availability;
@@ -304,9 +304,6 @@ export function RoomDetail(props: RoomDetailProps) {
     );
   };
 
-  // ==========================================
-  // LÓGICAS: POR TURNO E FIXO
-  // ==========================================
   const getPricingData = () => {
     let address = roomData?.address_details || {};
     if (typeof address === "string") {
@@ -334,7 +331,7 @@ export function RoomDetail(props: RoomDetailProps) {
   };
 
   // ==========================================
-  // AÇÃO PRINCIPAL (Reserva ou Negociação)
+  // AÇÃO DE RESERVA
   // ==========================================
   const handleAction = async () => {
     if (activeTab === "hora" && selectedSlots.length === 0) {
@@ -365,48 +362,51 @@ export function RoomDetail(props: RoomDetailProps) {
         throw new Error("Você precisa estar logado para prosseguir.");
 
       if (activeTab === "hora") {
-        // FLUXO NORMAL (Transacional Direto)
-        const bookingPayloads = selectedSlots.map((slotKey) => {
-          const [dateStr, slotTime] = slotKey.split("|");
-          const startSlot = slotTime.split(" - ")[0].replace("h", ":");
-          const endSlot = slotTime.split(" - ")[1].replace("h", ":");
-          return {
-            user_id: user.id,
-            room_id: roomData.id,
-            start_time: new Date(`${dateStr}T${startSlot}:00`).toISOString(),
-            end_time: new Date(`${dateStr}T${endSlot}:00`).toISOString(),
-            total_cost: getSlotPrice(slotKey),
-            status: "pending",
-          };
+        const totalHours = selectedSlots.length;
+        const firstSlot = selectedSlots[0];
+        const [dateStr, timeStr] = firstSlot.split("|");
+        const startHour = timeStr.split(" - ")[0].replace("h", ":");
+
+        const startDate = new Date(`${dateStr}T${startHour}:00`);
+        const endDate = new Date(
+          startDate.getTime() + totalHours * 60 * 60 * 1000,
+        );
+
+        const response = await fetch("/api/bookings/calculate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            roomId: roomData.id,
+            startTime: startDate.toISOString(),
+            endTime: endDate.toISOString(),
+          }),
         });
 
-        const { error: bookingError } = await supabase
-          .from("bookings")
-          .insert(bookingPayloads);
-        if (bookingError) throw bookingError;
-        toast({
-          title: "Reservas Solicitadas! 🎉",
-          description:
-            "Seus horários foram enviados para aprovação com sucesso.",
-        });
-        onBack();
+        const contentType = response.headers.get("content-type");
+        if (!contentType || !contentType.includes("application/json")) {
+          throw new Error(
+            "Erro de rota: A API não foi encontrada ou o nome do arquivo está incorreto.",
+          );
+        }
+
+        const summaryData = await response.json();
+
+        if (!response.ok) {
+          throw new Error(summaryData.error || "Erro ao calcular valores.");
+        }
+
+        setCheckoutSummary(summaryData);
+        setIsCheckoutOpen(true);
       } else {
-        // FLUXO DE NEGOCIAÇÃO SEGURA (Turno ou Fixo)
         toast({
           title: "Iniciando ambiente seguro...",
           description:
             "Criando canal de negociação com o anfitrião. Você será redirecionado para o chat.",
         });
-
-        // Aqui nós criaremos o redirecionamento real para o Chat na próxima etapa da arquitetura.
-        // Simulando o processo para a interface não travar:
-        setTimeout(() => {
-          onBack();
-          // router.push(`/dashboard?tab=chat&new=${roomData.id}`)
-        }, 1500);
+        setTimeout(() => onBack(), 1500);
       }
     } catch (err: any) {
-      console.error(err);
+      console.error("Erro no handleAction:", err);
       toast({
         variant: "destructive",
         title: "Erro na operação",
@@ -418,11 +418,80 @@ export function RoomDetail(props: RoomDetailProps) {
   };
 
   // ==========================================
-  // FUNÇÕES UTILITÁRIAS DA GALERIA
+  // CONFIRMAÇÃO DO CHECKOUT
+  // ==========================================
+  const handleConfirmCheckout = async () => {
+    if (!checkoutSummary) return;
+    setActionLoading(true);
+
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("Usuário não autenticado.");
+
+      const creditCostPerHour =
+        checkoutSummary.creditsRequired / selectedSlots.length;
+      const upgradeFeePerHour =
+        checkoutSummary.upgradeFeeBRL / selectedSlots.length;
+
+      const bookingPayloads = selectedSlots.map((slotKey) => {
+        const [dateStr, slotTime] = slotKey.split("|");
+        const startSlot = slotTime.split(" - ")[0].replace("h", ":");
+        const endSlot = slotTime.split(" - ")[1].replace("h", ":");
+
+        return {
+          user_id: user.id,
+          room_id: roomData.id,
+          start_time: new Date(`${dateStr}T${startSlot}:00`).toISOString(),
+          end_time: new Date(`${dateStr}T${endSlot}:00`).toISOString(),
+          total_cost: creditCostPerHour,
+          upgrade_fee_amount: upgradeFeePerHour,
+          status: "pending_payment",
+        };
+      });
+
+      const { error: bookingError } = await supabase
+        .from("bookings")
+        .insert(bookingPayloads);
+      if (bookingError) throw bookingError;
+
+      const { error: walletError } = await supabase
+        .from("wallet_transactions")
+        .insert({
+          user_id: user.id,
+          amount: checkoutSummary.creditsRequired,
+          type: "usage",
+          description: `Reserva: ${roomData.name}`,
+        });
+      if (walletError) throw walletError;
+
+      toast({
+        title: "Reserva Confirmada! 🎉",
+        description:
+          "Sua sala foi agendada e os créditos foram consumidos com sucesso.",
+      });
+
+      setIsCheckoutOpen(false);
+      setCheckoutSummary(null);
+      onBack();
+    } catch (err: any) {
+      console.error(err);
+      toast({
+        variant: "destructive",
+        title: "Erro na confirmação",
+        description: err.message,
+      });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // ==========================================
+  // UI FUNCTIONS
   // ==========================================
   const handleFavoriteToggle = async () => {
     if (isFavoriteLoading || !roomData) return;
-
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -456,7 +525,6 @@ export function RoomDetail(props: RoomDetailProps) {
         });
       }
     } catch (error: any) {
-      console.error("Erro ao favoritar:", error);
       toast({
         variant: "destructive",
         title: "Erro",
@@ -476,25 +544,15 @@ export function RoomDetail(props: RoomDetailProps) {
       url: window.location.href,
     };
     try {
-      if (navigator.share) {
-        await navigator.share(shareData);
-      } else {
+      if (navigator.share) await navigator.share(shareData);
+      else {
         await navigator.clipboard.writeText(shareData.url);
-        toast({
-          title: "Link copiado!",
-          description: "O link foi copiado para a área de transferência.",
-        });
+        toast({ title: "Link copiado!" });
       }
     } catch (err: any) {
       if (err.name !== "AbortError") {
-        try {
-          await navigator.clipboard.writeText(shareData.url);
-          toast({
-            title: "Link copiado!",
-            description:
-              "Copiado para a área de transferência como alternativa.",
-          });
-        } catch (clipboardErr) {}
+        await navigator.clipboard.writeText(shareData.url);
+        toast({ title: "Link copiado!" });
       }
     } finally {
       setTimeout(() => setIsSharing(false), 500);
@@ -554,9 +612,6 @@ export function RoomDetail(props: RoomDetailProps) {
     startOfMonth(today),
   );
 
-  // ==========================================
-  // RENDERIZAÇÃO
-  // ==========================================
   if (loading) {
     return (
       <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-6 text-center">
@@ -609,21 +664,25 @@ export function RoomDetail(props: RoomDetailProps) {
   const getGridClass = (total: number, index: number) => {
     if (total === 1) return "col-span-4 row-span-2";
     if (total === 2) return "col-span-2 row-span-2";
-    if (total === 3) {
-      if (index === 0) return "col-span-2 row-span-2";
-      return "col-span-2 row-span-1";
-    }
-    if (total === 4) {
-      if (index === 0) return "col-span-2 row-span-2";
-      if (index === 1) return "col-span-2 row-span-1";
-      return "col-span-1 row-span-1";
-    }
-    if (index === 0) return "col-span-2 row-span-2";
-    return "col-span-1 row-span-1";
+    if (total === 3)
+      return index === 0 ? "col-span-2 row-span-2" : "col-span-2 row-span-1";
+    if (total === 4)
+      return index === 0
+        ? "col-span-2 row-span-2"
+        : index === 1
+          ? "col-span-2 row-span-1"
+          : "col-span-1 row-span-1";
+    return index === 0 ? "col-span-2 row-span-2" : "col-span-1 row-span-1";
   };
+
+  // Google Maps Base Query
+  const mapSearchQuery = encodeURIComponent(
+    `${address.neighborhood || ""}, ${address.city || ""}`,
+  );
 
   return (
     <div className="fixed inset-0 z-[100] bg-white flex flex-col animate-in slide-in-from-bottom-4 duration-300">
+      {/* HEADER FIXO */}
       <div className="flex-none bg-white z-30 border-b border-slate-100 md:border-transparent">
         <div className="max-w-5xl mx-auto pt-6 px-5 flex justify-between items-center pb-4">
           <button
@@ -653,6 +712,7 @@ export function RoomDetail(props: RoomDetailProps) {
       </div>
 
       <div className="flex-1 overflow-y-auto pb-8 md:pb-12 scrollbar-hide">
+        {/* TÍTULO E RATING */}
         <div className="max-w-5xl mx-auto px-5 pt-2 pb-6">
           {isPartner && (
             <div className="mb-3 inline-flex items-center gap-1.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white text-[10px] font-black px-3 py-1.5 rounded-lg uppercase tracking-widest shadow-md">
@@ -678,7 +738,7 @@ export function RoomDetail(props: RoomDetailProps) {
               <MapPin className="w-4 h-4 text-[#f05e23]" />
               {address.city
                 ? `${address.city}, ${address.state}`
-                : "Localização sob consulta"}
+                : "Localização protegida"}
             </div>
             <span className="text-slate-300">•</span>
             <div className="flex items-center gap-1.5">
@@ -688,6 +748,7 @@ export function RoomDetail(props: RoomDetailProps) {
           </div>
         </div>
 
+        {/* GALERIA MOBILE */}
         <div className="md:hidden relative w-full h-[35vh] bg-slate-100 flex overflow-x-auto snap-x snap-mandatory scrollbar-hide">
           {allImages.length > 0 ? (
             allImages.map((img, idx) => (
@@ -721,6 +782,7 @@ export function RoomDetail(props: RoomDetailProps) {
           )}
         </div>
 
+        {/* GALERIA DESKTOP */}
         <div className="hidden md:block max-w-5xl mx-auto px-5 mb-8">
           <div className="grid grid-cols-4 grid-rows-2 gap-2 h-[420px] w-full rounded-2xl overflow-hidden relative bg-slate-50">
             {imagesToShow.map((img, idx) => {
@@ -754,29 +816,9 @@ export function RoomDetail(props: RoomDetailProps) {
           </div>
         </div>
 
+        {/* CONTEÚDO PRINCIPAL (Infos e Agendamento) */}
         <div className="px-5 py-6 max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-10">
-          <div className="md:col-span-7 space-y-8">
-            <div className="bg-slate-50 border border-slate-100 p-4 rounded-xl flex items-center justify-between shadow-sm">
-              <div>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">
-                  Endereço do Local
-                </p>
-                <p className="text-sm font-bold text-slate-900">
-                  {address.street
-                    ? `${address.street}, ${address.number}`
-                    : "Av. Paulista, 1000"}
-                </p>
-                <p className="text-xs font-medium text-slate-500 mt-0.5">
-                  {address.neighborhood
-                    ? `${address.neighborhood} - ${address.city}`
-                    : "São Paulo, SP"}
-                </p>
-              </div>
-              <div className="w-10 h-10 rounded-full bg-white shadow-sm flex items-center justify-center text-[#f05e23]">
-                <MapPin className="w-5 h-5" />
-              </div>
-            </div>
-
+          <div className="md:col-span-7 space-y-10">
             <section>
               <h2 className="text-lg font-black text-slate-900 mb-3">
                 Sobre o espaço
@@ -801,7 +843,7 @@ export function RoomDetail(props: RoomDetailProps) {
                   return (
                     <div
                       key={amId}
-                      className="flex items-center gap-3 p-3.5 rounded-xl bg-white border border-slate-200 shadow-sm"
+                      className="flex items-center gap-3 p-3.5 rounded-xl bg-white border border-slate-200 shadow-sm hover:border-slate-300 transition-colors"
                     >
                       <Icon className="w-5 h-5 text-[#f05e23]" />
                       <span className="text-xs font-bold text-slate-700">
@@ -811,6 +853,144 @@ export function RoomDetail(props: RoomDetailProps) {
                   );
                 })}
               </div>
+            </section>
+
+            <div className="w-full h-px bg-slate-100" />
+
+            {/* ========================================== */}
+            {/* MAPA DE RAIO / PROXIMIDADE (REAL MAP)      */}
+            {/* ========================================== */}
+            <section>
+              <h2 className="text-lg font-black text-slate-900 mb-4">
+                Localização da Sala
+              </h2>
+
+              <div className="relative w-full h-64 bg-slate-100 rounded-2xl overflow-hidden border border-slate-200 shadow-inner">
+                {/* Iframe Real do Google Maps (pointer-events-none para não sair do centro do raio) */}
+                <div className="absolute inset-0 pointer-events-none">
+                  <iframe
+                    width="100%"
+                    height="100%"
+                    style={{ border: 0 }}
+                    loading="lazy"
+                    allowFullScreen
+                    src={`https://www.google.com/maps?q=${mapSearchQuery}&output=embed&z=15`}
+                  ></iframe>
+                </div>
+
+                {/* Overlay do Raio de Proximidade Azul Claro */}
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="w-48 h-48 bg-[#00bcd4]/20 border-2 border-[#00bcd4]/40 rounded-full shadow-[0_0_15px_rgba(0,188,212,0.3)]"></div>
+                </div>
+
+                {/* Card Flutuante de Região */}
+                <div className="absolute bottom-4 left-4 right-4 md:right-auto md:w-64 bg-white/95 backdrop-blur-md px-4 py-3 rounded-xl shadow-md border border-slate-100 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-cyan-50 flex items-center justify-center shrink-0">
+                    <MapPin className="w-5 h-5 text-cyan-600" />
+                  </div>
+                  <div className="overflow-hidden">
+                    <p className="text-sm font-black text-slate-900 truncate">
+                      {address.neighborhood || "Região Central"}
+                    </p>
+                    <p className="text-[10px] font-bold text-slate-500 uppercase truncate">
+                      {address.city
+                        ? `${address.city}, ${address.state}`
+                        : "Localização sob consulta"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Mensagem de Segurança */}
+              <div className="bg-slate-50 rounded-xl p-4 mt-4 border border-slate-100 flex items-start gap-3">
+                <Lock className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-bold text-slate-800">
+                    Endereço exato protegido
+                  </p>
+                  <p className="text-xs text-slate-500 font-medium mt-1 leading-relaxed">
+                    Para segurança da clínica, exibimos apenas a região
+                    aproximada no mapa.{" "}
+                    <b>
+                      O endereço completo, número e andar serão liberados
+                      imediatamente após a confirmação da sua reserva.
+                    </b>
+                  </p>
+                </div>
+              </div>
+            </section>
+
+            <div className="w-full h-px bg-slate-100" />
+
+            {/* ========================================== */}
+            {/* AVALIAÇÕES E COMENTÁRIOS (SOCIAL PROOF)    */}
+            {/* ========================================== */}
+            <section>
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-lg font-black text-slate-900">
+                  Avaliações
+                </h2>
+                <div className="flex items-center gap-1.5">
+                  <Star className="w-5 h-5 fill-amber-500 text-amber-500" />
+                  <span className="font-black text-lg text-slate-900">5.0</span>
+                  <span className="text-sm font-medium text-slate-500">
+                    (124 avaliações)
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {/* Mock Review 1 */}
+                <div className="bg-white border border-slate-100 p-5 rounded-2xl shadow-sm">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center font-bold text-slate-600">
+                      C
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-slate-900">
+                        Dr. Carlos Eduardo
+                      </p>
+                      <p className="text-xs font-medium text-slate-500">
+                        Cardiologia • Há 2 semanas
+                      </p>
+                    </div>
+                  </div>
+                  <p className="text-sm text-slate-600 leading-relaxed font-medium">
+                    "Sala impecável, internet rápida e muito silenciosa. A
+                    recepção foi super cordial com meus pacientes. Voltarei a
+                    agendar com certeza."
+                  </p>
+                </div>
+
+                {/* Mock Review 2 */}
+                <div className="bg-white border border-slate-100 p-5 rounded-2xl shadow-sm">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center font-bold text-slate-600">
+                      M
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-slate-900">
+                        Dra. Mariana Silva
+                      </p>
+                      <p className="text-xs font-medium text-slate-500">
+                        Psicologia • Há 1 mês
+                      </p>
+                    </div>
+                  </div>
+                  <p className="text-sm text-slate-600 leading-relaxed font-medium">
+                    "Excelente infraestrutura. O isolamento acústico é perfeito
+                    para os meus atendimentos e a localização do prédio me
+                    passou muita segurança."
+                  </p>
+                </div>
+              </div>
+
+              <Button
+                variant="outline"
+                className="w-full mt-4 h-12 rounded-xl font-bold text-slate-700 border-slate-200"
+              >
+                Ler todas as 124 avaliações
+              </Button>
             </section>
           </div>
 
@@ -842,7 +1022,7 @@ export function RoomDetail(props: RoomDetailProps) {
               )}
             </div>
 
-            {/* SEÇÃO: POR HORA */}
+            {/* SEÇÃO DE CÁLCULO POR HORA E CALENDÁRIO */}
             {activeTab === "hora" && (
               <section className="animate-in fade-in">
                 <div className="flex items-center gap-2 mb-4">
@@ -873,7 +1053,6 @@ export function RoomDetail(props: RoomDetailProps) {
                       <ChevronRight className="w-5 h-5" />
                     </button>
                   </div>
-
                   <div className="grid grid-cols-7 text-center mb-2">
                     {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map(
                       (d) => (
@@ -886,7 +1065,6 @@ export function RoomDetail(props: RoomDetailProps) {
                       ),
                     )}
                   </div>
-
                   <div className="grid grid-cols-7 gap-y-2 gap-x-1">
                     {calendarDays.map((day) => {
                       const dateStr = format(day, "yyyy-MM-dd");
@@ -905,12 +1083,7 @@ export function RoomDetail(props: RoomDetailProps) {
                             if (!isPast) setSelectedDate(day);
                           }}
                           disabled={isPast || !isCurrentMonth}
-                          className={`relative h-9 w-full rounded-lg text-xs font-bold flex flex-col items-center justify-center transition-colors
-                            ${!isCurrentMonth ? "invisible" : ""}
-                            ${isPast ? "text-slate-200 cursor-not-allowed" : ""}
-                            ${isSelected ? "bg-[#f05e23] text-white shadow-md shadow-orange-500/30" : ""}
-                            ${!isSelected && !isPast && isCurrentMonth ? "text-slate-700 hover:bg-slate-100" : ""}
-                          `}
+                          className={`relative h-9 w-full rounded-lg text-xs font-bold flex flex-col items-center justify-center transition-colors ${!isCurrentMonth ? "invisible" : ""} ${isPast ? "text-slate-200 cursor-not-allowed" : ""} ${isSelected ? "bg-[#f05e23] text-white shadow-md shadow-orange-500/30" : ""} ${!isSelected && !isPast && isCurrentMonth ? "text-slate-700 hover:bg-slate-100" : ""}`}
                         >
                           <span className="relative z-10">
                             {format(day, "d")}
@@ -925,8 +1098,6 @@ export function RoomDetail(props: RoomDetailProps) {
                     })}
                   </div>
                 </div>
-
-                <div className="w-full h-px bg-slate-100 my-4" />
 
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-bold text-slate-800 capitalize">
@@ -959,11 +1130,7 @@ export function RoomDetail(props: RoomDetailProps) {
                         <button
                           key={slotKey}
                           onClick={() => toggleSlot(slotKey)}
-                          className={`h-14 rounded-xl flex flex-col items-center justify-center transition-all border-2 ${
-                            isSelected
-                              ? "border-[#f05e23] bg-orange-50"
-                              : "border-slate-100 bg-white hover:border-slate-300"
-                          }`}
+                          className={`h-14 rounded-xl flex flex-col items-center justify-center transition-all border-2 ${isSelected ? "border-[#f05e23] bg-orange-50" : "border-slate-100 bg-white hover:border-slate-300"}`}
                         >
                           <span
                             className={`text-xs font-bold ${isSelected ? "text-[#f05e23]" : "text-slate-700"}`}
@@ -981,6 +1148,7 @@ export function RoomDetail(props: RoomDetailProps) {
                   </div>
                 )}
 
+                {/* BOTÃO DESKTOP */}
                 <div className="hidden md:block pt-6 border-t border-slate-100 mt-6">
                   <div className="flex items-center justify-between mb-4">
                     <div>
@@ -1046,7 +1214,6 @@ export function RoomDetail(props: RoomDetailProps) {
                     ))}
                   </div>
                 </div>
-
                 <div>
                   <h2 className="text-sm font-black text-slate-900 mb-3">
                     2. Quais dias da semana?
@@ -1063,17 +1230,13 @@ export function RoomDetail(props: RoomDetailProps) {
                     ))}
                   </div>
                 </div>
-
                 <div className="bg-blue-50/50 border border-blue-100 p-4 rounded-xl flex gap-3">
                   <Shield className="w-5 h-5 text-blue-500 shrink-0" />
                   <p className="text-xs text-blue-800 font-medium leading-relaxed">
                     Aluguéis recorrentes são fechados através do nosso{" "}
-                    <strong className="font-black">Chat Seguro</strong>. O
-                    anfitrião avaliará sua proposta e vocês combinarão as chaves
-                    e o contrato na plataforma.
+                    <strong className="font-black">Chat Seguro</strong>.
                   </p>
                 </div>
-
                 <div className="hidden md:block pt-4 border-t border-slate-100">
                   <div className="flex justify-between items-end mb-4">
                     <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -1115,16 +1278,13 @@ export function RoomDetail(props: RoomDetailProps) {
                     R$ {pricingData.monthly || "--"}
                   </h3>
                 </div>
-
                 <div className="bg-emerald-50/50 border border-emerald-100 p-4 rounded-xl flex gap-3">
                   <Shield className="w-5 h-5 text-emerald-600 shrink-0" />
                   <p className="text-xs text-emerald-800 font-medium leading-relaxed">
                     O aluguel fixo garante exclusividade total sobre a sala.
-                    Inicie uma negociação segura para definir prazos, reformas,
-                    equipamentos e documentação do contrato.
+                    Inicie uma negociação segura.
                   </p>
                 </div>
-
                 <div className="hidden md:block pt-4 border-t border-slate-100">
                   <Button
                     onClick={handleAction}
@@ -1146,7 +1306,7 @@ export function RoomDetail(props: RoomDetailProps) {
         </div>
       </div>
 
-      {/* RODAPÉ MOBILE INTELIGENTE (SHAPESHIFTER) */}
+      {/* RODAPÉ MOBILE INTELIGENTE */}
       <div className="md:hidden flex-none bg-white border-t border-slate-200 p-4 pb-safe flex items-center justify-between shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)] z-50">
         <div>
           <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5">
@@ -1203,6 +1363,7 @@ export function RoomDetail(props: RoomDetailProps) {
         )}
       </div>
 
+      {/* GALERIA LIGHTBOX E FULL */}
       {isAllPhotosOpen && (
         <div className="fixed inset-0 z-[150] bg-white flex flex-col animate-in fade-in duration-200">
           <div className="flex-none p-4 flex justify-between items-center bg-white border-b border-slate-100 z-10 sticky top-0">
@@ -1267,7 +1428,6 @@ export function RoomDetail(props: RoomDetailProps) {
               <Share className="w-5 h-5 text-white" />
             </button>
           </div>
-
           <div className="flex-1 relative flex items-center justify-center w-full h-full overflow-hidden">
             <button
               onClick={prevPhoto}
@@ -1276,7 +1436,6 @@ export function RoomDetail(props: RoomDetailProps) {
             >
               <ChevronLeft className="w-8 h-8" />
             </button>
-
             <div
               ref={lightboxRef}
               onScroll={handleLightboxScroll}
@@ -1298,7 +1457,6 @@ export function RoomDetail(props: RoomDetailProps) {
                 </div>
               ))}
             </div>
-
             <button
               onClick={nextPhoto}
               disabled={currentPhotoIndex === allImages.length - 1}
@@ -1309,6 +1467,20 @@ export function RoomDetail(props: RoomDetailProps) {
           </div>
         </div>
       )}
+
+      <CheckoutModal
+        isOpen={isCheckoutOpen}
+        onClose={() => setIsCheckoutOpen(false)}
+        onConfirm={(method) => {
+          handleConfirmCheckout();
+        }}
+        loading={actionLoading}
+        summary={checkoutSummary}
+        room={roomData}
+        selectedSlots={selectedSlots}
+        selectedDate={selectedDate}
+        totalBaseBRL={totalHourlyCost}
+      />
     </div>
   );
 }

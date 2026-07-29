@@ -38,7 +38,6 @@ export default function DashboardPage() {
         if (!user) return;
 
         // 1. Busca as últimas reservas do usuário com status 'completed'
-        // (Você também pode validar se a 'end_time' é menor que a hora atual)
         const { data: bookings, error: bookingsError } = await supabase
           .from("bookings")
           .select(
@@ -66,10 +65,10 @@ export default function DashboardPage() {
               .eq("booking_id", booking.id)
               .maybeSingle();
 
-            // Se NÃO encontrar um review para essa reserva, achamos o alvo! Mostra o modal.
+            // Se NÃO encontrar um review para essa reserva, mostra o modal
             if (!reviewData) {
               setPendingReviewBooking(booking);
-              break; // Para o loop, pois só queremos mostrar um modal por vez
+              break;
             }
           }
         }
@@ -100,41 +99,90 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 relative">
-      {/* CONTEÚDO PRINCIPAL (Renderiza a aba selecionada) */}
-      <main className="h-full">{renderTab()}</main>
-
-      {/* MENUS E OVERLAYS */}
-
-      {/* 1. Barra de Navegação Inferior (Mobile) / Lateral (Desktop) */}
+    <div className="min-h-screen bg-slate-50 relative flex">
+      {/* 1. Navegação Desktop (Sidebar Lateral Fixa) */}
       {!selectedRoom && (
-        <nav className="fixed bottom-0 left-0 w-full bg-white border-t border-slate-200 px-6 py-3 pb-safe z-40 shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.05)] md:hidden">
-          <ul className="flex justify-between items-center max-w-md mx-auto">
-            <NavItem
+        <aside className="hidden md:flex flex-col fixed top-0 left-0 w-64 h-screen bg-white border-r border-slate-200 z-40 py-8 px-4 shadow-[10px_0_40px_-15px_rgba(0,0,0,0.05)]">
+          <div className="flex items-center gap-3 px-3 mb-10">
+            <div className="w-10 h-10 bg-[#f05e23] rounded-xl flex items-center justify-center text-white font-black text-sm shadow-md shadow-orange-500/20">
+              FC
+            </div>
+            <span className="font-black text-xl text-slate-900 tracking-tight">
+              Fusion Clinic
+            </span>
+          </div>
+
+          <ul className="flex flex-col gap-2">
+            <DesktopNavItem
               icon={Search}
-              label="Buscar"
+              label="Explorar Salas"
               isActive={activeTab === "search"}
               onClick={() => setActiveTab("search")}
             />
-            <NavItem
+            <DesktopNavItem
               icon={Heart}
               label="Favoritos"
               isActive={activeTab === "favorites"}
               onClick={() => setActiveTab("favorites")}
             />
-            <NavItem
+            <DesktopNavItem
+              icon={Calendar}
+              label="Minhas Reservas"
+              isActive={activeTab === "bookings"}
+              onClick={() => setActiveTab("bookings")}
+            />
+            <DesktopNavItem
+              icon={MessageSquare}
+              label="Mensagens"
+              isActive={activeTab === "chat"}
+              onClick={() => setActiveTab("chat")}
+            />
+            <DesktopNavItem
+              icon={User}
+              label="Meu Perfil"
+              isActive={activeTab === "profile"}
+              onClick={() => setActiveTab("profile")}
+            />
+          </ul>
+        </aside>
+      )}
+
+      {/* CONTEÚDO PRINCIPAL */}
+      <main
+        className={`flex-1 h-full min-h-screen ${!selectedRoom ? "md:pl-64" : ""}`}
+      >
+        {renderTab()}
+      </main>
+
+      {/* 2. Barra de Navegação Inferior (Mobile) */}
+      {!selectedRoom && (
+        <nav className="fixed bottom-0 left-0 w-full bg-white border-t border-slate-200 px-6 py-3 pb-safe z-40 shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.05)] md:hidden">
+          <ul className="flex justify-between items-center max-w-md mx-auto">
+            <MobileNavItem
+              icon={Search}
+              label="Buscar"
+              isActive={activeTab === "search"}
+              onClick={() => setActiveTab("search")}
+            />
+            <MobileNavItem
+              icon={Heart}
+              label="Favoritos"
+              isActive={activeTab === "favorites"}
+              onClick={() => setActiveTab("favorites")}
+            />
+            <MobileNavItem
               icon={Calendar}
               label="Reservas"
               isActive={activeTab === "bookings"}
               onClick={() => setActiveTab("bookings")}
             />
-            <NavItem
+            <MobileNavItem
               icon={MessageSquare}
               label="Inbox"
               isActive={activeTab === "chat"}
               onClick={() => setActiveTab("chat")}
             />
-            <NavItem
+            <MobileNavItem
               icon={User}
               label="Perfil"
               isActive={activeTab === "profile"}
@@ -144,12 +192,10 @@ export default function DashboardPage() {
         </nav>
       )}
 
-      {/* 2. Navegação Desktop (Fixa no topo ou lateral, opcional para telas grandes) */}
-      {/* Aqui você pode incluir uma topbar padrão para desktop se desejar */}
-
       {/* 3. Tela de Detalhes da Sala (Sobreposição full-screen) */}
       {selectedRoom && (
         <RoomDetail
+          roomId={selectedRoom.id}
           room={selectedRoom}
           onBack={() => setSelectedRoom(null)}
           initialModality="hora"
@@ -162,17 +208,46 @@ export default function DashboardPage() {
         booking={pendingReviewBooking}
         onClose={() => setPendingReviewBooking(null)}
         onSuccess={() => {
-          // Quando envia o review com sucesso, limpa a pendência
           setPendingReviewBooking(null);
-          // Opcional: Atualizar alguma listagem local, se necessário
         }}
       />
     </div>
   );
 }
 
-// Componente auxiliar para os botões do menu inferior
-function NavItem({
+// Componente auxiliar para os botões do menu lateral (Desktop)
+function DesktopNavItem({
+  icon: Icon,
+  label,
+  isActive,
+  onClick,
+}: {
+  icon: any;
+  label: string;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <li>
+      <button
+        onClick={onClick}
+        className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl font-bold transition-all duration-200 ${
+          isActive
+            ? "bg-orange-50 text-[#f05e23]"
+            : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+        }`}
+      >
+        <Icon
+          className={`w-5 h-5 ${isActive ? "stroke-[2.5px]" : "stroke-2"}`}
+        />
+        {label}
+      </button>
+    </li>
+  );
+}
+
+// Componente auxiliar para os botões do menu inferior (Mobile)
+function MobileNavItem({
   icon: Icon,
   label,
   isActive,
@@ -199,7 +274,6 @@ function NavItem({
           <Icon
             className={`w-6 h-6 ${isActive ? "stroke-[2.5px]" : "stroke-2"}`}
           />
-          {/* Bolinha indicadora de aba ativa */}
           {isActive && (
             <span className="absolute -bottom-3 w-1.5 h-1.5 bg-[#f05e23] rounded-full animate-in zoom-in" />
           )}
