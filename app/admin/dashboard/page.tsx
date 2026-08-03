@@ -3,6 +3,10 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { PackagesAdminTab } from "@/components/admin/packages-admin-tab";
+import { AdminOverviewTab } from "@/components/admin/overview-tab";
+import { AdminSpecialistsTab } from "@/components/admin/specialists-tab";
+import { AdminPartnersTab } from "@/components/admin/partners-tab";
+import { AdminBookingsTab } from "@/components/admin/bookings-tab"; // <-- NOVO COMPONENTE DE AGENDAMENTOS IMPORTADO
 import {
   Users,
   Building2,
@@ -17,7 +21,6 @@ import {
   Loader2,
   Clock,
   LogOut,
-  X,
   MapPin,
   User,
   FileText,
@@ -46,18 +49,16 @@ import {
   startOfWeek,
   endOfWeek,
   isSameMonth,
-  isSameDay,
   addDays,
 } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
 // ==========================================
-// COMPONENTE PRINCIPAL (LAYOUT DA PÁGINA)
+// COMPONENTE PRINCIPAL (TORRE DE CONTROLE ADMIN)
 // ==========================================
 export default function AdminDashboardPage() {
-  const [activeTab, setActiveTab] = useState("salas");
+  const [activeTab, setActiveTab] = useState("dashboard");
 
-  // NOVO MENU DE PRECIFICAÇÃO ADICIONADO AQUI
   const menuItems = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "especialistas", label: "Especialistas", icon: Users },
@@ -130,16 +131,25 @@ export default function AdminDashboardPage() {
           </div>
         </header>
         <div className="flex-1 overflow-y-auto relative bg-slate-50">
-          {/* RENDERIZAÇÃO CONDICIONAL DAS ABAS */}
+          {/* RENDERIZAÇÃO CONDICIONAL DAS ABAS DO ADMIN */}
+          {activeTab === "dashboard" && <AdminOverviewTab />}
+          {activeTab === "especialistas" && <AdminSpecialistsTab />}
+          {activeTab === "parceiros" && <AdminPartnersTab />}
           {activeTab === "salas" && <AdminRoomsTab />}
           {activeTab === "pacotes" && <PackagesAdminTab />}
+          {activeTab === "agendamentos" && <AdminBookingsTab />}
 
-          {activeTab !== "salas" && activeTab !== "pacotes" && (
-            <div className="h-full flex flex-col items-center justify-center text-slate-400">
-              <Loader2 className="w-10 h-10 animate-spin mb-4 text-slate-300" />
-              <p className="font-bold">Módulo em construção...</p>
-            </div>
-          )}
+          {activeTab !== "salas" &&
+            activeTab !== "pacotes" &&
+            activeTab !== "dashboard" &&
+            activeTab !== "especialistas" &&
+            activeTab !== "parceiros" &&
+            activeTab !== "agendamentos" && (
+              <div className="h-full flex flex-col items-center justify-center text-slate-400">
+                <Loader2 className="w-10 h-10 animate-spin mb-4 text-slate-300" />
+                <p className="font-bold">Módulo em construção...</p>
+              </div>
+            )}
         </div>
       </main>
     </div>
@@ -157,7 +167,6 @@ function AdminRoomsTab() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
 
-  // Estados da Gestão de Sala em TELA CHEIA
   const [evaluatingRoom, setEvaluatingRoom] = useState<any | null>(null);
   const [selectedTier, setSelectedTier] = useState<"start" | "vip" | "master">(
     "start",
@@ -174,7 +183,6 @@ function AdminRoomsTab() {
     price: "",
   });
 
-  // Calendário
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [blockedDates, setBlockedDates] = useState<string[]>([]);
 
@@ -249,7 +257,6 @@ function AdminRoomsTab() {
       if (error) throw error;
       toast({ title: "Classificação Salva!" });
 
-      // Atualizar estado local sem fechar a página
       setEvaluatingRoom({
         ...evaluatingRoom,
         is_active: true,
@@ -426,7 +433,6 @@ function AdminRoomsTab() {
     }
   };
 
-  // Processamento de dados
   const pendingRooms = rooms.filter((r) => !r.is_active);
   const filteredRooms = rooms.filter((r) => {
     const matchesSearch =
@@ -448,11 +454,6 @@ function AdminRoomsTab() {
       </div>
     );
 
-  // ========================================================
-  // RENDERIZAÇÃO DA PÁGINA (LISTAGEM OU TELA DE GESTÃO)
-  // ========================================================
-
-  // SE ESTIVER AVALIANDO UMA SALA -> RENDERIZA A TELA CHEIA
   if (evaluatingRoom) {
     let evalAddress: any = {};
     let evalPricing: any = {};
@@ -473,7 +474,6 @@ function AdminRoomsTab() {
 
     return (
       <div className="absolute inset-0 bg-slate-50 z-20 flex flex-col animate-in fade-in zoom-in-95 duration-200">
-        {/* Header da Tela de Gestão */}
         <div className="bg-white border-b border-slate-200 px-8 py-5 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-6">
             <button
@@ -514,9 +514,7 @@ function AdminRoomsTab() {
           </div>
         </div>
 
-        {/* Layout com Sidebar e Conteúdo */}
         <div className="flex-1 flex overflow-hidden">
-          {/* Sidebar Interna */}
           <div className="w-72 bg-white border-r border-slate-200 p-6 flex flex-col gap-2 shrink-0 overflow-y-auto">
             <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2 pl-2">
               Menu da Sala
@@ -541,10 +539,8 @@ function AdminRoomsTab() {
             </button>
           </div>
 
-          {/* Área de Conteúdo */}
           <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
             <div className="max-w-4xl">
-              {/* ABA 1: AUDITORIA */}
               {auditTab === "auditoria" && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
                   <div className="grid grid-cols-2 gap-6">
@@ -600,7 +596,6 @@ function AdminRoomsTab() {
                     </h3>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-                      {/* OPÇÃO START */}
                       <label
                         className={`flex flex-col gap-3 p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedTier === "start" ? "border-blue-500 bg-blue-50/50" : "border-slate-100 hover:border-slate-200 bg-white"}`}
                       >
@@ -628,7 +623,6 @@ function AdminRoomsTab() {
                         </div>
                       </label>
 
-                      {/* OPÇÃO VIP */}
                       <label
                         className={`flex flex-col gap-3 p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedTier === "vip" ? "border-purple-500 bg-purple-50/50" : "border-slate-100 hover:border-slate-200 bg-white"}`}
                       >
@@ -656,7 +650,6 @@ function AdminRoomsTab() {
                         </div>
                       </label>
 
-                      {/* OPÇÃO MASTER */}
                       <label
                         className={`flex flex-col gap-3 p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedTier === "master" ? "border-amber-500 bg-amber-50/50" : "border-slate-100 hover:border-slate-200 bg-white"}`}
                       >
@@ -750,7 +743,6 @@ function AdminRoomsTab() {
                 </div>
               )}
 
-              {/* ABA 2: EDITAR DADOS */}
               {auditTab === "editar" && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
                   <div className="bg-orange-50 border border-orange-200 p-5 rounded-xl flex gap-4">
@@ -826,7 +818,6 @@ function AdminRoomsTab() {
                 </div>
               )}
 
-              {/* ABA 3: GERENCIAR AGENDA */}
               {auditTab === "agenda" && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
                   <div className="flex items-start justify-between bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
@@ -852,7 +843,6 @@ function AdminRoomsTab() {
                   </div>
 
                   <div className="bg-white border border-slate-200 p-8 rounded-2xl shadow-sm">
-                    {/* Controles do Mês */}
                     <div className="flex items-center justify-between mb-8">
                       <h3 className="text-2xl font-black text-slate-900 capitalize">
                         {format(currentMonth, "MMMM yyyy", { locale: ptBR })}
@@ -881,7 +871,6 @@ function AdminRoomsTab() {
                       </div>
                     </div>
 
-                    {/* Calendário */}
                     {renderCalendar()}
 
                     <div className="mt-8 pt-6 border-t border-slate-100 flex justify-end">
@@ -903,9 +892,6 @@ function AdminRoomsTab() {
     );
   }
 
-  // ========================================================
-  // SE NÃO ESTIVER AVALIANDO, RENDERIZA A LISTAGEM PADRÃO
-  // ========================================================
   return (
     <div className="space-y-8 max-w-7xl mx-auto pb-12 p-8 animate-in fade-in">
       {pendingRooms.length > 0 && (
@@ -1059,7 +1045,6 @@ function AdminRoomsTab() {
                       )}
                     </td>
                     <td className="px-6 py-4 flex items-center justify-end gap-2 opacity-50 group-hover:opacity-100 transition-opacity">
-                      {/* O Botão de Engrenagem / Olho agora abre a TELA CHEIA */}
                       <Button
                         variant="ghost"
                         size="icon"

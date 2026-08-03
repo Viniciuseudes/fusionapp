@@ -22,6 +22,7 @@ import {
   ArrowLeft,
   ArrowRight,
   TrendingDown,
+  Building2,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -55,7 +56,7 @@ export interface Room {
 }
 
 // ==========================================
-// ESTRUTURA VISUAL BASE (Sem preços hardcoded)
+// ESTRUTURA VISUAL BASE
 // ==========================================
 interface PlanOption {
   hours: number;
@@ -121,7 +122,8 @@ export function SearchTab({
   const [profile, setProfile] = useState({ name: "", balance: 0 });
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
-  const [rentalType, setRentalType] = useState<RentalType>("turno");
+  // MUDANÇA: Iniciar padrão em hora
+  const [rentalType, setRentalType] = useState<RentalType>("hora");
   const [selectedCategory, setSelectedCategory] = useState<string>("Todas");
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
   const [minPrice, setMinPrice] = useState("");
@@ -143,7 +145,6 @@ export function SearchTab({
     master: number;
   }>({ start: 16, vip: 16, master: 16 });
 
-  // ESTADO QUE FALTAVA (CONTROLE DE LOADING DO CHECKOUT ASAAS)
   const [isProcessingCheckout, setIsProcessingCheckout] = useState<
     string | null
   >(null);
@@ -291,11 +292,6 @@ export function SearchTab({
               else bStart += Number(tx.amount);
             });
           }
-          if (bStart === 0 && bVip === 0 && bMaster === 0) {
-            bStart = 2;
-            bVip = 5;
-            bMaster = 0;
-          }
           setWalletBalances({ start: bStart, vip: bVip, master: bMaster });
           const { data: favData } = await supabase
             .from("favorites")
@@ -371,12 +367,8 @@ export function SearchTab({
     }
   }
 
-  // ==========================================
-  // O NOVO MOTOR DE CHECKOUT COM ASAAS
-  // ==========================================
   const handleBuyPackage = async (pkg: PlanPackage, option: PlanOption) => {
     setIsProcessingCheckout(pkg.id);
-
     try {
       const {
         data: { user },
@@ -389,13 +381,10 @@ export function SearchTab({
         setIsProcessingCheckout(null);
         return;
       }
-
       toast({
         title: "Preparando ambiente seguro...",
         description: `Gerando cobrança para o pacote ${pkg.title}`,
       });
-
-      // 1. Chama nossa rota de API para gerar o Pix/Boleto no Asaas
       const response = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -406,14 +395,10 @@ export function SearchTab({
           packageName: pkg.title,
         }),
       });
-
       const data = await response.json();
-
       if (!response.ok) {
         throw new Error(data.error || "Falha ao gerar pagamento.");
       }
-
-      // 2. Sucesso! Redireciona o médico para o gateway Asaas
       window.location.href = data.invoiceUrl;
     } catch (err: any) {
       toast({
@@ -421,7 +406,7 @@ export function SearchTab({
         title: "Erro no Checkout",
         description: err.message,
       });
-      setIsProcessingCheckout(null); // Só removemos se der erro, pois o sucesso muda a página
+      setIsProcessingCheckout(null);
     }
   };
 
@@ -635,7 +620,6 @@ export function SearchTab({
                     ))}
                   </div>
 
-                  {/* BOTÃO ATUALIZADO DO CHECKOUT (ASAAS) */}
                   <Button
                     onClick={() => handleBuyPackage(pkg, selectedOption)}
                     disabled={isProcessingCheckout === pkg.id}
@@ -782,157 +766,193 @@ export function SearchTab({
             </div>
           ) : (
             <div className="px-4 max-w-5xl mx-auto w-full space-y-12">
-              {featuredRooms.length > 0 && (
-                <section>
-                  <div className="flex items-center gap-2 mb-4">
-                    <Sparkles className="w-5 h-5 text-amber-500" />
-                    <h2 className="text-xl font-bold text-zinc-900">
-                      Salas em Destaque
-                    </h2>
-                  </div>
-                  <div className="flex gap-4 overflow-x-auto pb-4 -mx-4 px-4 lg:mx-0 lg:px-0 scrollbar-hide snap-x">
-                    {featuredRooms.map((room) => (
-                      <RoomCard
-                        key={room.id}
-                        room={room}
-                        isFavorited={favorites.has(room.id)}
-                        onToggleFavorite={toggleFavorite}
-                        onOpen={onOpenRoom}
-                        horizontal
-                      />
-                    ))}
-                  </div>
-                </section>
-              )}
+              {/* RENDERIZAÇÃO CONDICIONAL BASEADA NA MODALIDADE */}
 
-              {masterRooms.length > 0 && (
-                <section className="bg-amber-50/50 -mx-4 px-4 py-8 lg:rounded-3xl lg:mx-0 border border-amber-100/50">
-                  <div className="flex items-center gap-2 mb-4">
-                    <Crown className="w-6 h-6 text-amber-500" />
+              {rentalType === "hora" ? (
+                <>
+                  {featuredRooms.length > 0 && (
+                    <section>
+                      <div className="flex items-center gap-2 mb-4">
+                        <Sparkles className="w-5 h-5 text-amber-500" />
+                        <h2 className="text-xl font-bold text-zinc-900">
+                          Salas em Destaque
+                        </h2>
+                      </div>
+                      <div className="flex gap-4 overflow-x-auto pb-4 -mx-4 px-4 lg:mx-0 lg:px-0 scrollbar-hide snap-x">
+                        {featuredRooms.map((room) => (
+                          <RoomCard
+                            key={room.id}
+                            room={room}
+                            isFavorited={favorites.has(room.id)}
+                            onToggleFavorite={toggleFavorite}
+                            onOpen={onOpenRoom}
+                            horizontal
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {masterRooms.length > 0 && (
+                    <section className="bg-amber-50/50 -mx-4 px-4 py-8 lg:rounded-3xl lg:mx-0 border border-amber-100/50">
+                      <div className="flex items-center gap-2 mb-4">
+                        <Crown className="w-6 h-6 text-amber-500" />
+                        <div>
+                          <h2 className="text-xl font-bold text-zinc-900">
+                            Coleção Master
+                          </h2>
+                          <p className="text-xs font-medium text-amber-700/80">
+                            O mais alto padrão de sofisticação.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="bg-gradient-to-r from-amber-500 to-amber-600 rounded-2xl p-5 mb-6 text-white flex flex-col md:flex-row items-center justify-between shadow-sm">
+                        <div>
+                          <h4 className="font-bold text-base flex items-center gap-1.5">
+                            Passe Livre Master{" "}
+                            <Crown className="w-3.5 h-3.5 text-amber-200" />
+                          </h4>
+                          <p className="text-xs font-medium text-amber-50 mt-1 max-w-md leading-relaxed">
+                            Assine o Pacote Master e garanta o menor custo por
+                            hora em <b>qualquer sala da plataforma.</b>
+                          </p>
+                        </div>
+                        <Button
+                          onClick={handleOpenWalletPromo}
+                          className="bg-white text-amber-900 hover:bg-amber-50 font-bold mt-4 md:mt-0 w-full md:w-auto h-10 text-sm whitespace-nowrap rounded-xl"
+                        >
+                          Ver Pacotes
+                        </Button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                        {masterRooms.map((room) => (
+                          <RoomCard
+                            key={room.id}
+                            room={room}
+                            isFavorited={favorites.has(room.id)}
+                            onToggleFavorite={toggleFavorite}
+                            onOpen={onOpenRoom}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {vipRooms.length > 0 && (
+                    <section>
+                      <div className="flex items-center gap-2 mb-4">
+                        <Star className="w-6 h-6 text-indigo-500" />
+                        <div>
+                          <h2 className="text-xl font-bold text-zinc-900">
+                            Experiência VIP
+                          </h2>
+                          <p className="text-xs font-medium text-zinc-500">
+                            Ambientes premium com design diferenciado.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-5 mb-6 flex flex-col md:flex-row items-center justify-between">
+                        <div>
+                          <h4 className="font-bold text-base text-indigo-900 flex items-center gap-1.5">
+                            <TrendingDown className="w-4 h-4 text-indigo-500" />{" "}
+                            Tarifas Reduzidas
+                          </h4>
+                          <p className="text-xs font-medium text-indigo-700/80 mt-1 max-w-md leading-relaxed">
+                            Assinantes do <b>Pacote VIP</b> têm descontos nestes
+                            consultórios e acesso livre às salas Start.
+                          </p>
+                        </div>
+                        <Button
+                          onClick={handleOpenWalletPromo}
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold mt-4 md:mt-0 w-full md:w-auto h-10 text-sm whitespace-nowrap rounded-xl"
+                        >
+                          Assinar VIP
+                        </Button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                        {vipRooms.map((room) => (
+                          <RoomCard
+                            key={room.id}
+                            room={room}
+                            isFavorited={favorites.has(room.id)}
+                            onToggleFavorite={toggleFavorite}
+                            onOpen={onOpenRoom}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {startRooms.length > 0 && (
+                    <section className="border-t border-zinc-200 pt-8 pb-8">
+                      <div className="flex items-center gap-2 mb-4">
+                        <Shield className="w-6 h-6 text-zinc-400" />
+                        <div>
+                          <h2 className="text-xl font-bold text-zinc-900">
+                            Essencial Start
+                          </h2>
+                          <p className="text-xs font-medium text-zinc-500">
+                            Conforto e o melhor custo-benefício.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="bg-zinc-100 rounded-2xl p-5 mb-6 flex flex-col md:flex-row items-center justify-between border border-zinc-200">
+                        <div>
+                          <h4 className="font-bold text-base text-zinc-900">
+                            Previsibilidade de Agenda
+                          </h4>
+                          <p className="text-xs font-medium text-zinc-600 mt-1 max-w-md leading-relaxed">
+                            Assine um <b>Pacote Start</b> e trave o menor preço
+                            por hora, sem variações.
+                          </p>
+                        </div>
+                        <Button
+                          onClick={handleOpenWalletPromo}
+                          className="bg-zinc-900 hover:bg-zinc-800 text-white font-semibold mt-4 md:mt-0 w-full md:w-auto h-10 text-sm whitespace-nowrap rounded-xl"
+                        >
+                          Pacotes Start
+                        </Button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                        {startRooms.map((room) => (
+                          <RoomCard
+                            key={room.id}
+                            room={room}
+                            isFavorited={favorites.has(room.id)}
+                            onToggleFavorite={toggleFavorite}
+                            onOpen={onOpenRoom}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                </>
+              ) : (
+                /* GRID SIMPLES PARA TURNO OU FIXO */
+                <section className="pt-4 pb-8">
+                  <div className="flex items-center gap-3 mb-6">
+                    <Building2 className="w-6 h-6 text-[#f05e23]" />
                     <div>
-                      <h2 className="text-xl font-bold text-zinc-900">
-                        Coleção Master
-                      </h2>
-                      <p className="text-xs font-medium text-amber-700/80">
-                        O mais alto padrão de sofisticação.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="bg-gradient-to-r from-amber-500 to-amber-600 rounded-2xl p-5 mb-6 text-white flex flex-col md:flex-row items-center justify-between shadow-sm">
-                    <div>
-                      <h4 className="font-bold text-base flex items-center gap-1.5">
-                        Passe Livre Master{" "}
-                        <Crown className="w-3.5 h-3.5 text-amber-200" />
-                      </h4>
-                      <p className="text-xs font-medium text-amber-50 mt-1 max-w-md leading-relaxed">
-                        Assine o Pacote Master e garanta o menor custo por hora
-                        em <b>qualquer sala da plataforma.</b>
-                      </p>
-                    </div>
-                    <Button
-                      onClick={handleOpenWalletPromo}
-                      className="bg-white text-amber-900 hover:bg-amber-50 font-bold mt-4 md:mt-0 w-full md:w-auto h-10 text-sm whitespace-nowrap rounded-xl"
-                    >
-                      Ver Pacotes
-                    </Button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                    {masterRooms.map((room) => (
-                      <RoomCard
-                        key={room.id}
-                        room={room}
-                        isFavorited={favorites.has(room.id)}
-                        onToggleFavorite={toggleFavorite}
-                        onOpen={onOpenRoom}
-                      />
-                    ))}
-                  </div>
-                </section>
-              )}
-
-              {vipRooms.length > 0 && (
-                <section>
-                  <div className="flex items-center gap-2 mb-4">
-                    <Star className="w-6 h-6 text-indigo-500" />
-                    <div>
-                      <h2 className="text-xl font-bold text-zinc-900">
-                        Experiência VIP
+                      <h2 className="text-xl font-bold text-zinc-900 capitalize">
+                        Espaços Disponíveis
                       </h2>
                       <p className="text-xs font-medium text-zinc-500">
-                        Ambientes premium com design diferenciado.
+                        {filteredRooms.length}{" "}
+                        {filteredRooms.length === 1
+                          ? "sala encontrada"
+                          : "salas encontradas"}{" "}
+                        para locação por {rentalType}
                       </p>
                     </div>
                   </div>
-
-                  <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-5 mb-6 flex flex-col md:flex-row items-center justify-between">
-                    <div>
-                      <h4 className="font-bold text-base text-indigo-900 flex items-center gap-1.5">
-                        <TrendingDown className="w-4 h-4 text-indigo-500" />{" "}
-                        Tarifas Reduzidas
-                      </h4>
-                      <p className="text-xs font-medium text-indigo-700/80 mt-1 max-w-md leading-relaxed">
-                        Assinantes do <b>Pacote VIP</b> têm descontos nestes
-                        consultórios e acesso livre às salas Start.
-                      </p>
-                    </div>
-                    <Button
-                      onClick={handleOpenWalletPromo}
-                      className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold mt-4 md:mt-0 w-full md:w-auto h-10 text-sm whitespace-nowrap rounded-xl"
-                    >
-                      Assinar VIP
-                    </Button>
-                  </div>
-
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                    {vipRooms.map((room) => (
-                      <RoomCard
-                        key={room.id}
-                        room={room}
-                        isFavorited={favorites.has(room.id)}
-                        onToggleFavorite={toggleFavorite}
-                        onOpen={onOpenRoom}
-                      />
-                    ))}
-                  </div>
-                </section>
-              )}
-
-              {startRooms.length > 0 && (
-                <section className="border-t border-zinc-200 pt-8 pb-8">
-                  <div className="flex items-center gap-2 mb-4">
-                    <Shield className="w-6 h-6 text-zinc-400" />
-                    <div>
-                      <h2 className="text-xl font-bold text-zinc-900">
-                        Essencial Start
-                      </h2>
-                      <p className="text-xs font-medium text-zinc-500">
-                        Conforto e o melhor custo-benefício.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="bg-zinc-100 rounded-2xl p-5 mb-6 flex flex-col md:flex-row items-center justify-between border border-zinc-200">
-                    <div>
-                      <h4 className="font-bold text-base text-zinc-900">
-                        Previsibilidade de Agenda
-                      </h4>
-                      <p className="text-xs font-medium text-zinc-600 mt-1 max-w-md leading-relaxed">
-                        Assine um <b>Pacote Start</b> e trave o menor preço por
-                        hora, sem variações.
-                      </p>
-                    </div>
-                    <Button
-                      onClick={handleOpenWalletPromo}
-                      className="bg-zinc-900 hover:bg-zinc-800 text-white font-semibold mt-4 md:mt-0 w-full md:w-auto h-10 text-sm whitespace-nowrap rounded-xl"
-                    >
-                      Pacotes Start
-                    </Button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                    {startRooms.map((room) => (
+                    {filteredRooms.map((room) => (
                       <RoomCard
                         key={room.id}
                         room={room}

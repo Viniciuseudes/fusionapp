@@ -74,7 +74,7 @@ export function RoomDetail(props: RoomDetailProps) {
   const [actionLoading, setActionLoading] = useState(false);
   const [roomData, setRoomData] = useState<any>(null);
 
-  // ABA ATIVA (Controle de Modalidade)
+  // ABA ATIVA (Controle de Modalidade) forçada para iniciar em hora
   const [activeTab, setActiveTab] = useState<"hora" | "turno" | "fixo">("hora");
 
   // ESTADOS: POR HORA
@@ -130,7 +130,11 @@ export function RoomDetail(props: RoomDetailProps) {
         if (isMounted) {
           setRoomData(data);
           const mods = data.modalities || [];
-          if (mods.includes(initialModality)) {
+
+          // TRAVA DE PRODUÇÃO: Força o modo "hora" como prioridade absoluta se a sala permitir
+          if (mods.includes("hora")) {
+            setActiveTab("hora");
+          } else if (mods.includes(initialModality)) {
             setActiveTab(initialModality);
           } else if (mods.length > 0) {
             setActiveTab(mods[0]);

@@ -1,24 +1,14 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import {
-  Star,
-  ThumbsUp,
-  Flag,
-  MoreVertical,
-  MessageSquare,
-  Loader2,
-  Check,
-} from "lucide-react";
+import { Star, Loader2, Check, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { createClient } from "@/utils/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import Image from "next/image";
 
-// Interface atualizada para espelhar a estrutura do Supabase
 interface Review {
   id: string;
   rating: number;
@@ -40,7 +30,6 @@ export function HostReviewsTab() {
     "all",
   );
 
-  // Estados para o fluxo de resposta do Anfitrião
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
   const [isSubmittingReply, setIsSubmittingReply] = useState(false);
@@ -54,56 +43,80 @@ export function HostReviewsTab() {
         } = await supabase.auth.getUser();
         if (!user) return;
 
-        // Fazemos o JOIN entre reviews, bookings, rooms (para garantir que a sala é do host atual) e profiles
-        const { data, error } = await supabase
+        // 1. Pega todas as salas que pertencem a este Host
+        const { data: myRooms, error: roomsErr } = await supabase
+          .from("rooms")
+          .select("id, name")
+          .eq("host_id", user.id);
+
+        if (roomsErr) throw roomsErr;
+        if (!myRooms || myRooms.length === 0) {
+          setReviews([]);
+          return;
+        }
+
+        const roomIds = myRooms.map((r) => r.id);
+
+        // 2. Busca direto as avaliações dessas salas, pois a tabela possui room_id e guest_id
+        const { data: myReviews, error: reviewsErr } = await supabase
           .from("reviews")
           .select(
-            `
-            id,
-            rating,
-            comment,
-            host_reply,
-            created_at,
-            rooms!inner (
-              name,
-              host_id
-            ),
-            profiles!guest_id (
-              full_name,
-              avatar_url
-            )
-          `,
+            "id, rating, comment, host_reply, created_at, room_id, guest_id",
           )
-          .eq("rooms.host_id", user.id) // Traz apenas as avaliações de salas que pertencem a este host
+          .in("room_id", roomIds)
           .order("created_at", { ascending: false });
 
-        if (error) throw error;
+        if (reviewsErr) throw reviewsErr;
+        if (!myReviews || myReviews.length === 0) {
+          setReviews([]);
+          return;
+        }
 
-        // Mapeando o retorno complexo do Supabase para a nossa interface limpa
-        if (data) {
-          const formattedReviews: Review[] = data.map((r: any) => ({
+        // 3. Pega os IDs únicos de quem avaliou
+        const guestIds = [
+          ...new Set(myReviews.map((r) => r.guest_id).filter(Boolean)),
+        ];
+        let guestProfiles: any[] = [];
+
+        // 4. Busca os nomes dos profissionais na tabela profiles (sem pedir avatar_url)
+        if (guestIds.length > 0) {
+          const { data: profilesData, error: profilesErr } = await supabase
+            .from("profiles")
+            .select("id, full_name")
+            .in("id", guestIds);
+
+          if (profilesErr) throw profilesErr;
+          guestProfiles = profilesData || [];
+        }
+
+        // 5. Monta o objeto perfeito pro Frontend
+        const formattedReviews: Review[] = myReviews.map((r: any) => {
+          const room = myRooms.find((rm) => rm.id === r.room_id);
+          const guest = guestProfiles.find((p) => p.id === r.guest_id);
+          const guestName = guest?.full_name || "Profissional";
+
+          return {
             id: r.id,
-            rating: r.rating,
-            comment: r.comment,
-            host_reply: r.host_reply,
+            rating: r.rating || 5,
+            comment: r.comment || "",
+            host_reply: r.host_reply || null,
             created_at: format(new Date(r.created_at), "dd MMM yyyy", {
               locale: ptBR,
             }),
-            guest_name: r.profiles?.full_name || "Profissional",
-            guest_avatar:
-              r.profiles?.avatar_url ||
-              "https://ui-avatars.com/api/?name=" +
-                (r.profiles?.full_name || "P"),
-            room_name: r.rooms?.name || "Sala Excluída",
-          }));
-          setReviews(formattedReviews);
-        }
-      } catch (err) {
-        console.error("Erro ao buscar avaliações:", err);
+            guest_name: guestName,
+            // Gera um avatar dinâmico com as iniciais do nome, já que não temos foto no banco
+            guest_avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(guestName)}&background=f05e23&color=fff`,
+            room_name: room?.name || "Sala Excluída",
+          };
+        });
+
+        setReviews(formattedReviews);
+      } catch (err: any) {
+        console.error("Erro na busca de avaliações:", err);
         toast({
           variant: "destructive",
           title: "Erro",
-          description: "Não foi possível carregar as avaliações.",
+          description: "Não foi possível carregar as avaliações no momento.",
         });
       } finally {
         setLoading(false);
@@ -113,7 +126,6 @@ export function HostReviewsTab() {
     fetchReviews();
   }, [supabase, toast]);
 
-  // Função para salvar a resposta do Anfitrião no banco
   const handleSubmitReply = async (reviewId: string) => {
     if (!replyText.trim()) return;
 
@@ -126,7 +138,6 @@ export function HostReviewsTab() {
 
       if (error) throw error;
 
-      // Atualiza a UI localmente sem precisar recarregar
       setReviews((prev) =>
         prev.map((r) =>
           r.id === reviewId ? { ...r, host_reply: replyText } : r,
@@ -151,7 +162,6 @@ export function HostReviewsTab() {
     }
   };
 
-  // Cálculos de métricas
   const totalReviews = reviews.length;
   const averageRating =
     totalReviews > 0
@@ -212,7 +222,6 @@ export function HostReviewsTab() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        {/* Resumo */}
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 flex flex-col items-center justify-center text-center">
           <p className="text-5xl font-black text-slate-900 mb-2">
             {averageRating}
@@ -225,7 +234,6 @@ export function HostReviewsTab() {
           </p>
         </div>
 
-        {/* Barras de Progresso */}
         <div className="md:col-span-2 bg-white rounded-2xl p-6 shadow-sm border border-slate-200 flex flex-col justify-center space-y-3">
           {[5, 4, 3, 2, 1].map((rating) => {
             const count = ratingCounts[rating as keyof typeof ratingCounts];
@@ -253,13 +261,12 @@ export function HostReviewsTab() {
         </div>
       </div>
 
-      {/* Filtros */}
       <div className="flex gap-2 overflow-x-auto pb-4 scrollbar-hide mb-2">
         <Button
           onClick={() => setFilter("all")}
           className={`rounded-xl font-bold px-6 ${
             filter === "all"
-              ? "bg-primary text-white shadow-sm"
+              ? "bg-[#f05e23] text-white shadow-sm"
               : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
           }`}
         >
@@ -271,7 +278,7 @@ export function HostReviewsTab() {
             onClick={() => setFilter(rating.toString() as any)}
             className={`rounded-xl font-bold px-4 ${
               filter === rating.toString()
-                ? "bg-primary text-white shadow-sm"
+                ? "bg-[#f05e23] text-white shadow-sm"
                 : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
             }`}
           >
@@ -280,7 +287,6 @@ export function HostReviewsTab() {
         ))}
       </div>
 
-      {/* Lista de Avaliações */}
       <div className="space-y-4">
         {filteredReviews.length > 0 ? (
           filteredReviews.map((review) => (
@@ -303,7 +309,7 @@ export function HostReviewsTab() {
                     </h3>
                     <p className="text-xs font-medium text-slate-500">
                       {review.created_at} •{" "}
-                      <span className="text-primary font-bold">
+                      <span className="text-[#f05e23] font-bold">
                         {review.room_name}
                       </span>
                     </p>
@@ -324,10 +330,9 @@ export function HostReviewsTab() {
                 )}
               </p>
 
-              {/* Lógica de Resposta do Anfitrião */}
               {review.host_reply ? (
-                <div className="bg-slate-50 border-l-4 border-primary p-4 rounded-r-xl mt-4">
-                  <p className="text-xs font-black text-primary uppercase tracking-wider mb-1">
+                <div className="bg-slate-50 border-l-4 border-[#f05e23] p-4 rounded-r-xl mt-4">
+                  <p className="text-xs font-black text-[#f05e23] uppercase tracking-wider mb-1">
                     Sua Resposta:
                   </p>
                   <p className="text-sm text-slate-700 font-medium">
@@ -357,7 +362,7 @@ export function HostReviewsTab() {
                     <Button
                       onClick={() => handleSubmitReply(review.id)}
                       disabled={!replyText.trim() || isSubmittingReply}
-                      className="bg-primary hover:bg-primary/90 text-white font-bold"
+                      className="bg-[#f05e23] hover:bg-[#d6521e] text-white font-bold"
                     >
                       {isSubmittingReply ? (
                         <Loader2 className="w-4 h-4 animate-spin mr-2" />
@@ -373,7 +378,7 @@ export function HostReviewsTab() {
                   <Button
                     variant="outline"
                     onClick={() => setReplyingTo(review.id)}
-                    className="text-primary border-primary/20 hover:bg-primary/5 font-bold"
+                    className="text-[#f05e23] border-[#f05e23]/20 hover:bg-[#f05e23]/5 font-bold"
                   >
                     <MessageSquare className="w-4 h-4 mr-2" /> Responder
                     Avaliação
@@ -386,7 +391,7 @@ export function HostReviewsTab() {
           <div className="text-center py-16 bg-white rounded-2xl border border-slate-200 border-dashed">
             <Star className="w-12 h-12 text-slate-300 mx-auto mb-3" />
             <p className="text-slate-500 font-medium">
-              Nenhuma avaliação encontrada.
+              Nenhuma avaliação encontrada para os seus espaços.
             </p>
           </div>
         )}

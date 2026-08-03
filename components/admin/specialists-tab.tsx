@@ -1,289 +1,751 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { createClient } from "@/utils/supabase/client";
 import {
   Search,
-  UserCheck,
-  FileText,
-  Phone,
-  Award,
-  Loader2,
   Filter,
+  Eye,
+  ShieldCheck,
+  Mail,
+  Phone,
+  MapPin,
+  Calendar as CalendarIcon,
+  Clock,
+  TrendingUp,
+  Award,
+  Wallet,
+  Stethoscope,
+  ChevronLeft,
+  Loader2,
+  Ban,
   CheckCircle2,
+  Users,
+  CreditCard,
+  PlusCircle,
   AlertTriangle,
-  Coins,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { format, parseISO } from "date-fns";
+import { ptBR } from "date-fns/locale";
 import { useToast } from "@/hooks/use-toast";
+
+interface Specialist {
+  id: string;
+  full_name: string;
+  avatar_url: string | null;
+  specialty: string;
+  council: string;
+  council_number: string;
+  city: string;
+  state: string;
+  created_at: string;
+  phone: string;
+  email: string;
+  ltv: number;
+  bookingsCount: number;
+  lastBookingDate: string | null;
+  tier: "Start" | "Silver" | "Gold" | "Black";
+  status: "active" | "pending" | "blocked";
+  walletBalance: number;
+  plan: string;
+}
 
 export function AdminSpecialistsTab() {
   const supabase = createClient();
   const { toast } = useToast();
-
   const [loading, setLoading] = useState(true);
-  const [specialists, setSpecialists] = useState<any[]>([]);
+  const [specialists, setSpecialists] = useState<Specialist[]>([]);
+
   const [search, setSearch] = useState("");
-  const [specialtyFilter, setSpecialtyFilter] = useState("all");
+  const [councilFilter, setCouncilFilter] = useState("all");
+
+  const [selectedProfile, setSelectedProfile] = useState<Specialist | null>(
+    null,
+  );
+  const [profileBookings, setProfileBookings] = useState<any[]>([]);
+  const [profileLoading, setProfileLoading] = useState(false);
+
+  // Controle do Modal de Adicionar Créditos
+  const [creditModalOpen, setCreditModalOpen] = useState(false);
+  const [creditAmount, setCreditAmount] = useState("");
+  const [actionLoading, setActionLoading] = useState(false);
+
+  useEffect(() => {
+    fetchSpecialists();
+  }, [supabase]);
 
   const fetchSpecialists = async () => {
     setLoading(true);
     try {
-      // Busca todos os perfis que possuem dados profissionais preenchidos ou role de profissional
-      const { data, error } = await supabase
+      const { data: profiles, error: pErr } = await supabase
         .from("profiles")
         .select("*")
         .order("created_at", { ascending: false });
 
-      if (error) throw error;
+      if (pErr) throw pErr;
 
-      // Filtra no client-side para garantir que estamos listando profissionais da saúde
-      const filteredData = (data || []).filter(
-        (p: any) => p.role === "professional" || p.council || p.specialty,
+      const { data: bookings, error: bErr } = await supabase
+        .from("bookings")
+        .select("user_id, total_cost, start_time, status")
+        .in("status", ["confirmed", "completed", "pending_payment"]);
+
+      if (bErr) throw bErr;
+
+      const processedData: Specialist[] = profiles.map((p) => {
+        const userBookings = bookings?.filter((b) => b.user_id === p.id) || [];
+        const ltv = userBookings.reduce(
+          (acc, curr) => acc + (Number(curr.total_cost) || 0) * 45,
+          0,
+        );
+        const bookingsCount = userBookings.length;
+        const lastBooking = userBookings.sort(
+          (a, b) =>
+            new Date(b.start_time).getTime() - new Date(a.start_time).getTime(),
+        )[0];
+
+        let tier: Specialist["tier"] = "Start";
+        if (ltv >= 5000) tier = "Black";
+        else if (ltv >= 2000) tier = "Gold";
+        else if (ltv >= 500) tier = "Silver";
+
+        const rawSpecialty = p.specialty || "Clínico Geral";
+        let council = "CRM";
+        if (rawSpecialty.toLowerCase().includes("psico")) council = "CRP";
+        if (rawSpecialty.toLowerCase().includes("odonto")) council = "CRO";
+        if (rawSpecialty.toLowerCase().includes("fisio")) council = "CREFITO";
+        if (rawSpecialty.toLowerCase().includes("nutri")) council = "CRN";
+
+        // ==========================================
+        // DADOS REAIS DEFINITIVOS (ZERO POR PADRÃO)
+        // ==========================================
+        // Busca o saldo real do banco. Se não existir ou for nulo, inicia com 0.
+        const walletBalance = Number(p.wallet_balance) || 0;
+
+        // Busca o plano real. Se não existir, força o cadastro como Básico.
+        const plan = p.subscription_plan || "Básico (Start)";
+
+        return {
+          id: p.id,
+          full_name: p.full_name || "Usuário sem nome",
+          avatar_url: p.avatar_url,
+          specialty: rawSpecialty,
+          council: council,
+          council_number: p.document_number || "Pendente",
+          city: "Natal",
+          state: "RN",
+          created_at: p.created_at,
+          phone: p.phone || "Não informado", // Evita campo vazio
+          email:
+            p.email ||
+            `${p.full_name?.split(" ")[0]?.toLowerCase() || "user"}@email.com`,
+          ltv,
+          bookingsCount,
+          lastBookingDate: lastBooking ? lastBooking.start_time : null,
+          tier,
+          status: "active",
+          walletBalance,
+          plan,
+        };
+      });
+
+      setSpecialists(
+        processedData.filter((s) => s.specialty || s.bookingsCount > 0),
       );
-
-      setSpecialists(filteredData);
-    } catch (error: any) {
-      console.error(error);
+    } catch (err: any) {
+      console.error("Erro ao buscar especialistas:", err);
       toast({
         variant: "destructive",
-        title: "Erro de Carregamento",
-        description: "Não foi possível carregar a lista de especialistas.",
+        title: "Erro de Conexão",
+        description: err.message,
       });
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchSpecialists();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const handleOpenProfile = async (specialist: Specialist) => {
+    setSelectedProfile(specialist);
+    setProfileLoading(true);
 
-  // Extrai todas as especialidades únicas para alimentar o filtro dinâmico
-  const uniqueSpecialties: string[] = useMemo(() => {
-    const specs = new Set(
-      specialists.map((s: any) => s.specialty).filter(Boolean),
-    );
-    return ["all", ...Array.from(specs as Set<string>)];
-  }, [specialists]);
+    try {
+      const { data, error } = await supabase
+        .from("bookings")
+        .select(
+          `
+          id, start_time, end_time, total_cost, status,
+          rooms (name, image_url)
+        `,
+        )
+        .eq("user_id", specialist.id)
+        .order("start_time", { ascending: false })
+        .limit(5);
 
-  // Filtros combinados (Busca textual + Dropdown de especialidade)
-  const filteredSpecialists = specialists.filter((s: any) => {
+      if (!error && data) {
+        setProfileBookings(data);
+      }
+    } catch (err) {}
+
+    setProfileLoading(false);
+  };
+
+  // Função disparada ao injetar créditos pelo Admin
+  const handleAddCredits = async () => {
+    if (!selectedProfile || !creditAmount) return;
+
+    setActionLoading(true);
+    try {
+      const amount = parseFloat(creditAmount);
+
+      // Atualiza o saldo real no Supabase na tabela de perfis (profiles)
+      const novoSaldo = selectedProfile.walletBalance + amount;
+
+      const { error } = await supabase
+        .from("profiles")
+        .update({ wallet_balance: novoSaldo })
+        .eq("id", selectedProfile.id);
+
+      if (error) throw error;
+
+      // Opcional futuro: Gravar histórico na tabela "wallet_transactions"
+      // await supabase.from("wallet_transactions").insert({ user_id: selectedProfile.id, amount, type: "admin_bonus", description: "Recarga manual via Admin" });
+
+      // Atualiza a interface localmente para mostrar o sucesso imediato
+      setSelectedProfile({ ...selectedProfile, walletBalance: novoSaldo });
+
+      // Atualiza também na listagem principal no background
+      setSpecialists((prev) =>
+        prev.map((s) =>
+          s.id === selectedProfile.id ? { ...s, walletBalance: novoSaldo } : s,
+        ),
+      );
+
+      toast({
+        title: "Créditos Adicionados!",
+        description: `R$ ${amount.toLocaleString("pt-BR")} foram inseridos na carteira de ${selectedProfile.full_name}.`,
+      });
+
+      setCreditModalOpen(false);
+      setCreditAmount("");
+    } catch (error) {
+      console.error(error);
+      toast({
+        variant: "destructive",
+        title: "Erro",
+        description:
+          "Não foi possível adicionar o saldo. Verifique se a coluna 'wallet_balance' existe na tabela 'profiles'.",
+      });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const totalLTV = specialists.reduce((acc, curr) => acc + curr.ltv, 0);
+  const activeThisMonth = specialists.filter(
+    (s) =>
+      s.lastBookingDate &&
+      new Date(s.lastBookingDate).getMonth() === new Date().getMonth(),
+  ).length;
+
+  const filteredSpecialists = specialists.filter((s) => {
     const matchesSearch =
-      s.full_name?.toLowerCase().includes(search.toLowerCase()) ||
-      s.council_number?.includes(search) ||
-      s.phone?.includes(search);
-
-    const matchesSpecialty =
-      specialtyFilter === "all" ? true : s.specialty === specialtyFilter;
-
-    return matchesSearch && matchesSpecialty;
+      s.full_name.toLowerCase().includes(search.toLowerCase()) ||
+      s.council_number.includes(search) ||
+      s.email.toLowerCase().includes(search.toLowerCase());
+    const matchesCouncil =
+      councilFilter === "all" ? true : s.council === councilFilter;
+    return matchesSearch && matchesCouncil;
   });
 
-  // Métricas inteligentes para o topo do painel
-  const metrics = useMemo(() => {
-    const total = specialists.length;
-    // Consideramos pendente quem tem conselho cadastrado mas não foi validado (exemplo de regra de negócio)
-    const pending = specialists.filter((s: any) => !s.asaas_customer_id).length;
-    const verified = total - pending;
-    return { total, pending, verified };
-  }, [specialists]);
+  const getTierBadge = (tier: string) => {
+    switch (tier) {
+      case "Black":
+        return (
+          <Badge className="bg-slate-900 text-white border-0">
+            <Award className="w-3 h-3 mr-1 text-yellow-500" /> Black
+          </Badge>
+        );
+      case "Gold":
+        return (
+          <Badge className="bg-amber-100 text-amber-700 border-0">
+            <Award className="w-3 h-3 mr-1" /> Gold
+          </Badge>
+        );
+      case "Silver":
+        return (
+          <Badge className="bg-slate-200 text-slate-700 border-0">
+            <Award className="w-3 h-3 mr-1" /> Silver
+          </Badge>
+        );
+      default:
+        return (
+          <Badge className="bg-blue-50 text-blue-700 border-0">Start</Badge>
+        );
+    }
+  };
 
-  if (loading) {
+  if (loading)
     return (
-      <div className="flex justify-center items-center py-24">
-        <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+      <div className="flex justify-center items-center py-32">
+        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+      </div>
+    );
+
+  // ========================================================
+  // RENDERIZAÇÃO: DOSSIÊ DO PERFIL (TELA CHEIA)
+  // ========================================================
+  if (selectedProfile) {
+    return (
+      <div className="absolute inset-0 bg-slate-50 z-20 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-y-auto">
+        <div className="bg-white border-b border-slate-200 px-8 py-5 flex items-center justify-between sticky top-0 z-10 shadow-sm">
+          <div className="flex items-center gap-6">
+            <button
+              onClick={() => setSelectedProfile(null)}
+              className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-500"
+            >
+              <ChevronLeft className="w-6 h-6" />
+            </button>
+            <div>
+              <div className="flex items-center gap-3">
+                <h2 className="text-2xl font-black text-slate-900 leading-none">
+                  Dossiê do Especialista
+                </h2>
+                {selectedProfile.status === "active" ? (
+                  <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold uppercase tracking-wider text-[10px]">
+                    <CheckCircle2 className="w-3 h-3 mr-1" /> Ativo
+                  </Badge>
+                ) : (
+                  <Badge className="bg-red-100 text-red-800 border-0 font-bold uppercase tracking-wider text-[10px]">
+                    <Ban className="w-3 h-3 mr-1" /> Bloqueado
+                  </Badge>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              className="border-slate-200 text-red-600 hover:bg-red-50 hover:text-red-700 font-bold"
+            >
+              <Ban className="w-4 h-4 mr-2" /> Suspender
+            </Button>
+            <Button className="bg-slate-900 hover:bg-slate-800 text-white font-bold">
+              <Mail className="w-4 h-4 mr-2" /> Contatar
+            </Button>
+          </div>
+        </div>
+
+        <div className="p-8 max-w-6xl mx-auto w-full space-y-6">
+          <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm flex flex-col md:flex-row items-center md:items-start gap-8 relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-64 h-64 bg-[#f05e23]/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
+
+            <div className="w-32 h-32 rounded-full bg-slate-100 border-4 border-white shadow-lg overflow-hidden shrink-0">
+              <img
+                src={selectedProfile.avatar_url || "/placeholder.jpg"}
+                alt={selectedProfile.full_name}
+                className="w-full h-full object-cover"
+              />
+            </div>
+
+            <div className="flex-1 text-center md:text-left z-10">
+              <div className="flex flex-col md:flex-row md:items-center gap-4 mb-2">
+                <h1 className="text-3xl font-black text-slate-900">
+                  {selectedProfile.full_name}
+                </h1>
+                <div className="flex items-center justify-center md:justify-start gap-2">
+                  {getTierBadge(selectedProfile.tier)}
+                  <Badge
+                    variant="outline"
+                    className="text-slate-600 border-slate-200"
+                  >
+                    {selectedProfile.council} {selectedProfile.council_number}
+                  </Badge>
+                </div>
+              </div>
+              <p className="text-lg font-bold text-slate-500 mb-6">
+                {selectedProfile.specialty}
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="flex items-center justify-center md:justify-start gap-3 text-sm font-medium text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <Mail className="w-4 h-4 text-[#f05e23]" />{" "}
+                  {selectedProfile.email}
+                </div>
+                <div className="flex items-center justify-center md:justify-start gap-3 text-sm font-medium text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <Phone className="w-4 h-4 text-[#f05e23]" />{" "}
+                  {selectedProfile.phone}
+                </div>
+                <div className="flex items-center justify-center md:justify-start gap-3 text-sm font-medium text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <MapPin className="w-4 h-4 text-[#f05e23]" />{" "}
+                  {selectedProfile.city} - {selectedProfile.state}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* CARTEIRA E PLANO DO USUÁRIO */}
+            <div className="bg-[#f05e23] rounded-3xl p-6 text-white shadow-lg relative overflow-hidden group col-span-1 md:col-span-2">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl transition-transform group-hover:scale-150"></div>
+              <div className="relative z-10 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6">
+                <div>
+                  <p className="text-xs font-bold text-white/70 uppercase tracking-wider mb-2 flex items-center gap-2">
+                    <CreditCard className="w-4 h-4" /> Saldo na Carteira
+                  </p>
+                  <h3 className="text-4xl font-black mb-1">
+                    <span className="text-xl font-bold mr-1">R$</span>
+                    {selectedProfile.walletBalance.toLocaleString("pt-BR", {
+                      minimumFractionDigits: 2,
+                    })}
+                  </h3>
+                  <div className="flex items-center gap-2 mt-3">
+                    <Badge className="bg-white/20 hover:bg-white/30 text-white border-0">
+                      {selectedProfile.plan}
+                    </Badge>
+                    <span className="text-xs font-medium text-white/80">
+                      Plano Atual
+                    </span>
+                  </div>
+                </div>
+
+                <div className="w-full sm:w-auto">
+                  <Button
+                    onClick={() => setCreditModalOpen(true)}
+                    className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white font-bold h-12 px-6 rounded-xl shadow-md border border-slate-700"
+                  >
+                    <PlusCircle className="w-4 h-4 mr-2" /> Injetar Créditos
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                <Wallet className="w-4 h-4" /> LTV (Gasto Total)
+              </p>
+              <h3 className="text-3xl font-black text-slate-900 mb-1">
+                <span className="text-base text-emerald-500 font-bold mr-1">
+                  R$
+                </span>
+                {selectedProfile.ltv.toLocaleString("pt-BR", {
+                  minimumFractionDigits: 2,
+                })}
+              </h3>
+              <p className="text-sm font-medium text-slate-500 mt-2">
+                {selectedProfile.bookingsCount} locações concluídas
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm">
+            <h3 className="text-xl font-black text-slate-900 mb-6 flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-[#f05e23]" /> Últimas Locações
+            </h3>
+
+            {profileLoading ? (
+              <div className="flex justify-center py-10">
+                <Loader2 className="w-6 h-6 animate-spin text-[#f05e23]" />
+              </div>
+            ) : profileBookings.length === 0 ? (
+              <div className="text-center py-10 bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
+                <CalendarIcon className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                <p className="text-slate-500 font-medium">
+                  Nenhum histórico de reservas encontrado.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {profileBookings.map((b) => (
+                  <div
+                    key={b.id}
+                    className="flex items-center justify-between p-4 rounded-2xl border border-slate-100 hover:border-slate-200 hover:bg-slate-50 transition-colors"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-xl bg-slate-200 overflow-hidden shrink-0">
+                        <img
+                          src={b.rooms?.image_url || "/placeholder.jpg"}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <div>
+                        <p className="font-bold text-slate-900">
+                          {b.rooms?.name || "Sala Removida"}
+                        </p>
+                        <p className="text-xs font-bold text-slate-500 mt-0.5">
+                          {format(
+                            parseISO(b.start_time),
+                            "dd 'de' MMM, HH:mm",
+                            { locale: ptBR },
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-black text-emerald-600 mb-1">
+                        R${" "}
+                        {(b.total_cost * 45).toLocaleString("pt-BR", {
+                          minimumFractionDigits: 2,
+                        })}
+                      </p>
+                      <Badge variant="outline" className="text-[10px]">
+                        {b.status}
+                      </Badge>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* MODAL DE ADICIONAR CRÉDITOS */}
+        {creditModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm px-4">
+            <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 w-full max-w-md animate-in zoom-in-95">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center text-[#f05e23]">
+                  <CreditCard className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-black text-slate-900">
+                    Injetar Créditos
+                  </h3>
+                  <p className="text-sm font-medium text-slate-500">
+                    Adicionar saldo à carteira do profissional.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-4 mb-6">
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                  <p className="text-xs font-bold text-slate-500 uppercase">
+                    Especialista
+                  </p>
+                  <p className="font-bold text-slate-900">
+                    {selectedProfile.full_name}
+                  </p>
+                </div>
+                <div>
+                  <label className="text-sm font-bold text-slate-700 mb-2 block">
+                    Valor da Recarga (R$)
+                  </label>
+                  <Input
+                    type="number"
+                    placeholder="Ex: 150.00"
+                    value={creditAmount}
+                    onChange={(e) => setCreditAmount(e.target.value)}
+                    className="h-14 font-black text-lg bg-slate-50 border-slate-200"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => setCreditModalOpen(false)}
+                  className="flex-1 h-12 font-bold border-slate-200 text-slate-600"
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  disabled={!creditAmount || actionLoading}
+                  onClick={handleAddCredits}
+                  className="flex-1 h-12 bg-[#f05e23] hover:bg-[#d6521e] text-white font-bold shadow-lg"
+                >
+                  {actionLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    "Confirmar Recarga"
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
+  // ========================================================
+  // RENDERIZAÇÃO: LISTAGEM PADRÃO (A TELA PRINCIPAL DA ABA)
+  // ========================================================
   return (
-    <div className="space-y-8 max-w-7xl mx-auto pb-12 animate-in fade-in duration-300">
-      {/* CARD DE MÉTRICAS OPERACIONAIS */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center text-slate-700">
-            <Award className="w-6 h-6" />
+    <div className="p-4 lg:p-8 animate-in fade-in duration-500 w-full pb-32 font-sans">
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
+        <div>
+          <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-2">
+            <Stethoscope className="w-8 h-8 text-[#f05e23]" />
+            Especialistas (Profissionais)
+          </h1>
+          <p className="text-sm text-slate-500 font-medium mt-1">
+            Gestão da base de usuários, planos, LTV e carteira virtual.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
+          <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 shrink-0">
+            <Users className="w-6 h-6" />
           </div>
           <div>
-            <p className="text-sm font-bold text-slate-500 uppercase tracking-wider">
-              Total de Especialistas
+            <p className="text-xs font-bold text-slate-400 uppercase">
+              Total Cadastrados
             </p>
-            <h3 className="text-2xl font-black text-slate-900 mt-0.5">
-              {metrics.total}
+            <h3 className="text-2xl font-black text-slate-900">
+              {specialists.length}
             </h3>
           </div>
         </div>
-
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600">
-            <CheckCircle2 className="w-6 h-6" />
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
+          <div className="w-12 h-12 rounded-full bg-emerald-50 flex items-center justify-center text-emerald-600 shrink-0">
+            <TrendingUp className="w-6 h-6" />
           </div>
           <div>
-            <p className="text-sm font-bold text-slate-500 uppercase tracking-wider">
-              Contas Integradas (Asaas)
+            <p className="text-xs font-bold text-slate-400 uppercase">
+              Ativos (Este Mês)
             </p>
-            <h3 className="text-2xl font-black text-emerald-600 mt-0.5">
-              {metrics.verified}
+            <h3 className="text-2xl font-black text-slate-900">
+              {activeThisMonth}
             </h3>
           </div>
         </div>
-
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600">
-            <AlertTriangle className="w-6 h-6" />
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
+          <div className="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center text-[#f05e23] shrink-0">
+            <Wallet className="w-6 h-6" />
           </div>
           <div>
-            <p className="text-sm font-bold text-slate-500 uppercase tracking-wider">
-              Aguardando Integração
+            <p className="text-xs font-bold text-slate-400 uppercase">
+              LTV Global (Base)
             </p>
-            <h3 className="text-2xl font-black text-amber-600 mt-0.5">
-              {metrics.pending}
+            <h3 className="text-2xl font-black text-slate-900">
+              R${" "}
+              {totalLTV >= 1000 ? (totalLTV / 1000).toFixed(1) + "k" : totalLTV}
             </h3>
           </div>
         </div>
       </div>
 
-      {/* BARRA DE FILTROS E PESQUISA */}
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h3 className="text-lg font-black text-slate-900">
-              Profissionais da Saúde
-            </h3>
-            <p className="text-xs font-medium text-slate-500">
-              Monitore cadastros, conselhos regionais e dados de faturamento
-            </p>
+        <div className="p-4 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-50/50">
+          <div className="flex items-center gap-3 w-full md:w-auto">
+            <select
+              value={councilFilter}
+              onChange={(e) => setCouncilFilter(e.target.value)}
+              className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none min-w-[160px]"
+            >
+              <option value="all">Todos os Conselhos</option>
+              <option value="CRM">CRM (Medicina)</option>
+              <option value="CRP">CRP (Psicologia)</option>
+              <option value="CRO">CRO (Odontologia)</option>
+              <option value="CREFITO">CREFITO (Fisio)</option>
+            </select>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 h-10">
-              <Filter className="w-4 h-4 text-slate-400" />
-              <select
-                value={specialtyFilter}
-                onChange={(e) => setSpecialtyFilter(e.target.value)}
-                className="bg-transparent text-sm font-bold text-slate-700 outline-none cursor-pointer"
-              >
-                <option value="all">Todas as Especialidades</option>
-                {uniqueSpecialties
-                  .filter((s: string) => s !== "all")
-                  .map((spec: string) => (
-                    <option key={spec} value={spec}>
-                      {spec}
-                    </option>
-                  ))}
-              </select>
-            </div>
-
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-              <Input
-                placeholder="Buscar por nome, conselho..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="h-10 pl-9 w-64 rounded-xl border-slate-200 bg-slate-50 font-medium focus-visible:ring-[#f05e23]/20"
-              />
-            </div>
+          <div className="relative w-full md:w-96">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <Input
+              placeholder="Buscar por nome, email ou conselho..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="h-10 pl-9 rounded-xl border-slate-200 bg-white font-medium w-full"
+            />
           </div>
         </div>
 
-        {/* TABELA DE DADOS */}
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm whitespace-nowrap">
-            <thead className="bg-slate-50 text-slate-500 font-bold text-[11px] uppercase tracking-wider">
+            <thead className="bg-white text-slate-400 font-bold text-[10px] uppercase tracking-wider border-b border-slate-100">
               <tr>
-                <th className="px-6 py-4">Nome do Especialista</th>
-                <th className="px-6 py-4">Conselho / Registro</th>
-                <th className="px-6 py-4">Contato</th>
-                <th className="px-6 py-4">ID Asaas</th>
-                <th className="px-6 py-4 text-right">Ações</th>
+                <th className="px-6 py-4">Profissional & Contato</th>
+                <th className="px-6 py-4">Registro & Categoria</th>
+                <th className="px-6 py-4">Plano & Carteira</th>
+                <th className="px-6 py-4 text-center">Nível (Tier)</th>
+                <th className="px-6 py-4 text-right">LTV (Gerado)</th>
+                <th className="px-6 py-4 text-center">Ações</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filteredSpecialists.map((spec: any) => (
-                <tr
-                  key={spec.id}
-                  className="hover:bg-slate-50/50 transition-colors group"
-                >
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="h-9 w-9 rounded-full bg-slate-900 text-white font-black text-xs flex items-center justify-center">
-                        {spec.full_name
-                          ? spec.full_name.substring(0, 2).toUpperCase()
-                          : "DR"}
-                      </div>
-                      <div>
-                        <p className="font-bold text-slate-900">
-                          {spec.full_name || "Sem nome cadastrado"}
-                        </p>
-                        <p className="text-[11px] font-semibold text-[#f05e23]">
-                          {spec.specialty || "Clínica Geral"}
-                        </p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-1.5">
-                      <FileText className="w-4 h-4 text-slate-400" />
-                      <span className="font-bold text-slate-700 uppercase">
-                        {spec.council || "CRM"}
-                      </span>
-                      <span className="text-slate-500 font-medium">
-                        nº {spec.council_number || "---"}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex flex-col gap-0.5 text-xs font-semibold text-slate-600">
-                      <div className="flex items-center gap-1">
-                        <Phone className="w-3 h-3 text-slate-400" />
-                        <span>{spec.phone || "Sem telefone"}</span>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    {spec.asaas_customer_id ? (
-                      <Badge className="bg-blue-50 text-blue-700 hover:bg-blue-50 border-0 font-bold font-mono text-[11px]">
-                        {spec.asaas_customer_id}
-                      </Badge>
-                    ) : (
-                      <Badge className="bg-amber-50 text-amber-700 hover:bg-amber-50 border-0 font-bold">
-                        Pendente
-                      </Badge>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      title="Auditar Carteira / Transações"
-                      className="h-8 w-8 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg"
-                    >
-                      <Coins className="w-4 h-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      title="Visualizar Cadastro Completo"
-                      className="h-8 w-8 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"
-                    >
-                      <UserCheck className="w-4 h-4" />
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-              {filteredSpecialists.length === 0 && (
+            <tbody className="divide-y divide-slate-50 bg-white">
+              {filteredSpecialists.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={5}
-                    className="px-6 py-12 text-center text-slate-400 font-medium"
+                    colSpan={6}
+                    className="px-6 py-12 text-center text-slate-500 font-medium"
                   >
-                    Nenhum especialista encontrado com os filtros atuais.
+                    Nenhum profissional encontrado com os filtros atuais.
                   </td>
                 </tr>
+              ) : (
+                filteredSpecialists.map((spec) => (
+                  <tr
+                    key={spec.id}
+                    className="hover:bg-slate-50/80 transition-colors group"
+                  >
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-slate-200 overflow-hidden border border-slate-200 shrink-0">
+                          <img
+                            src={spec.avatar_url || "/placeholder.jpg"}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <div>
+                          <p className="font-black text-slate-900">
+                            {spec.full_name}
+                          </p>
+                          <p className="text-[10px] font-bold text-slate-500 mt-0.5">
+                            {spec.email}
+                          </p>
+                          <p className="text-[10px] font-bold text-slate-400">
+                            {spec.phone}
+                          </p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <p className="font-bold text-slate-700">
+                        {spec.council} {spec.council_number}
+                      </p>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase mt-0.5">
+                        {spec.specialty}
+                      </p>
+                    </td>
+                    <td className="px-6 py-4">
+                      <p className="font-bold text-slate-900">{spec.plan}</p>
+                      <p className="text-[10px] font-bold text-emerald-600 mt-0.5">
+                        Saldo: R${" "}
+                        {spec.walletBalance.toLocaleString("pt-BR", {
+                          minimumFractionDigits: 2,
+                        })}
+                      </p>
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                      {getTierBadge(spec.tier)}
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <p className="font-black text-slate-900">
+                        R${" "}
+                        {spec.ltv.toLocaleString("pt-BR", {
+                          minimumFractionDigits: 2,
+                        })}
+                      </p>
+                      <p className="text-[10px] font-bold text-slate-400 mt-0.5">
+                        {spec.bookingsCount} locações
+                      </p>
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                      <Button
+                        onClick={() => handleOpenProfile(spec)}
+                        variant="ghost"
+                        className="h-8 bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900 font-bold px-3 rounded-lg"
+                      >
+                        Visualizar
+                      </Button>
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>

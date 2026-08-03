@@ -4,12 +4,13 @@ import { useState, useEffect } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { Search, Heart, Calendar, MessageSquare, User } from "lucide-react";
 
-// Importando os componentes das abas
+// Importando os componentes das abas e complementos
 import { SearchTab } from "@/components/search-tab";
 import { FavoritesTab } from "@/components/favorites-tab";
 import { BookingsTab } from "@/components/bookings-tab";
 import { ChatTab } from "@/components/chat-tab";
 import { ProfileTab } from "@/components/profile-tab";
+import { NotificationBell } from "@/components/notification-bell";
 
 // Importando a tela de detalhes e o modal de avaliação
 import { RoomDetail } from "@/components/room-detail";
@@ -21,10 +22,7 @@ export default function DashboardPage() {
   const supabase = createClient();
   const [activeTab, setActiveTab] = useState<TabType>("search");
 
-  // Controle para abrir a tela de detalhes de uma sala sobrepondo o dashboard
   const [selectedRoom, setSelectedRoom] = useState<any | null>(null);
-
-  // Controle do "Efeito Uber" - A reserva que precisa ser avaliada
   const [pendingReviewBooking, setPendingReviewBooking] = useState<any | null>(
     null,
   );
@@ -37,18 +35,9 @@ export default function DashboardPage() {
         } = await supabase.auth.getUser();
         if (!user) return;
 
-        // 1. Busca as últimas reservas do usuário com status 'completed'
         const { data: bookings, error: bookingsError } = await supabase
           .from("bookings")
-          .select(
-            `
-            id, 
-            room_id, 
-            end_time,
-            status,
-            rooms ( name )
-          `,
-          )
+          .select(`id, room_id, end_time, status, rooms ( name )`)
           .eq("user_id", user.id)
           .eq("status", "completed")
           .order("end_time", { ascending: false })
@@ -57,7 +46,6 @@ export default function DashboardPage() {
         if (bookingsError) throw bookingsError;
 
         if (bookings && bookings.length > 0) {
-          // 2. Para cada reserva finalizada, checamos se já existe um review
           for (const booking of bookings) {
             const { data: reviewData } = await supabase
               .from("reviews")
@@ -65,7 +53,6 @@ export default function DashboardPage() {
               .eq("booking_id", booking.id)
               .maybeSingle();
 
-            // Se NÃO encontrar um review para essa reserva, mostra o modal
             if (!reviewData) {
               setPendingReviewBooking(booking);
               break;
@@ -80,7 +67,6 @@ export default function DashboardPage() {
     checkForPendingReviews();
   }, [supabase]);
 
-  // Função para renderizar a aba ativa
   const renderTab = () => {
     switch (activeTab) {
       case "search":
@@ -88,7 +74,12 @@ export default function DashboardPage() {
       case "favorites":
         return <FavoritesTab onOpenRoom={setSelectedRoom} />;
       case "bookings":
-        return <BookingsTab />;
+        return (
+          <BookingsTab
+            onNavigateToSearch={() => setActiveTab("search")}
+            onNavigateToChat={() => setActiveTab("chat")}
+          />
+        );
       case "chat":
         return <ChatTab />;
       case "profile":
@@ -100,6 +91,15 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 relative flex">
+      {/* ========================================== */}
+      {/* SINO FLUTUANTE (Agora no canto direito sem quebrar o layout) */}
+      {/* ========================================== */}
+      {!selectedRoom && (
+        <div className="absolute top-6 right-6 md:top-8 md:right-8 z-50">
+          <NotificationBell />
+        </div>
+      )}
+
       {/* 1. Navegação Desktop (Sidebar Lateral Fixa) */}
       {!selectedRoom && (
         <aside className="hidden md:flex flex-col fixed top-0 left-0 w-64 h-screen bg-white border-r border-slate-200 z-40 py-8 px-4 shadow-[10px_0_40px_-15px_rgba(0,0,0,0.05)]">
@@ -149,9 +149,9 @@ export default function DashboardPage() {
 
       {/* CONTEÚDO PRINCIPAL */}
       <main
-        className={`flex-1 h-full min-h-screen ${!selectedRoom ? "md:pl-64" : ""}`}
+        className={`flex-1 h-full min-h-screen flex flex-col ${!selectedRoom ? "md:pl-64" : ""}`}
       >
-        {renderTab()}
+        <div className="flex-1 w-full">{renderTab()}</div>
       </main>
 
       {/* 2. Barra de Navegação Inferior (Mobile) */}

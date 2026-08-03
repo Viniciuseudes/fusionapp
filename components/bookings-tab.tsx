@@ -45,16 +45,20 @@ interface Booking {
     name: string;
     image_url: string;
     address_details: any;
+    host_id: string;
     profiles?: { full_name: string; phone: string };
   };
 }
 
-// Para que o botão "Explorar Espaços" funcione caso seja renderizado dentro de outra página
 interface BookingsTabProps {
   onNavigateToSearch?: () => void;
+  onNavigateToChat?: () => void;
 }
 
-export function BookingsTab({ onNavigateToSearch }: BookingsTabProps) {
+export function BookingsTab({
+  onNavigateToSearch,
+  onNavigateToChat,
+}: BookingsTabProps) {
   const supabase = createClient();
   const { toast } = useToast();
   const router = useRouter();
@@ -64,7 +68,6 @@ export function BookingsTab({ onNavigateToSearch }: BookingsTabProps) {
   const [activeTab, setActiveTab] = useState<"upcoming" | "past">("upcoming");
   const [bookings, setBookings] = useState<Booking[]>([]);
 
-  // Estado do Modal de Cancelamento
   const [cancelModal, setCancelModal] = useState<{
     isOpen: boolean;
     booking: Booking | null;
@@ -86,7 +89,7 @@ export function BookingsTab({ onNavigateToSearch }: BookingsTabProps) {
         .select(
           `
           id, room_id, start_time, end_time, status, total_cost,
-          rooms ( id, name, image_url, address_details, profiles (full_name, phone) )
+          rooms ( id, name, image_url, address_details, host_id, profiles (full_name, phone) )
         `,
         )
         .eq("user_id", user.id)
@@ -126,9 +129,66 @@ export function BookingsTab({ onNavigateToSearch }: BookingsTabProps) {
   const displayBookings =
     activeTab === "upcoming" ? upcomingBookings : pastBookings;
 
-  // ==========================================
-  // REGRA DE NEGÓCIO: CANCELAMENTO (24 HORAS)
-  // ==========================================
+  const handleOpenChat = async (booking: Booking) => {
+    setActionLoading(true);
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("Usuário não autenticado.");
+
+      const { data: existingChat, error: searchError } = await supabase
+        .from("chats")
+        .select("id")
+        .eq("booking_id", booking.id)
+        .maybeSingle();
+
+      // Se a tabela não existir, o erro vaza aqui
+      if (searchError && Object.keys(searchError).length > 0) throw searchError;
+
+      if (!existingChat) {
+        const { error: insertError } = await supabase.from("chats").insert({
+          type: "booking",
+          status: "open",
+          room_id: booking.room_id,
+          guest_id: user.id,
+          host_id: booking.rooms.host_id,
+          booking_id: booking.id,
+        });
+
+        // Captura explícita de erro de inserção
+        if (insertError) {
+          console.error("Erro detalhado do Supabase no Insert:", insertError);
+          throw insertError;
+        }
+      }
+
+      if (onNavigateToChat) {
+        onNavigateToChat();
+      } else {
+        toast({
+          title: "Chat aberto!",
+          description: "Acesse a aba 'Mensagens' para conversar.",
+        });
+      }
+    } catch (err: any) {
+      console.error("Erro mapeado ao criar chat:", err);
+      // Blindagem: se o erro for vazio, avisa sobre as permissões
+      const errorMessage =
+        !err.message || Object.keys(err).length === 0
+          ? "As tabelas de chat não foram configuradas corretamente ou o RLS está bloqueando a criação."
+          : err.message;
+
+      toast({
+        variant: "destructive",
+        title: "Erro ao abrir chat",
+        description: errorMessage,
+      });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const handleConfirmCancel = async () => {
     const booking = cancelModal.booking;
     if (!booking) return;
@@ -146,7 +206,6 @@ export function BookingsTab({ onNavigateToSearch }: BookingsTabProps) {
       );
       const isRefundable = hoursUntilBooking >= 24;
 
-      // 1. Atualiza o status da reserva
       const { error: updateError } = await supabase
         .from("bookings")
         .update({ status: "cancelled" })
@@ -154,13 +213,12 @@ export function BookingsTab({ onNavigateToSearch }: BookingsTabProps) {
 
       if (updateError) throw updateError;
 
-      // 2. Processa o estorno na carteira se for elegível (>= 24h)
       if (isRefundable) {
         const { error: refundError } = await supabase
           .from("wallet_transactions")
           .insert({
             user_id: user.id,
-            amount: booking.total_cost, // Devolve as horas que foram cobradas
+            amount: booking.total_cost,
             type: "refund",
             description: `Estorno (Cancelamento antecipado): ${booking.rooms.name}`,
           });
@@ -177,7 +235,7 @@ export function BookingsTab({ onNavigateToSearch }: BookingsTabProps) {
       });
 
       setCancelModal({ isOpen: false, booking: null });
-      fetchBookings(); // Atualiza a lista
+      fetchBookings();
     } catch (err: any) {
       toast({
         variant: "destructive",
@@ -430,16 +488,17 @@ export function BookingsTab({ onNavigateToSearch }: BookingsTabProps) {
                 {activeTab === "upcoming" && booking.status !== "cancelled" && (
                   <div className="p-4 md:p-6 bg-zinc-50 md:bg-transparent border-t md:border-t-0 md:border-l border-zinc-100 flex flex-row md:flex-col items-center justify-center md:justify-start gap-2 md:w-44 shrink-0">
                     <Button
-                      onClick={() =>
-                        window.open(
-                          `https://wa.me/55${booking.rooms.profiles?.phone || ""}?text=Olá! Sobre minha reserva na Fusion Clinic...`,
-                          "_blank",
-                        )
-                      }
+                      onClick={() => handleOpenChat(booking)}
+                      disabled={actionLoading}
                       variant="outline"
                       className="flex-1 md:w-full h-10 rounded-lg text-xs font-bold border-zinc-200 text-zinc-700 hover:bg-zinc-100"
                     >
-                      <MessageCircle className="w-3.5 h-3.5 mr-1.5" /> Falar
+                      {actionLoading ? (
+                        <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                      ) : (
+                        <MessageCircle className="w-3.5 h-3.5 mr-1.5" />
+                      )}
+                      Falar
                     </Button>
                     <Button
                       onClick={handleRescheduleClick}
