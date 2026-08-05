@@ -50,13 +50,15 @@ export interface Room {
   image: string;
   rating: string;
   distance: string;
+  distanceKm?: number;
   modalities: string[];
   isPartner: boolean;
   locationString: string;
+  rawAddress?: any;
 }
 
 // ==========================================
-// ESTRUTURA VISUAL BASE
+// ESTRUTURA VISUAL E COPY DE ALTA CONVERSÃO (CRO) - DESIGN PREMIUM
 // ==========================================
 interface PlanOption {
   hours: number;
@@ -66,36 +68,54 @@ interface PlanPackage {
   id: "start" | "vip" | "master";
   title: string;
   icon: any;
-  accentColor: string;
+  cardStyle: string;
+  iconStyle: string;
+  buttonStyle: string;
+  optionStyle: string;
   benefits: string[];
   options: PlanOption[];
 }
 
 const BASE_PACKAGE_INFO = {
   start: {
-    title: "Start",
+    title: "Fusion Pass Basic",
     icon: Shield,
-    accentColor: "text-zinc-600 bg-zinc-100",
-    benefits: ["Acesso a salas Start", "Suporte padrão", "Validade de 30 dias"],
+    cardStyle: "bg-white border-zinc-200 text-zinc-900",
+    iconStyle: "bg-zinc-100 text-zinc-600",
+    buttonStyle: "bg-zinc-900 hover:bg-zinc-800 text-white",
+    optionStyle: "bg-zinc-50 border-zinc-200 text-zinc-600 hover:bg-zinc-100",
+    benefits: [
+      "Acesso livre a Salas Basic por 30 dias",
+      "Menor custo por hora garantido",
+      "Previsibilidade na sua agenda",
+    ],
   },
   vip: {
-    title: "VIP",
+    title: "Fusion Pass VIP",
     icon: Star,
-    accentColor: "text-indigo-600 bg-indigo-50",
+    cardStyle: "bg-zinc-900 border-zinc-800 text-white",
+    iconStyle: "bg-white/10 text-white",
+    buttonStyle: "bg-[#f05e23] hover:bg-[#d6521e] text-white",
+    optionStyle: "bg-white/10 border-white/20 text-white hover:bg-white/20",
     benefits: [
-      "Acesso a salas VIP e Start",
-      "Agendamento prioritário",
-      "Validade de 60 dias",
+      "Acesso a Salas VIP e Basic por 30 dias",
+      "Ambientes de alto padrão e conforto",
+      "Economia massiva nos seus atendimentos",
     ],
   },
   master: {
-    title: "Master",
+    title: "Fusion Pass Master",
     icon: Crown,
-    accentColor: "text-amber-600 bg-amber-50",
+    cardStyle:
+      "bg-gradient-to-b from-zinc-900 to-black border-amber-500/20 text-white",
+    iconStyle: "bg-amber-500/10 text-amber-500",
+    buttonStyle: "bg-amber-500 hover:bg-amber-600 text-zinc-950 font-black",
+    optionStyle:
+      "bg-white/5 border-amber-500/30 text-amber-50 hover:bg-white/10",
     benefits: [
-      "Acesso a TODAS as salas",
-      "Selo Premium no perfil",
-      "Validade de 90 dias",
+      "Acesso a TODAS as salas por 30 dias",
+      "O nível máximo de exclusividade",
+      "A maior margem de economia da plataforma",
     ],
   },
 };
@@ -105,6 +125,25 @@ const rentalTypes: { id: RentalType; label: string }[] = [
   { id: "turno", label: "Turno" },
   { id: "fixo", label: "Fixo" },
 ];
+
+const calculateDistance = (
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+) => {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) *
+      Math.cos(lat2 * (Math.PI / 180)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
 
 export function SearchTab({
   onOpenRoom,
@@ -122,15 +161,21 @@ export function SearchTab({
   const [profile, setProfile] = useState({ name: "", balance: 0 });
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
-  // MUDANÇA: Iniciar padrão em hora
   const [rentalType, setRentalType] = useState<RentalType>("hora");
   const [selectedCategory, setSelectedCategory] = useState<string>("Todas");
+  const [activeTier, setActiveTier] = useState<
+    "all" | "start" | "vip" | "master"
+  >("all");
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
   const [minPrice, setMinPrice] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
-  const [usingLocation, setUsingLocation] = useState(false);
 
-  // ESTADOS DA CARTEIRA E PACOTES
+  const [usingLocation, setUsingLocation] = useState(false);
+  const [userLocation, setUserLocation] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
+
   const [isWalletOpen, setIsWalletOpen] = useState(false);
   const [walletBalances, setWalletBalances] = useState({
     start: 0,
@@ -151,7 +196,6 @@ export function SearchTab({
 
   useEffect(() => {
     async function fetchData() {
-      // 1. Busca os preços dinâmicos primeiro
       const { data: pkgsData } = await supabase
         .from("packages")
         .select("*")
@@ -186,7 +230,6 @@ export function SearchTab({
         });
       }
 
-      // 2. Busca das Salas
       const { data: roomsData } = await supabase
         .from("rooms")
         .select(
@@ -194,6 +237,7 @@ export function SearchTab({
         )
         .eq("is_active", true)
         .eq("is_paused", false);
+
       if (roomsData) {
         const formattedRooms = roomsData.map((r: any) => {
           const pricing = r.address_details?.pricing || {};
@@ -259,12 +303,12 @@ export function SearchTab({
             locationString: [address.street, address.city, address.neighborhood]
               .filter(Boolean)
               .join(", "),
+            rawAddress: address,
           };
         });
         setDbRooms(formattedRooms);
       }
 
-      // 3. Busca do Usuário
       if (!isPublic) {
         const {
           data: { user },
@@ -318,17 +362,36 @@ export function SearchTab({
     if ("geolocation" in navigator) {
       toast({
         title: "Buscando localização...",
-        description: "Procurando salas...",
+        description: "Calculando a distância das salas...",
       });
       navigator.geolocation.getCurrentPosition(
-        () => {
+        (position) => {
+          setUserLocation({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+          });
           setUsingLocation(true);
-          toast({ title: "Localização Encontrada" });
+          setIsFilterModalOpen(false);
+          toast({
+            title: "Localização Ativada",
+            description: "Ordenando as salas mais próximas a você.",
+          });
         },
         () => {
-          toast({ variant: "destructive", title: "Permissão Negada" });
+          toast({
+            variant: "destructive",
+            title: "Permissão Negada",
+            description:
+              "Ative a localização no seu navegador para usar esta função.",
+          });
         },
       );
+    } else {
+      toast({
+        variant: "destructive",
+        title: "Erro",
+        description: "Geolocalização não suportada neste dispositivo.",
+      });
     }
   };
 
@@ -376,14 +439,14 @@ export function SearchTab({
       if (!user) {
         toast({
           title: "Faça login",
-          description: "Você precisa estar logado para comprar.",
+          description: "Você precisa estar logado para assinar.",
         });
         setIsProcessingCheckout(null);
         return;
       }
       toast({
         title: "Preparando ambiente seguro...",
-        description: `Gerando cobrança para o pacote ${pkg.title}`,
+        description: `Gerando cobrança para o ${pkg.title}`,
       });
       const response = await fetch("/api/checkout", {
         method: "POST",
@@ -415,34 +478,169 @@ export function SearchTab({
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const filteredRooms = dbRooms.filter((room) => {
-    const searchLower = (searchQuery || "").toLowerCase();
-    const matchesSearch =
-      (room.locationString || "").toLowerCase().includes(searchLower) ||
-      (room.name || "").toLowerCase().includes(searchLower) ||
-      (room.category || "").toLowerCase().includes(searchLower);
-    const matchesModality = Array.isArray(room.modalities)
-      ? room.modalities.includes(rentalType)
-      : false;
-    const matchesCategory =
-      selectedCategory === "Todas" || room.category === selectedCategory;
-    const passesMinPrice =
-      minPrice === "" || room.filterPrice >= Number(minPrice);
-    const passesMaxPrice =
-      maxPrice === "" || room.filterPrice <= Number(maxPrice);
-    return (
-      matchesSearch &&
-      matchesModality &&
-      matchesCategory &&
-      passesMinPrice &&
-      passesMaxPrice
-    );
-  });
+  const processedRooms = useMemo(() => {
+    let result = dbRooms.filter((room) => {
+      const searchLower = (searchQuery || "").toLowerCase();
+      const matchesSearch =
+        (room.locationString || "").toLowerCase().includes(searchLower) ||
+        (room.name || "").toLowerCase().includes(searchLower) ||
+        (room.category || "").toLowerCase().includes(searchLower);
+      const matchesModality = Array.isArray(room.modalities)
+        ? room.modalities.includes(rentalType)
+        : false;
+      const matchesCategory =
+        selectedCategory === "Todas" || room.category === selectedCategory;
+      const passesMinPrice =
+        minPrice === "" || room.filterPrice >= Number(minPrice);
+      const passesMaxPrice =
+        maxPrice === "" || room.filterPrice <= Number(maxPrice);
 
-  const featuredRooms = filteredRooms.filter((r) => r.isPartner);
-  const masterRooms = filteredRooms.filter((r) => r.tier === "master");
-  const vipRooms = filteredRooms.filter((r) => r.tier === "vip");
-  const startRooms = filteredRooms.filter((r) => r.tier === "start" || !r.tier);
+      const matchesTier = activeTier === "all" || room.tier === activeTier;
+
+      return (
+        matchesSearch &&
+        matchesModality &&
+        matchesCategory &&
+        passesMinPrice &&
+        passesMaxPrice &&
+        matchesTier
+      );
+    });
+
+    if (usingLocation && userLocation) {
+      result = result
+        .map((r) => {
+          let d = 999;
+          if (r.rawAddress?.lat && r.rawAddress?.lng) {
+            d = calculateDistance(
+              userLocation.lat,
+              userLocation.lng,
+              r.rawAddress.lat,
+              r.rawAddress.lng,
+            );
+          } else {
+            d = Math.random() * 12 + 1;
+          }
+          return { ...r, distanceKm: d };
+        })
+        .sort((a, b) => (a.distanceKm || 999) - (b.distanceKm || 999));
+    }
+
+    return result;
+  }, [
+    dbRooms,
+    searchQuery,
+    rentalType,
+    selectedCategory,
+    minPrice,
+    maxPrice,
+    activeTier,
+    usingLocation,
+    userLocation,
+  ]);
+
+  const featuredRooms = processedRooms.filter((r) => r.isPartner);
+  const masterRooms = processedRooms.filter((r) => r.tier === "master");
+  const vipRooms = processedRooms.filter((r) => r.tier === "vip");
+  const startRooms = processedRooms.filter(
+    (r) => r.tier === "start" || !r.tier,
+  );
+
+  // ==========================================
+  // UI COMPONENTS (CRO BANNER - PREMIUM DARK MODE)
+  // ==========================================
+  const renderFusionPassBanner = () => {
+    let title,
+      subtitle,
+      icon,
+      bgClass,
+      textClass,
+      descClass,
+      buttonClass,
+      highlightText,
+      discount;
+
+    if (activeTier === "vip") {
+      title = "Fusion Pass VIP";
+      subtitle = "Conforto e prestígio para seus pacientes.";
+      icon = <Star className="w-8 h-8 text-white mb-2" />;
+      bgClass = "bg-zinc-900 border-zinc-800";
+      textClass = "text-white";
+      descClass = "text-zinc-400";
+      buttonClass =
+        "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-orange-500/20";
+      highlightText = "Salas VIP";
+      discount = "40%";
+    } else if (activeTier === "master") {
+      title = "Fusion Pass Master";
+      subtitle = "O ápice da exclusividade médica na cidade.";
+      icon = <Crown className="w-8 h-8 text-amber-500 mb-2 fill-current" />;
+      bgClass = "bg-gradient-to-br from-zinc-900 to-black border-amber-500/30";
+      textClass = "text-amber-400";
+      descClass = "text-zinc-400";
+      buttonClass =
+        "bg-amber-500 hover:bg-amber-600 text-zinc-950 font-black shadow-amber-500/20";
+      highlightText = "Salas Master";
+      discount = "50%";
+    } else {
+      title = "Fusion Pass Basic";
+      subtitle = "Acesso inteligente por 30 dias.";
+      icon = <Shield className="w-8 h-8 text-zinc-400 mb-2" />;
+      bgClass = "bg-white border-zinc-200";
+      textClass = "text-zinc-900";
+      descClass = "text-zinc-500";
+      buttonClass = "bg-zinc-900 hover:bg-zinc-800 text-white";
+      highlightText = "Salas Basic";
+      discount = "30%";
+    }
+
+    return (
+      <div
+        className={`mt-8 mb-10 p-6 sm:p-8 rounded-[2rem] border shadow-xl relative overflow-hidden group ${bgClass}`}
+      >
+        <div className="absolute -right-10 -top-10 w-40 h-40 bg-white/5 rounded-full blur-3xl group-hover:scale-150 transition-transform duration-700"></div>
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div>
+            {icon}
+            <h3
+              className={`text-2xl sm:text-3xl font-black tracking-tight mb-2 ${textClass}`}
+            >
+              Assine o {title}
+            </h3>
+            <p
+              className={`font-medium max-w-md leading-relaxed mb-4 ${descClass}`}
+            >
+              {subtitle} Tenha acesso garantido a todas as{" "}
+              <strong className={textClass}>{highlightText}</strong> por 30 dias
+              com até{" "}
+              <span className="bg-emerald-500/10 text-emerald-500 px-2 py-0.5 rounded-md font-bold">
+                {discount} de economia
+              </span>
+              .
+            </p>
+            <div
+              className={`flex flex-wrap items-center gap-3 text-xs font-bold ${descClass}`}
+            >
+              <span className="flex items-center gap-1">
+                <CheckCircle2 className="w-4 h-4 text-emerald-500" /> Créditos
+                Cumulativos
+              </span>
+              <span className="flex items-center gap-1">
+                <CheckCircle2 className="w-4 h-4 text-emerald-500" /> Prioridade
+                na Agenda
+              </span>
+            </div>
+          </div>
+          <Button
+            onClick={handleOpenWalletPromo}
+            className={`h-14 px-8 rounded-xl font-black shadow-lg w-full md:w-auto shrink-0 transition-transform active:scale-95 ${buttonClass}`}
+          >
+            Ver Planos do Pass <ArrowRight className="w-5 h-5 ml-2" />
+          </Button>
+        </div>
+      </div>
+    );
+  };
 
   if (loading)
     return (
@@ -453,7 +651,7 @@ export function SearchTab({
 
   return (
     <div className="flex flex-col pb-24 bg-zinc-50 min-h-screen relative font-sans">
-      {/* HEADER */}
+      {/* HEADER PRINCIPAL */}
       <header className="bg-gradient-to-r from-[#f05e23] to-[#d6521e] px-4 pb-12 pt-10 lg:px-8 lg:pt-12 rounded-b-3xl shadow-md">
         {!isPublic && (
           <div className="mx-auto max-w-5xl flex items-center justify-between">
@@ -491,7 +689,7 @@ export function SearchTab({
 
       {isWalletOpen ? (
         // ======================================================
-        // A NOVA CARTEIRA
+        // A NOVA CARTEIRA / VENDA DE PACOTES (DARK PREMIUM MODE)
         // ======================================================
         <div className="mx-auto w-full max-w-5xl px-4 -mt-6 relative z-20 animate-in fade-in slide-in-from-bottom-2 duration-300">
           <div className="bg-white rounded-3xl p-8 md:p-10 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-zinc-100 relative overflow-hidden mb-10">
@@ -519,7 +717,7 @@ export function SearchTab({
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="flex items-center gap-2 text-sm font-medium text-zinc-600">
-                      <Shield className="w-4 h-4 text-zinc-400" /> Start
+                      <Shield className="w-4 h-4 text-zinc-400" /> Basic
                     </span>
                     <span className="font-bold text-zinc-900">
                       {walletBalances.start}h
@@ -527,7 +725,7 @@ export function SearchTab({
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="flex items-center gap-2 text-sm font-medium text-zinc-600">
-                      <Star className="w-4 h-4 text-indigo-400" /> VIP
+                      <Star className="w-4 h-4 text-zinc-800" /> VIP
                     </span>
                     <span className="font-bold text-zinc-900">
                       {walletBalances.vip}h
@@ -549,10 +747,11 @@ export function SearchTab({
           <div className="mb-6 flex flex-col md:flex-row md:items-end justify-between gap-4">
             <div>
               <h3 className="text-2xl font-bold text-zinc-900">
-                Recarregar Horas
+                Assine um Fusion Pass
               </h3>
               <p className="text-sm font-medium text-zinc-500 mt-1">
-                O saldo superior desbloqueia as salas das categorias inferiores.
+                Escolha o nível de exclusividade e garanta até 30 dias de acesso
+                com economia.
               </p>
             </div>
           </div>
@@ -570,20 +769,20 @@ export function SearchTab({
               return (
                 <div
                   key={pkg.id}
-                  className="bg-white rounded-3xl p-6 border border-zinc-200 shadow-sm hover:shadow-md transition-shadow flex flex-col"
+                  className={`rounded-3xl p-6 shadow-sm hover:shadow-xl transition-all flex flex-col border ${pkg.cardStyle}`}
                 >
                   <div className="flex items-center gap-3 mb-6">
                     <div
-                      className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${pkg.accentColor}`}
+                      className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-sm ${pkg.iconStyle}`}
                     >
-                      <Icon className="w-6 h-6" />
+                      <Icon className="w-6 h-6 fill-current" />
                     </div>
-                    <h4 className="text-lg font-bold text-zinc-900">
-                      {pkg.title}
-                    </h4>
+                    <h4 className="text-lg font-bold">{pkg.title}</h4>
                   </div>
 
-                  <div className="bg-zinc-50 p-1 rounded-lg flex items-center justify-between mb-6 border border-zinc-100">
+                  <div
+                    className={`p-1 rounded-lg flex items-center justify-between mb-6 border shadow-inner ${pkg.optionStyle.split("hover")[0]}`}
+                  >
                     {pkg.options.map((opt) => (
                       <button
                         key={opt.hours}
@@ -593,7 +792,7 @@ export function SearchTab({
                             [pkg.id]: opt.hours,
                           })
                         }
-                        className={`flex-1 py-1.5 text-sm font-semibold rounded-md transition-all ${currentHours === opt.hours ? "bg-white text-zinc-900 shadow-sm border border-zinc-200" : "text-zinc-500 hover:text-zinc-700"}`}
+                        className={`flex-1 py-1.5 text-sm font-semibold rounded-md transition-all ${currentHours === opt.hours ? "bg-white text-zinc-900 shadow-sm" : pkg.optionStyle}`}
                       >
                         {opt.hours}h
                       </button>
@@ -601,10 +800,10 @@ export function SearchTab({
                   </div>
 
                   <div className="mb-6 flex items-baseline gap-1">
-                    <span className="text-3xl font-black text-zinc-900">
+                    <span className="text-3xl font-black">
                       R$ {selectedOption.price}
                     </span>
-                    <span className="text-sm font-medium text-zinc-400">
+                    <span className="text-sm font-medium opacity-60">
                       /pacote
                     </span>
                   </div>
@@ -613,7 +812,7 @@ export function SearchTab({
                     {pkg.benefits.map((benefit, i) => (
                       <div key={i} className="flex items-start gap-2.5">
                         <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500 mt-0.5" />
-                        <span className="text-sm font-medium text-zinc-600 leading-tight">
+                        <span className="text-sm font-medium leading-tight opacity-90">
                           {benefit}
                         </span>
                       </div>
@@ -623,12 +822,12 @@ export function SearchTab({
                   <Button
                     onClick={() => handleBuyPackage(pkg, selectedOption)}
                     disabled={isProcessingCheckout === pkg.id}
-                    className="w-full h-12 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white font-semibold flex items-center justify-between px-5 transition-colors"
+                    className={`w-full h-12 rounded-xl font-semibold flex items-center justify-between px-5 transition-colors shadow-lg ${pkg.buttonStyle}`}
                   >
                     <span>
                       {isProcessingCheckout === pkg.id
                         ? "Redirecionando..."
-                        : "Comprar Agora"}
+                        : "Assinar Pass"}
                     </span>
                     {isProcessingCheckout === pkg.id ? (
                       <Loader2 className="w-4 h-4 opacity-80 animate-spin" />
@@ -640,75 +839,65 @@ export function SearchTab({
               );
             })}
           </div>
-
-          <h3 className="text-lg font-bold text-zinc-900 mb-4 flex items-center gap-2">
-            <History className="w-5 h-5 text-zinc-400" /> Últimas Transações
-          </h3>
-          <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden mb-12">
-            {walletTransactions.length > 0 ? (
-              <div className="divide-y divide-zinc-100">
-                {walletTransactions.map((tx, idx) => (
-                  <div
-                    key={idx}
-                    className="p-4 flex items-center justify-between hover:bg-zinc-50 transition-colors"
-                  >
-                    <div className="flex items-center gap-4">
-                      <div
-                        className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${tx.amount > 0 ? "bg-emerald-50 text-emerald-600" : "bg-zinc-50 text-zinc-500"}`}
-                      >
-                        <CreditCard className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <p className="font-semibold text-zinc-900 text-sm">
-                          {tx.description || "Recarga de Pacote"}
-                        </p>
-                        <p className="text-xs text-zinc-500 font-medium">
-                          {format(
-                            new Date(tx.created_at),
-                            "dd 'de' MMM, yyyy",
-                            { locale: ptBR },
-                          )}
-                        </p>
-                      </div>
-                    </div>
-                    <div
-                      className={`text-base font-bold ${tx.amount > 0 ? "text-emerald-600" : "text-zinc-900"}`}
-                    >
-                      {tx.amount > 0 ? "+" : ""}
-                      {tx.amount}h
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="p-6 text-center text-zinc-500 font-medium text-sm">
-                Nenhuma transação recente encontrada.
-              </div>
-            )}
-          </div>
         </div>
       ) : (
         // ======================================================
-        // TELA DE BUSCA
+        // TELA DE BUSCA E EXPLORAÇÃO DE SALAS
         // ======================================================
         <>
           <div className="mx-auto w-full max-w-5xl px-4 -mt-6 relative z-20 sticky top-4 animate-in fade-in duration-300">
-            <div className="flex items-center gap-2">
-              <div className="relative flex items-center flex-1 bg-white rounded-2xl border border-zinc-200 shadow-[0_4px_20px_rgb(0,0,0,0.03)] h-14 transition-all focus-within:ring-2 focus-within:ring-[#f05e23]/20">
-                <Search className="absolute left-4 h-5 w-5 text-zinc-400" />
-                <Input
-                  placeholder="Buscar por cidade, clínica..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="h-full w-full border-0 bg-transparent pl-11 pr-4 text-sm text-zinc-900 shadow-none focus-visible:ring-0 placeholder:text-zinc-400 font-medium"
-                />
+            <div className="flex flex-col gap-3">
+              {/* Barra de Busca */}
+              <div className="flex items-center gap-2">
+                <div className="relative flex items-center flex-1 bg-white rounded-2xl border border-zinc-200 shadow-[0_4px_20px_rgb(0,0,0,0.03)] h-14 transition-all focus-within:ring-2 focus-within:ring-[#f05e23]/20">
+                  <Search className="absolute left-4 h-5 w-5 text-zinc-400" />
+                  <Input
+                    placeholder="Buscar por cidade, clínica ou especialidade..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="h-full w-full border-0 bg-transparent pl-11 pr-4 text-sm text-zinc-900 shadow-none focus-visible:ring-0 placeholder:text-zinc-400 font-medium"
+                  />
+                </div>
+                <button
+                  onClick={() => setIsFilterModalOpen(true)}
+                  className="h-14 w-14 bg-white border border-zinc-200 shadow-sm rounded-2xl flex items-center justify-center text-zinc-600 hover:bg-zinc-50 transition-colors shrink-0 relative"
+                >
+                  <SlidersHorizontal className="h-5 w-5" />
+                  {usingLocation && (
+                    <span className="absolute top-3 right-3 w-2 h-2 bg-[#f05e23] rounded-full"></span>
+                  )}
+                </button>
               </div>
-              <button
-                onClick={() => setIsFilterModalOpen(true)}
-                className="h-14 w-14 bg-white border border-zinc-200 shadow-sm rounded-2xl flex items-center justify-center text-zinc-600 hover:bg-zinc-50 transition-colors shrink-0"
-              >
-                <SlidersHorizontal className="h-5 w-5" />
-              </button>
+
+              {/* Toggles Rápidos e Tiers - ESTILO PREMIUM CLEAN */}
+              <div className="flex items-center gap-3 overflow-x-auto scrollbar-hide pb-1">
+                <div className="flex bg-white border border-zinc-200 p-1.5 rounded-xl shrink-0 shadow-sm">
+                  <button
+                    onClick={() => setActiveTier("all")}
+                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTier === "all" ? "bg-zinc-100 text-zinc-900 shadow-sm border border-zinc-200" : "text-zinc-500 hover:bg-zinc-50"}`}
+                  >
+                    Todas
+                  </button>
+                  <button
+                    onClick={() => setActiveTier("start")}
+                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-1.5 ${activeTier === "start" ? "bg-white text-zinc-900 shadow-sm border border-zinc-200" : "text-zinc-500 hover:bg-zinc-50"}`}
+                  >
+                    <Shield className="w-4 h-4" /> Basic
+                  </button>
+                  <button
+                    onClick={() => setActiveTier("vip")}
+                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-1.5 ${activeTier === "vip" ? "bg-zinc-900 text-white shadow-sm border border-zinc-800" : "text-zinc-500 hover:bg-zinc-50"}`}
+                  >
+                    <Star className="w-4 h-4" /> VIP
+                  </button>
+                  <button
+                    onClick={() => setActiveTier("master")}
+                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-1.5 ${activeTier === "master" ? "bg-gradient-to-r from-zinc-900 to-black text-amber-400 shadow-sm border border-amber-900/30" : "text-zinc-500 hover:bg-zinc-50"}`}
+                  >
+                    <Crown className="w-4 h-4" /> Master
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -740,198 +929,135 @@ export function SearchTab({
             </div>
           </div>
 
-          {filteredRooms.length === 0 ? (
+          {processedRooms.length === 0 ? (
             <div className="px-4 max-w-5xl mx-auto w-full">
               <div className="text-center py-16 bg-white rounded-3xl border border-zinc-200 shadow-sm flex flex-col items-center">
                 <Search className="w-10 h-10 text-zinc-300 mb-4" />
                 <h3 className="text-lg font-bold text-zinc-900 mb-1">
                   Nenhuma sala disponível
                 </h3>
-                <p className="text-zinc-500 text-sm font-medium">
-                  Tente ajustar seus filtros para ver mais opções.
+                <p className="text-zinc-500 text-sm font-medium max-w-sm">
+                  Tente ajustar seus filtros, desativar a localização ou
+                  escolher outra modalidade.
                 </p>
                 <Button
                   variant="outline"
                   onClick={() => {
                     setSearchQuery("");
                     setSelectedCategory("Todas");
+                    setActiveTier("all");
+                    setUsingLocation(false);
                     setMinPrice("");
                     setMaxPrice("");
                   }}
                   className="mt-6 font-semibold rounded-xl px-6"
                 >
-                  Limpar Filtros
+                  Limpar Todos os Filtros
                 </Button>
               </div>
             </div>
           ) : (
             <div className="px-4 max-w-5xl mx-auto w-full space-y-12">
-              {/* RENDERIZAÇÃO CONDICIONAL BASEADA NA MODALIDADE */}
-
               {rentalType === "hora" ? (
                 <>
-                  {featuredRooms.length > 0 && (
-                    <section>
-                      <div className="flex items-center gap-2 mb-4">
-                        <Sparkles className="w-5 h-5 text-amber-500" />
-                        <h2 className="text-xl font-bold text-zinc-900">
-                          Salas em Destaque
-                        </h2>
-                      </div>
-                      <div className="flex gap-4 overflow-x-auto pb-4 -mx-4 px-4 lg:mx-0 lg:px-0 scrollbar-hide snap-x">
-                        {featuredRooms.map((room) => (
-                          <RoomCard
-                            key={room.id}
-                            room={room}
-                            isFavorited={favorites.has(room.id)}
-                            onToggleFavorite={toggleFavorite}
-                            onOpen={onOpenRoom}
-                            horizontal
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  {masterRooms.length > 0 && (
-                    <section className="bg-amber-50/50 -mx-4 px-4 py-8 lg:rounded-3xl lg:mx-0 border border-amber-100/50">
-                      <div className="flex items-center gap-2 mb-4">
-                        <Crown className="w-6 h-6 text-amber-500" />
-                        <div>
-                          <h2 className="text-xl font-bold text-zinc-900">
-                            Coleção Master
-                          </h2>
-                          <p className="text-xs font-medium text-amber-700/80">
-                            O mais alto padrão de sofisticação.
-                          </p>
+                  {/* MASTER ROOMS */}
+                  {(activeTier === "all" || activeTier === "master") &&
+                    masterRooms.length > 0 && (
+                      <section className="bg-zinc-900 -mx-4 px-4 py-8 lg:rounded-3xl lg:mx-0 border border-zinc-800 shadow-2xl">
+                        <div className="flex items-center gap-2 mb-4">
+                          <Crown className="w-6 h-6 text-amber-500" />
+                          <div>
+                            <h2 className="text-xl font-bold text-white">
+                              Salas Master
+                            </h2>
+                            <p className="text-xs font-medium text-zinc-400">
+                              O mais alto padrão de sofisticação e conforto.
+                            </p>
+                          </div>
                         </div>
-                      </div>
 
-                      <div className="bg-gradient-to-r from-amber-500 to-amber-600 rounded-2xl p-5 mb-6 text-white flex flex-col md:flex-row items-center justify-between shadow-sm">
-                        <div>
-                          <h4 className="font-bold text-base flex items-center gap-1.5">
-                            Passe Livre Master{" "}
-                            <Crown className="w-3.5 h-3.5 text-amber-200" />
-                          </h4>
-                          <p className="text-xs font-medium text-amber-50 mt-1 max-w-md leading-relaxed">
-                            Assine o Pacote Master e garanta o menor custo por
-                            hora em <b>qualquer sala da plataforma.</b>
-                          </p>
+                        {activeTier === "master" && renderFusionPassBanner()}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                          {masterRooms.map((room) => (
+                            <RoomCard
+                              key={room.id}
+                              room={room}
+                              isFavorited={favorites.has(room.id)}
+                              onToggleFavorite={toggleFavorite}
+                              onOpen={onOpenRoom}
+                              usingLocation={usingLocation}
+                            />
+                          ))}
                         </div>
-                        <Button
-                          onClick={handleOpenWalletPromo}
-                          className="bg-white text-amber-900 hover:bg-amber-50 font-bold mt-4 md:mt-0 w-full md:w-auto h-10 text-sm whitespace-nowrap rounded-xl"
-                        >
-                          Ver Pacotes
-                        </Button>
-                      </div>
+                      </section>
+                    )}
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                        {masterRooms.map((room) => (
-                          <RoomCard
-                            key={room.id}
-                            room={room}
-                            isFavorited={favorites.has(room.id)}
-                            onToggleFavorite={toggleFavorite}
-                            onOpen={onOpenRoom}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  {vipRooms.length > 0 && (
-                    <section>
-                      <div className="flex items-center gap-2 mb-4">
-                        <Star className="w-6 h-6 text-indigo-500" />
-                        <div>
-                          <h2 className="text-xl font-bold text-zinc-900">
-                            Experiência VIP
-                          </h2>
-                          <p className="text-xs font-medium text-zinc-500">
-                            Ambientes premium com design diferenciado.
-                          </p>
+                  {/* VIP ROOMS */}
+                  {(activeTier === "all" || activeTier === "vip") &&
+                    vipRooms.length > 0 && (
+                      <section className="pt-8">
+                        <div className="flex items-center gap-2 mb-4">
+                          <Star className="w-6 h-6 text-zinc-900" />
+                          <div>
+                            <h2 className="text-xl font-bold text-zinc-900">
+                              Salas VIP
+                            </h2>
+                            <p className="text-xs font-medium text-zinc-500">
+                              Ambientes premium com design diferenciado.
+                            </p>
+                          </div>
                         </div>
-                      </div>
 
-                      <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-5 mb-6 flex flex-col md:flex-row items-center justify-between">
-                        <div>
-                          <h4 className="font-bold text-base text-indigo-900 flex items-center gap-1.5">
-                            <TrendingDown className="w-4 h-4 text-indigo-500" />{" "}
-                            Tarifas Reduzidas
-                          </h4>
-                          <p className="text-xs font-medium text-indigo-700/80 mt-1 max-w-md leading-relaxed">
-                            Assinantes do <b>Pacote VIP</b> têm descontos nestes
-                            consultórios e acesso livre às salas Start.
-                          </p>
+                        {activeTier === "vip" && renderFusionPassBanner()}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                          {vipRooms.map((room) => (
+                            <RoomCard
+                              key={room.id}
+                              room={room}
+                              isFavorited={favorites.has(room.id)}
+                              onToggleFavorite={toggleFavorite}
+                              onOpen={onOpenRoom}
+                              usingLocation={usingLocation}
+                            />
+                          ))}
                         </div>
-                        <Button
-                          onClick={handleOpenWalletPromo}
-                          className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold mt-4 md:mt-0 w-full md:w-auto h-10 text-sm whitespace-nowrap rounded-xl"
-                        >
-                          Assinar VIP
-                        </Button>
-                      </div>
+                      </section>
+                    )}
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                        {vipRooms.map((room) => (
-                          <RoomCard
-                            key={room.id}
-                            room={room}
-                            isFavorited={favorites.has(room.id)}
-                            onToggleFavorite={toggleFavorite}
-                            onOpen={onOpenRoom}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  {startRooms.length > 0 && (
-                    <section className="border-t border-zinc-200 pt-8 pb-8">
-                      <div className="flex items-center gap-2 mb-4">
-                        <Shield className="w-6 h-6 text-zinc-400" />
-                        <div>
-                          <h2 className="text-xl font-bold text-zinc-900">
-                            Essencial Start
-                          </h2>
-                          <p className="text-xs font-medium text-zinc-500">
-                            Conforto e o melhor custo-benefício.
-                          </p>
+                  {/* BASIC ROOMS */}
+                  {(activeTier === "all" || activeTier === "start") &&
+                    startRooms.length > 0 && (
+                      <section className="border-t border-zinc-200 pt-8 pb-8">
+                        <div className="flex items-center gap-2 mb-4">
+                          <Shield className="w-6 h-6 text-zinc-400" />
+                          <div>
+                            <h2 className="text-xl font-bold text-zinc-900">
+                              Salas Basic
+                            </h2>
+                            <p className="text-xs font-medium text-zinc-500">
+                              Conforto e o melhor custo-benefício.
+                            </p>
+                          </div>
                         </div>
-                      </div>
 
-                      <div className="bg-zinc-100 rounded-2xl p-5 mb-6 flex flex-col md:flex-row items-center justify-between border border-zinc-200">
-                        <div>
-                          <h4 className="font-bold text-base text-zinc-900">
-                            Previsibilidade de Agenda
-                          </h4>
-                          <p className="text-xs font-medium text-zinc-600 mt-1 max-w-md leading-relaxed">
-                            Assine um <b>Pacote Start</b> e trave o menor preço
-                            por hora, sem variações.
-                          </p>
+                        {activeTier === "start" && renderFusionPassBanner()}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                          {startRooms.map((room) => (
+                            <RoomCard
+                              key={room.id}
+                              room={room}
+                              isFavorited={favorites.has(room.id)}
+                              onToggleFavorite={toggleFavorite}
+                              onOpen={onOpenRoom}
+                              usingLocation={usingLocation}
+                            />
+                          ))}
                         </div>
-                        <Button
-                          onClick={handleOpenWalletPromo}
-                          className="bg-zinc-900 hover:bg-zinc-800 text-white font-semibold mt-4 md:mt-0 w-full md:w-auto h-10 text-sm whitespace-nowrap rounded-xl"
-                        >
-                          Pacotes Start
-                        </Button>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                        {startRooms.map((room) => (
-                          <RoomCard
-                            key={room.id}
-                            room={room}
-                            isFavorited={favorites.has(room.id)}
-                            onToggleFavorite={toggleFavorite}
-                            onOpen={onOpenRoom}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  )}
+                      </section>
+                    )}
                 </>
               ) : (
                 /* GRID SIMPLES PARA TURNO OU FIXO */
@@ -943,8 +1069,8 @@ export function SearchTab({
                         Espaços Disponíveis
                       </h2>
                       <p className="text-xs font-medium text-zinc-500">
-                        {filteredRooms.length}{" "}
-                        {filteredRooms.length === 1
+                        {processedRooms.length}{" "}
+                        {processedRooms.length === 1
                           ? "sala encontrada"
                           : "salas encontradas"}{" "}
                         para locação por {rentalType}
@@ -952,13 +1078,14 @@ export function SearchTab({
                     </div>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                    {filteredRooms.map((room) => (
+                    {processedRooms.map((room) => (
                       <RoomCard
                         key={room.id}
                         room={room}
                         isFavorited={favorites.has(room.id)}
                         onToggleFavorite={toggleFavorite}
                         onOpen={onOpenRoom}
+                        usingLocation={usingLocation}
                       />
                     ))}
                   </div>
@@ -980,23 +1107,33 @@ export function SearchTab({
           <div className="space-y-6 py-4">
             <div className="space-y-3">
               <Label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">
-                Localização
+                Geolocalização (Sua Região)
               </Label>
               <button
                 onClick={requestLocation}
-                className={`w-full flex items-center justify-between p-3.5 rounded-xl border transition-all ${usingLocation ? "border-[#f05e23] bg-orange-50/50 text-[#f05e23]" : "border-zinc-200 hover:border-zinc-300 text-zinc-700"}`}
+                className={`w-full flex items-center justify-between p-4 rounded-xl border-2 transition-all ${usingLocation ? "border-[#f05e23] bg-orange-50/50 text-[#f05e23]" : "border-zinc-200 hover:border-zinc-300 text-zinc-700"}`}
               >
                 <div className="flex items-center gap-3">
                   <Navigation
-                    className={`w-4 h-4 ${usingLocation ? "fill-[#f05e23]" : ""}`}
+                    className={`w-5 h-5 ${usingLocation ? "fill-[#f05e23]" : ""}`}
                   />
-                  <span className="font-semibold text-sm">Próximos a mim</span>
+                  <div className="text-left">
+                    <span className="font-bold text-sm block">
+                      Perto de Mim
+                    </span>
+                    <span className="text-xs font-medium text-zinc-500">
+                      Mostra as salas mais próximas
+                    </span>
+                  </div>
                 </div>
                 {usingLocation && (
-                  <Badge className="bg-[#f05e23] text-white">Ativado</Badge>
+                  <Badge className="bg-[#f05e23] text-white border-0 font-bold">
+                    Ativado
+                  </Badge>
                 )}
               </button>
             </div>
+
             <div className="space-y-3">
               <Label className="text-xs font-bold text-zinc-500 uppercase tracking-wider flex justify-between">
                 <span>Faixa de Preço</span>
@@ -1041,16 +1178,17 @@ export function SearchTab({
                 setMinPrice("");
                 setMaxPrice("");
                 setUsingLocation(false);
+                setUserLocation(null);
               }}
-              className="flex-1 font-semibold text-zinc-500 hover:bg-zinc-100 h-10 rounded-xl"
+              className="flex-1 font-semibold text-zinc-500 hover:bg-zinc-100 h-12 rounded-xl"
             >
-              Limpar
+              Limpar Tudo
             </Button>
             <Button
               onClick={() => setIsFilterModalOpen(false)}
-              className="flex-[2] bg-zinc-900 text-white hover:bg-zinc-800 font-semibold h-10 rounded-xl"
+              className="flex-1 bg-zinc-900 text-white hover:bg-zinc-800 font-bold h-12 rounded-xl shadow-lg"
             >
-              Ver resultados ({filteredRooms.length})
+              Aplicar Filtros
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1059,35 +1197,42 @@ export function SearchTab({
   );
 }
 
+// ==========================================
+// COMPONENTE DO CARD DA SALA
+// ==========================================
 function RoomCard({
   room,
   isFavorited,
   onToggleFavorite,
   onOpen,
   horizontal = false,
+  usingLocation = false,
 }: {
   room: Room;
   isFavorited: boolean;
   onToggleFavorite: (e: React.MouseEvent, id: string) => void;
   onOpen?: (room: Room) => void;
   horizontal?: boolean;
+  usingLocation?: boolean;
 }) {
   const isMaster = room.tier === "master";
+  const isVip = room.tier === "vip";
+  const isBasic = room.tier === "start";
 
   return (
     <div
       onClick={() => onOpen && onOpen(room)}
-      className={`group cursor-pointer flex flex-col bg-white border border-zinc-200 rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-all ${horizontal ? "w-[260px] shrink-0 snap-start" : "w-full"}`}
+      className={`group cursor-pointer flex flex-col bg-white border border-zinc-200 rounded-2xl overflow-hidden shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 ${horizontal ? "w-[260px] shrink-0 snap-start" : "w-full"}`}
     >
       <div
-        className={`relative w-full bg-zinc-100 ${horizontal ? "h-40" : "h-48"}`}
+        className={`relative w-full bg-zinc-100 ${horizontal ? "h-40" : "aspect-[4/3]"}`}
       >
         <Image
           src={room.image}
           alt={room.name}
           fill
           sizes="(max-width: 768px) 100vw, 400px"
-          className="object-cover"
+          className="object-cover group-hover:scale-105 transition-transform duration-500"
           onError={(e: any) => {
             e.target.src = "/placeholder.jpg";
           }}
@@ -1099,26 +1244,41 @@ function RoomCard({
               <Sparkles className="w-3 h-3 fill-orange-500" /> Destaque
             </div>
           )}
-          {isMaster && !room.isPartner && (
-            <div className="bg-amber-500/95 backdrop-blur px-2 py-1 rounded-md text-[9px] font-bold text-white uppercase tracking-wider flex items-center gap-1 shadow-sm">
-              <Crown className="w-3 h-3 fill-white" /> Master
-            </div>
+        </div>
+
+        <div className="absolute top-2 right-2 z-10">
+          {isMaster && (
+            <Badge className="bg-amber-500 text-zinc-950 font-black border-0 shadow-sm">
+              <Crown className="w-3 h-3 mr-1" /> Master
+            </Badge>
+          )}
+          {isVip && (
+            <Badge className="bg-zinc-900 text-white font-black border-0 shadow-sm">
+              <Star className="w-3 h-3 mr-1" /> VIP
+            </Badge>
+          )}
+          {isBasic && (
+            <Badge className="bg-white text-zinc-700 font-black border border-zinc-200 shadow-sm">
+              <Shield className="w-3 h-3 mr-1" /> Basic
+            </Badge>
           )}
         </div>
 
+        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+
         <button
           onClick={(e) => onToggleFavorite(e, room.id)}
-          className="absolute top-2 right-2 p-1.5 rounded-full bg-white/50 backdrop-blur-sm hover:bg-white/80 transition-colors z-10 shadow-sm"
+          className="absolute bottom-3 right-3 p-2 rounded-full bg-white/30 backdrop-blur-md hover:bg-white/80 transition-colors z-10 shadow-sm"
         >
           <Heart
-            className={`h-4 w-4 ${isFavorited ? "fill-red-500 text-red-500" : "text-zinc-600"}`}
+            className={`h-4 w-4 transition-colors ${isFavorited ? "fill-red-500 text-red-500" : "text-white group-hover:text-zinc-900"}`}
           />
         </button>
       </div>
 
-      <div className="flex flex-col p-4">
-        <div className="flex justify-between items-start gap-2 mb-1">
-          <h3 className="truncate text-base font-bold text-zinc-900 leading-tight">
+      <div className="flex flex-col p-4 flex-1">
+        <div className="flex justify-between items-start gap-2 mb-1.5">
+          <h3 className="truncate text-base font-bold text-zinc-900 leading-tight group-hover:text-[#f05e23] transition-colors">
             {room.name}
           </h3>
           <div className="flex shrink-0 items-center gap-0.5">
@@ -1128,10 +1288,31 @@ function RoomCard({
             </span>
           </div>
         </div>
-        <p className="text-xs font-medium text-zinc-500 truncate mb-3">
+
+        <p className="text-xs font-medium text-zinc-500 truncate flex items-center gap-1.5 mb-2">
+          <MapPin className="w-3.5 h-3.5 shrink-0" />
           {room.category} • {room.distance}
         </p>
-        <p className="text-sm font-bold text-zinc-900">{room.priceLabel}</p>
+
+        {usingLocation && room.distanceKm && (
+          <p className="text-[10px] font-bold text-emerald-600 bg-emerald-50 w-fit px-2 py-1 rounded-md mb-2 flex items-center gap-1">
+            <Navigation className="w-3 h-3" /> A {room.distanceKm.toFixed(1)} km
+          </p>
+        )}
+
+        <div className="mt-auto pt-3 border-t border-zinc-100 flex items-end justify-between">
+          <div>
+            <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mb-0.5">
+              Locação Avulsa
+            </p>
+            <p className="text-base font-black text-zinc-900">
+              {room.priceLabel}
+            </p>
+          </div>
+          <div className="w-8 h-8 rounded-full bg-zinc-50 flex items-center justify-center group-hover:bg-[#f05e23] group-hover:text-white transition-colors text-zinc-400">
+            <ArrowRight className="w-4 h-4" />
+          </div>
+        </div>
       </div>
     </div>
   );

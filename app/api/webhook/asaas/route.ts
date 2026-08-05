@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js"; // Usamos o cliente padrão do supabase-js aqui
+import { createClient } from "@supabase/supabase-js";
 
-// Inicializamos o Supabase com a Chave Mestra (Bypassa o RLS)
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
@@ -12,46 +11,47 @@ export async function POST(req: Request) {
     
     console.log("🔔 [WEBHOOK ASAAS] Evento Recebido:", body.event);
 
-    // O Asaas envia vários eventos (boleto gerado, vencido, etc).
-    // Nós só nos importamos quando o dinheiro CAI NA CONTA:
     if (body.event === "PAYMENT_RECEIVED" || body.event === "PAYMENT_CONFIRMED") {
-      
       const payment = body.payment;
       const externalReference = payment.externalReference;
       
-      // Lembra que mandamos os IDs espremidos no externalReference? Vamos separá-los!
-      if (!externalReference) {
-         console.warn("Pagamento sem referência recebido. Ignorando.");
-         return NextResponse.json({ message: "Ignorado (Sem referência)" }, { status: 200 });
-      }
+      if (!externalReference) return NextResponse.json({ message: "Ignorado" }, { status: 200 });
 
-      // Desempacotando: "user_id|tier|hours" (ex: "123|vip|16")
-      const [userId, tier, hours] = externalReference.split("|");
+      const [refType, ...rest] = externalReference.split("|");
 
-      console.log(`💰 Aprovado! Adicionando ${hours}h no pacote ${tier} para o usuário ${userId}`);
+      if (refType === "package") {
+        // COMPRA DE PACOTE DE CRÉDITOS (A carteira recebe as horas e expiram em 30 dias)
+        const userId = rest[0];
+        const tier = rest[1]; 
+        const hours = rest[2];
 
-      // Injeta as horas na carteira do médico
-      const { error } = await supabaseAdmin
-        .from("wallet_transactions")
-        .insert({
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + 30); // 30 Dias de Validade
+
+        await supabaseAdmin.from("wallet_transactions").insert({
           user_id: userId,
           amount: Number(hours),
           tier: tier,
           type: "recharge",
-          description: `Recarga via Asaas (Fatura: ${payment.id})`
+          description: `Assinatura: Fusion Pass ${tier.toUpperCase()}`,
+          expires_at: expiresAt.toISOString()
         });
+        console.log(`✅ ${hours} CR liberados para o usuário ${userId} no Tier ${tier}`);
 
-      if (error) {
-        console.error("Erro ao injetar horas:", error);
-        throw error;
+      } else if (refType === "booking") {
+        // PAGAMENTO AVULSO DE SALA (Não passa pela carteira, confirma direto)
+        const paymentRef = rest[0]; // Identificador que o frontend enviou
+        
+        await supabaseAdmin
+          .from("bookings")
+          .update({ status: "confirmed" })
+          .eq("asaas_payment_id", paymentRef);
+          
+        console.log(`✅ Reserva(s) do grupo ${paymentRef} confirmadas com sucesso!`);
       }
-      
-      console.log("✅ Horas creditadas com sucesso!");
     }
 
-    // Retornamos 200 OK para o Asaas parar de tentar nos avisar
     return NextResponse.json({ received: true }, { status: 200 });
-
   } catch (error: any) {
     console.error("Erro no Webhook:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });

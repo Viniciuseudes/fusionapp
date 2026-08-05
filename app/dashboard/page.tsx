@@ -12,9 +12,10 @@ import { ChatTab } from "@/components/chat-tab";
 import { ProfileTab } from "@/components/profile-tab";
 import { NotificationBell } from "@/components/notification-bell";
 
-// Importando a tela de detalhes e o modal de avaliação
+// Importando a tela de detalhes, o modal de avaliação e o nosso novo Tutorial
 import { RoomDetail } from "@/components/room-detail";
 import { ReviewModal } from "@/components/review-modal";
+import { OnboardingTutorial } from "@/components/onboarding-tutorial";
 
 type TabType = "search" | "favorites" | "bookings" | "chat" | "profile";
 
@@ -91,6 +92,11 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 relative flex">
+      {/* ========================================== */}
+      {/* TUTORIAL DE ONBOARDING (Aparece apenas 1 vez) */}
+      {/* ========================================== */}
+      <OnboardingTutorial />
+
       {/* ========================================== */}
       {/* SINO FLUTUANTE (Agora no canto direito sem quebrar o layout) */}
       {/* ========================================== */}
@@ -198,6 +204,10 @@ export default function DashboardPage() {
           roomId={selectedRoom.id}
           room={selectedRoom}
           onBack={() => setSelectedRoom(null)}
+          onNavigateToProfile={() => {
+            setSelectedRoom(null); // Fecha o detalhe da sala
+            setActiveTab("profile"); // Redireciona magicamente para a aba de Perfil
+          }}
           initialModality="hora"
         />
       )}

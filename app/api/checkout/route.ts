@@ -10,83 +10,62 @@ export async function POST(req: Request) {
       throw new Error("As chaves do Asaas não foram encontradas no ambiente.");
     }
 
-    const { packageId, hours, price, packageName } = await req.json();
+    // Identifica se é compra de pacote ("package") ou reserva avulsa ("booking")
+    const { checkoutType, packageId, hours, price, packageName, paymentRef } = await req.json();
 
     const supabase = await createClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();
 
     if (authError || !user) {
-      return NextResponse.json({ error: "Sua sessão expirou. Faça login novamente." }, { status: 401 });
+      return NextResponse.json({ error: "Sessão expirada. Faça login novamente." }, { status: 401 });
     }
 
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("full_name, phone, cpf") 
-      .eq("id", user.id)
-      .single();
+    const { data: profile } = await supabase.from("profiles").select("full_name, email, cpf").eq("id", user.id).single();
 
     const customerName = profile?.full_name || "Dr(a). Fusion Clinic";
     const customerEmail = user.email || "medico@fusionclinic.com.br";
-    
-    // O Asaas exige um CPF matematicamente válido.
-    // Se o profile.cpf for nulo ou inválido, usamos este fallback para testes locais.
-    // Em produção, o ideal é validar o CPF no frontend antes de enviar pra cá.
-    const customerCpfCnpj = "12345678909";
+    const customerCpfCnpj = profile?.cpf?.replace(/\D/g, '') || "12345678909"; // Fallback para dev
 
-    // ==========================================
-    // ETAPA A: CRIAR OU BUSCAR O CLIENTE NO ASAAS
-    // ==========================================
+    // Cria/Busca Cliente no Asaas
     const customerResponse = await fetch(`${ASAAS_API_URL}/customers`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "access_token": ASAAS_API_KEY,
-      },
-      body: JSON.stringify({
-        name: customerName,
-        email: customerEmail,
-        cpfCnpj: customerCpfCnpj,
-      }),
+      headers: { "Content-Type": "application/json", "access_token": ASAAS_API_KEY },
+      body: JSON.stringify({ name: customerName, email: customerEmail, cpfCnpj: customerCpfCnpj }),
     });
 
     const customerData = await customerResponse.json();
+    if (!customerResponse.ok) throw new Error(customerData.errors?.[0]?.description || "Erro no Cliente Asaas.");
 
-    if (!customerResponse.ok) {
-      const asaasError = customerData.errors?.[0]?.description || "Erro desconhecido.";
-      throw new Error(`Asaas recusou o cliente: ${asaasError}`);
+    // Define a referência e a descrição para o Webhook
+    let description = "";
+    let externalReference = "";
+
+    if (checkoutType === "package") {
+      description = `Fusion Pass ${packageName} - ${hours} Créditos`;
+      externalReference = `package|${user.id}|${packageId}|${hours}`;
+    } else if (checkoutType === "booking") {
+      description = `Reserva de Espaço - Fusion Clinic`;
+      externalReference = `booking|${paymentRef}`;
     }
 
-    // ==========================================
-    // ETAPA B: CRIAR A COBRANÇA (PAYMENT)
-    // ==========================================
+    // Gera Cobrança
     const paymentResponse = await fetch(`${ASAAS_API_URL}/payments`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "access_token": ASAAS_API_KEY,
-      },
+      headers: { "Content-Type": "application/json", "access_token": ASAAS_API_KEY },
       body: JSON.stringify({
         customer: customerData.id,
         billingType: "UNDEFINED", 
         value: price,
         dueDate: new Date(new Date().setDate(new Date().getDate() + 1)).toISOString().split('T')[0], 
-        description: `Fusion Clinic: Pacote ${packageName} - ${hours} Horas`,
-        externalReference: `${user.id}|${packageId}|${hours}`, 
+        description: description,
+        externalReference: externalReference, 
       }),
     });
 
     const paymentData = await paymentResponse.json();
+    if (!paymentResponse.ok) throw new Error(paymentData.errors?.[0]?.description || "Erro ao gerar cobrança.");
 
-    if (!paymentResponse.ok) {
-      const asaasError = paymentData.errors?.[0]?.description || "Erro ao gerar cobrança.";
-      throw new Error(`Asaas recusou a cobrança: ${asaasError}`);
-    }
-
-    // Retorna o link mágico para o Front
-    return NextResponse.json({ 
-      invoiceUrl: paymentData.invoiceUrl, 
-      paymentId: paymentData.id 
-    });
+    return NextResponse.json({ invoiceUrl: paymentData.invoiceUrl, paymentId: paymentData.id });
 
   } catch (error: any) {
     console.error("Erro no motor de Checkout:", error);

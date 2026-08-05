@@ -3,9 +3,9 @@ import { createClient } from '@/utils/supabase/server';
 
 export async function POST(request: Request) {
   try {
-    const supabase = createClient();
+    const supabase = await createClient();
     
-    const { data: { user }, error: authError } = await (await supabase).auth.getUser();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
 
     if (authError || !user) {
       return NextResponse.json({ error: 'Usuário não autenticado.' }, { status: 401 });
@@ -20,75 +20,65 @@ export async function POST(request: Request) {
 
     const start = new Date(startTime);
     const end = new Date(endTime);
-    const durationMs = end.getTime() - start.getTime();
-    const durationHours = durationMs / (1000 * 60 * 60);
+    const durationHours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
 
     if (durationHours <= 0) {
       return NextResponse.json({ error: 'O horário de término deve ser posterior ao início.' }, { status: 400 });
     }
 
-    // 4. Buscar a sala e as categorias
-    const { data: room, error: roomError } = await (await supabase)
+    // 1. Busca a sala e seu Tier
+    const { data: room, error: roomError } = await supabase
       .from('rooms')
-      .select(`
-        id,
-        name,
-        room_categories (
-          credit_cost_per_hour,
-          upgrade_fee_per_hour
-        )
-      `)
+      .select('id, name, tier')
       .eq('id', roomId)
       .single();
 
     if (roomError || !room) {
-      return NextResponse.json({ error: 'Sala não encontrada no banco de dados.' }, { status: 404 });
+      return NextResponse.json({ error: 'Sala não encontrada.' }, { status: 404 });
     }
 
-    // CORREÇÃO: Valores padrão (fallback) caso a sala não tenha categoria vinculada
-    let creditCostPerHour = 1; 
-    let upgradeFeePerHour = 0;
+    const roomTier = room.tier || 'start';
 
-    // Se existir categoria, usamos os valores do banco
-    if (room.room_categories) {
-      const category = Array.isArray(room.room_categories) 
-        ? room.room_categories[0] 
-        : room.room_categories;
-      
-      creditCostPerHour = Number(category?.credit_cost_per_hour || 1);
-      upgradeFeePerHour = Number(category?.upgrade_fee_per_hour || 0);
-    }
-
-    const totalCreditsRequired = durationHours * creditCostPerHour;
-    const totalUpgradeFeeBRL = durationHours * upgradeFeePerHour;
-
-    const { data: transactions, error: walletError } = await (await supabase)
+    // 2. Consulta a carteira do usuário (apenas créditos válidos)
+    const { data: transactions } = await supabase
       .from('wallet_transactions')
-      .select('amount, type')
-      .eq('user_id', user.id); 
+      .select('amount, type, tier, expires_at')
+      .eq('user_id', user.id);
 
-    if (walletError) {
-      return NextResponse.json({ error: 'Erro ao consultar a carteira do usuário.' }, { status: 500 });
-    }
-
-    let currentBalance = 0;
+    let startBal = 0, vipBal = 0, masterBal = 0;
+    const now = new Date();
+    
     transactions?.forEach(tx => {
-      if (tx.type === 'credit' || tx.type === 'deposit') {
-        currentBalance += Number(tx.amount);
-      } else if (tx.type === 'debit' || tx.type === 'usage') {
-        currentBalance -= Number(tx.amount);
-      }
+      // Ignora créditos que já expiraram
+      if (tx.amount > 0 && tx.expires_at && new Date(tx.expires_at) < now) return;
+
+      const amt = Number(tx.amount);
+      if (tx.tier === 'master') masterBal += amt;
+      else if (tx.tier === 'vip') vipBal += amt;
+      else startBal += amt; // Default é start/basic
     });
 
-    const hasEnoughCredits = currentBalance >= totalCreditsRequired;
+    // 3. Lógica de Cascata de Tiers
+    let availableCredits = 0;
+    if (roomTier === 'master') {
+      availableCredits = masterBal; // Sala Master exige crédito Master
+    } else if (roomTier === 'vip') {
+      availableCredits = vipBal + masterBal; // Sala VIP aceita VIP e Master
+    } else {
+      availableCredits = startBal + vipBal + masterBal; // Sala Basic aceita qualquer crédito
+    }
+
+    const creditsRequired = durationHours; // 1 Crédito = 1 Hora
+    const hasEnoughCredits = availableCredits >= creditsRequired;
 
     return NextResponse.json({
       durationHours,
-      creditsRequired: totalCreditsRequired,
-      upgradeFeeBRL: totalUpgradeFeeBRL,
+      creditsRequired,
+      upgradeFeeBRL: 0,
       hasEnoughCredits,
-      currentBalance,
-      canProceed: hasEnoughCredits, 
+      currentBalance: availableCredits, // Saldo utilizável para ESTA sala específica
+      canProceed: hasEnoughCredits,
+      roomTier
     });
 
   } catch (error) {

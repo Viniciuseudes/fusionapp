@@ -2,38 +2,43 @@
 
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@/utils/supabase/client";
+import { useToast } from "@/hooks/use-toast";
+import { format, parseISO } from "date-fns";
+import { ptBR } from "date-fns/locale";
 import {
-  Send,
-  Loader2,
+  Search,
   MessageSquare,
-  ShieldAlert,
-  Calendar,
-  Clock,
-  Lock,
-  Check,
+  Send,
+  ArrowLeft,
   CheckCheck,
+  Loader2,
+  Building2,
+  User,
+  Calendar as CalendarIcon,
+  Clock,
+  Info,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { applyDLP } from "@/lib/chat-utils";
-import { format, parseISO, isPast } from "date-fns";
-import { ptBR } from "date-fns/locale";
 
-interface BookingInfo {
-  start_time: string;
-  end_time: string;
-  status: string;
-}
-
-interface Chat {
+interface ChatPreview {
   id: string;
-  type: "booking" | "negotiation";
+  room_id: string;
+  guest_id: string;
+  host_id: string;
   status: string;
   room_name: string;
-  host_name: string;
-  host_id: string;
-  booking?: BookingInfo | null;
+  room_image: string;
+  other_person_name: string;
+  last_message?: string;
+  last_message_date?: string;
+  unread_count: number;
+  // Detalhes da Reserva (Contexto)
+  booking_id?: string;
+  booking_start?: string;
+  booking_end?: string;
+  booking_status?: string;
 }
 
 interface Message {
@@ -41,424 +46,602 @@ interface Message {
   sender_id: string;
   content: string;
   created_at: string;
-  read_at?: string | null; // <-- ADICIONADO PARA CONTROLE DE LEITURA
+  read_at: string | null;
 }
 
 export function ChatTab() {
   const supabase = createClient();
-  const [loading, setLoading] = useState(true);
-  const [chats, setChats] = useState<Chat[]>([]);
-  const [activeChat, setActiveChat] = useState<Chat | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [newMessage, setNewMessage] = useState("");
-  const [myId, setMyId] = useState("");
+  const { toast } = useToast();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Busca inicial dos Chats
+  const [myId, setMyId] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [chats, setChats] = useState<ChatPreview[]>([]);
+
+  // Filtros e Busca
+  const [activeFilter, setActiveFilter] = useState<"all" | "unread">("all");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Estado do Chat Ativo
+  const [selectedChat, setSelectedChat] = useState<ChatPreview | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [newMessage, setNewMessage] = useState("");
+  const [sending, setSending] = useState(false);
+
+  // Carrega a lista de chats e o contexto da reserva
   useEffect(() => {
-    async function loadChats() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) return;
-      setMyId(user.id);
+    async function fetchChats() {
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user) return;
+        setMyId(user.id);
 
-      const { data: chatData, error } = await supabase
-        .from("chats")
-        .select(
-          `
-          id, type, status, host_id,
-          rooms (name),
-          profiles!chats_host_id_fkey (full_name),
-          bookings (start_time, end_time, status)
-        `,
-        )
-        .eq("guest_id", user.id)
-        .order("created_at", { ascending: false });
+        // 1. Busca os chats incluindo os dados da sala E os dados da reserva vinculada
+        const { data: rawChats, error: chatsError } = await supabase
+          .from("chats")
+          .select(
+            `
+            id, status, room_id, guest_id, host_id, booking_id,
+            rooms (name, image_url),
+            bookings (start_time, end_time, status)
+          `,
+          )
+          .or(`guest_id.eq.${user.id},host_id.eq.${user.id}`);
 
-      if (!error && chatData) {
-        const formatted = chatData.map((c: any) => ({
-          id: c.id,
-          type: c.type,
-          status: c.status,
-          host_id: c.host_id,
-          room_name: c.rooms?.name || "Sala",
-          host_name: c.profiles?.full_name || "Anfitrião",
-          booking: c.bookings ? c.bookings : null,
-        }));
-        setChats(formatted);
+        if (chatsError) throw chatsError;
+        if (!rawChats || rawChats.length === 0) {
+          setChats([]);
+          setLoading(false);
+          return;
+        }
+
+        // 2. Descobre quem é a "outra pessoa" em cada chat para buscar o nome
+        const otherUserIds = rawChats.map((c) =>
+          c.guest_id === user.id ? c.host_id : c.guest_id,
+        );
+        const { data: profiles } = await supabase
+          .from("profiles")
+          .select("id, full_name")
+          .in("id", otherUserIds);
+
+        // 3. Busca a última mensagem e mensagens não lidas de cada chat
+        const chatIds = rawChats.map((c) => c.id);
+        const { data: allMessages } = await supabase
+          .from("messages")
+          .select("*")
+          .in("chat_id", chatIds)
+          .order("created_at", { ascending: false });
+
+        const formattedChats: ChatPreview[] = rawChats.map((chat: any) => {
+          const otherId =
+            chat.guest_id === user.id ? chat.host_id : chat.guest_id;
+          const otherProfile = profiles?.find((p) => p.id === otherId);
+          const chatMessages =
+            allMessages?.filter((m) => m.chat_id === chat.id) || [];
+
+          const lastMsg = chatMessages.length > 0 ? chatMessages[0] : null;
+          const unreadCount = chatMessages.filter(
+            (m) => m.sender_id !== user.id && !m.read_at,
+          ).length;
+
+          // Se a API retornar um array em bookings (dependendo da relação), pegamos o primeiro item
+          const bookingData = Array.isArray(chat.bookings)
+            ? chat.bookings[0]
+            : chat.bookings;
+
+          return {
+            id: chat.id,
+            room_id: chat.room_id,
+            guest_id: chat.guest_id,
+            host_id: chat.host_id,
+            status: chat.status,
+            room_name: chat.rooms?.name || "Sala Excluída",
+            room_image: chat.rooms?.image_url || "/placeholder.jpg",
+            other_person_name: otherProfile?.full_name || "Usuário",
+            last_message: lastMsg?.content,
+            last_message_date: lastMsg?.created_at,
+            unread_count: unreadCount,
+            booking_id: chat.booking_id,
+            booking_start: bookingData?.start_time,
+            booking_end: bookingData?.end_time,
+            booking_status: bookingData?.status,
+          };
+        });
+
+        // Ordena pelos que tem mensagens mais recentes
+        formattedChats.sort((a, b) => {
+          if (!a.last_message_date) return 1;
+          if (!b.last_message_date) return -1;
+          return (
+            new Date(b.last_message_date).getTime() -
+            new Date(a.last_message_date).getTime()
+          );
+        });
+
+        setChats(formattedChats);
+      } catch (error) {
+        console.error("Erro ao buscar chats:", error);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     }
-    loadChats();
+
+    fetchChats();
   }, [supabase]);
 
-  // Carrega mensagens e inscreve no WebSocket (Realtime para INSERT e UPDATE)
+  // Carrega as mensagens quando um chat é selecionado
   useEffect(() => {
-    if (!activeChat) return;
+    if (!selectedChat) return;
 
-    const fetchMessages = async () => {
-      const { data } = await supabase
+    let channel: any;
+
+    async function fetchMessages() {
+      const { data, error } = await supabase
         .from("messages")
         .select("*")
-        .eq("chat_id", activeChat.id)
+        .eq("chat_id", selectedChat!.id)
         .order("created_at", { ascending: true });
 
-      if (data) setMessages(data);
-      setTimeout(
-        () => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }),
-        100,
-      );
-    };
+      if (!error && data) {
+        setMessages(data);
+        scrollToBottom();
+
+        // Marca as mensagens da outra pessoa como lidas
+        const unreadIds = data
+          .filter((m) => m.sender_id !== myId && !m.read_at)
+          .map((m) => m.id);
+        if (unreadIds.length > 0) {
+          await supabase
+            .from("messages")
+            .update({ read_at: new Date().toISOString() })
+            .in("id", unreadIds);
+          setChats((prev) =>
+            prev.map((c) =>
+              c.id === selectedChat!.id ? { ...c, unread_count: 0 } : c,
+            ),
+          );
+        }
+      }
+    }
 
     fetchMessages();
 
-    // Inscrição Real-time do Supabase: Agora escuta TUDO (event: "*")
-    const channel = supabase
-      .channel(`chat_${activeChat.id}`)
+    // Inscrição Real-time para novas mensagens
+    channel = supabase
+      .channel(`chat_${selectedChat.id}`)
       .on(
         "postgres_changes",
         {
-          event: "*",
+          event: "INSERT",
           schema: "public",
           table: "messages",
-          filter: `chat_id=eq.${activeChat.id}`,
+          filter: `chat_id=eq.${selectedChat.id}`,
         },
         (payload) => {
-          if (payload.eventType === "INSERT") {
-            setMessages((prev) => {
-              if (prev.some((m) => m.id === payload.new.id)) return prev;
-              return [...prev, payload.new as Message];
-            });
-            setTimeout(
-              () =>
-                messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }),
-              100,
-            );
-          } else if (payload.eventType === "UPDATE") {
-            // Quando a mensagem for atualizada (ex: recebeu read_at), reflete na UI instantaneamente
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === payload.new.id ? (payload.new as Message) : m,
-              ),
-            );
+          setMessages((prev) => [...prev, payload.new as Message]);
+          scrollToBottom();
+
+          if (payload.new.sender_id !== myId) {
+            supabase
+              .from("messages")
+              .update({ read_at: new Date().toISOString() })
+              .eq("id", payload.new.id)
+              .then();
           }
         },
       )
       .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      if (channel) supabase.removeChannel(channel);
     };
-  }, [activeChat, supabase]);
+  }, [selectedChat, myId, supabase]);
 
-  // ==========================================
-  // MARCADOR AUTOMÁTICO DE LEITURA
-  // ==========================================
-  useEffect(() => {
-    if (!activeChat || messages.length === 0) return;
+  const scrollToBottom = () => {
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, 100);
+  };
 
-    // Acha todas as mensagens que foram enviadas pelo outro e que AINDA NÃO FORAM LIDAS
-    const unreadMessages = messages.filter(
-      (m) => m.sender_id !== myId && !m.read_at,
-    );
-
-    if (unreadMessages.length > 0) {
-      const unreadIds = unreadMessages.map((m) => m.id);
-      const now = new Date().toISOString();
-
-      // 1. Atualiza a UI na hora
-      setMessages((prev) =>
-        prev.map((m) =>
-          unreadIds.includes(m.id) ? { ...m, read_at: now } : m,
-        ),
-      );
-
-      // 2. Avisa o banco silenciosamente
-      supabase
-        .from("messages")
-        .update({ read_at: now })
-        .in("id", unreadIds)
-        .then();
-    }
-  }, [messages, activeChat, myId, supabase]);
-
-  // Inserção Otimista (Mensagem instantânea)
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim() || !activeChat) return;
+    if (!newMessage.trim() || !selectedChat) return;
 
-    const safeContent = applyDLP(newMessage);
+    const messageText = newMessage.trim();
     setNewMessage("");
+    setSending(true);
 
-    const tempId = `temp-${Date.now()}`;
-    const optimisticMsg: Message = {
-      id: tempId,
-      sender_id: myId,
-      content: safeContent,
-      created_at: new Date().toISOString(),
-      read_at: null, // Nasce não lida
-    };
-
-    setMessages((prev) => [...prev, optimisticMsg]);
-    setTimeout(
-      () => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }),
-      50,
-    );
-
-    const { data, error } = await supabase
-      .from("messages")
-      .insert({
-        chat_id: activeChat.id,
+    try {
+      const { error } = await supabase.from("messages").insert({
+        chat_id: selectedChat.id,
         sender_id: myId,
-        content: safeContent,
-      })
-      .select()
-      .single();
+        content: messageText,
+      });
 
-    if (data && !error) {
-      setMessages((prev) => prev.map((m) => (m.id === tempId ? data : m)));
+      if (error) throw error;
+
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === selectedChat.id
+            ? {
+                ...c,
+                last_message: messageText,
+                last_message_date: new Date().toISOString(),
+              }
+            : c,
+        ),
+      );
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Erro",
+        description: "Falha ao enviar mensagem.",
+      });
+      setNewMessage(messageText);
+    } finally {
+      setSending(false);
     }
   };
 
-  const getDisplayName = (chat: Chat) => {
-    if (chat.type === "negotiation") return "Anfitrião (Identidade Protegida)";
-    return chat.host_name;
-  };
-
-  const isChatLocked = () => {
-    if (!activeChat) return false;
-    if (activeChat.status === "closed") return true;
-    if (activeChat.type === "booking" && activeChat.booking) {
-      return isPast(parseISO(activeChat.booking.end_time));
+  const filteredChats = chats.filter((chat) => {
+    if (activeFilter === "unread" && chat.unread_count === 0) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      return (
+        chat.room_name.toLowerCase().includes(q) ||
+        chat.other_person_name.toLowerCase().includes(q)
+      );
     }
-    return false;
+    return true;
+  });
+
+  // Badge do Status da Reserva
+  const getBookingStatusBadge = (status?: string) => {
+    switch (status) {
+      case "confirmed":
+        return (
+          <Badge className="bg-emerald-100 text-emerald-800 border-0 text-[10px] uppercase tracking-wider">
+            Confirmado
+          </Badge>
+        );
+      case "completed":
+        return (
+          <Badge className="bg-slate-200 text-slate-800 border-0 text-[10px] uppercase tracking-wider">
+            Concluído
+          </Badge>
+        );
+      case "cancelled":
+        return (
+          <Badge className="bg-red-100 text-red-800 border-0 text-[10px] uppercase tracking-wider">
+            Cancelado
+          </Badge>
+        );
+      case "pending_payment":
+        return (
+          <Badge className="bg-amber-100 text-amber-800 border-0 text-[10px] uppercase tracking-wider">
+            Pendente
+          </Badge>
+        );
+      default:
+        return null;
+    }
   };
 
-  if (loading)
+  if (loading) {
     return (
-      <div className="flex justify-center py-20">
-        <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+      <div className="flex justify-center items-center h-[calc(100vh-100px)]">
+        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
       </div>
     );
+  }
 
   return (
-    <div className="flex h-[calc(100vh-80px)] md:h-screen bg-slate-50 overflow-hidden font-sans">
-      {/* Sidebar de Chats */}
-      <div
-        className={`w-full md:w-80 bg-white border-r border-slate-200 flex flex-col ${activeChat ? "hidden md:flex" : "flex"}`}
-      >
-        <div className="p-6 border-b border-slate-100">
-          <h2 className="text-xl font-black text-slate-900">Mensagens</h2>
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          {chats.length === 0 ? (
-            <div className="p-8 text-center text-slate-400 font-medium">
-              Nenhuma conversa encontrada.
+    // A MUDANÇA RESPONSIVA ESTÁ NESTA LINHA: Adicionei `pb-[84px] md:pb-6` para empurrar o chat pra cima do menu no mobile
+    <div className="h-[100dvh] md:h-[calc(100vh-4rem)] max-w-7xl mx-auto w-full bg-slate-50 pb-[84px] md:pb-6 lg:pb-8 md:pt-6 lg:pt-8 md:px-6 lg:px-8 animate-in fade-in duration-500 box-border">
+      <div className="bg-white md:rounded-3xl shadow-sm border border-slate-200 h-full flex overflow-hidden">
+        {/* ========================================== */}
+        {/* PAINEL ESQUERDO: LISTA DE CONVERSAS          */}
+        {/* ========================================== */}
+        <div
+          className={`w-full md:w-[380px] lg:w-[420px] flex flex-col border-r border-slate-100 bg-white shrink-0 ${selectedChat ? "hidden md:flex" : "flex"}`}
+        >
+          <div className="p-5 border-b border-slate-100 space-y-4">
+            <h1 className="text-2xl font-black text-slate-900 tracking-tight">
+              Mensagens
+            </h1>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <Input
+                placeholder="Buscar conversa ou sala..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9 h-11 bg-slate-50 border-slate-200 rounded-xl"
+              />
             </div>
-          ) : (
-            chats.map((chat) => {
-              const isLocked =
-                chat.type === "booking" &&
-                chat.booking &&
-                isPast(parseISO(chat.booking.end_time));
-              return (
-                <div
-                  key={chat.id}
-                  onClick={() => setActiveChat(chat)}
-                  className={`p-4 border-b border-slate-50 cursor-pointer transition-colors ${activeChat?.id === chat.id ? "bg-orange-50" : "hover:bg-slate-50"} ${isLocked ? "opacity-60 grayscale" : ""}`}
-                >
-                  <div className="flex justify-between items-start mb-1">
-                    <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1">
-                      {isLocked && <Lock className="w-3 h-3 text-slate-400" />}
-                      {getDisplayName(chat)}
-                    </h4>
-                  </div>
-                  <p className="text-xs font-semibold text-[#f05e23] truncate">
-                    {chat.room_name}
-                  </p>
 
-                  {chat.type === "booking" && chat.booking && (
-                    <p className="text-[10px] font-medium text-slate-500 mt-1">
-                      {format(parseISO(chat.booking.start_time), "dd MMM")} •{" "}
-                      {format(parseISO(chat.booking.start_time), "HH:mm")}
-                    </p>
-                  )}
-                  {chat.type === "negotiation" && (
-                    <span className="text-[9px] font-black bg-blue-100 text-blue-700 px-2 py-0.5 rounded mt-2 inline-block uppercase">
-                      Negociação
-                    </span>
-                  )}
-                </div>
-              );
-            })
-          )}
-        </div>
-      </div>
-
-      {/* Área do Chat */}
-      {activeChat ? (
-        <div className="flex-1 flex flex-col bg-slate-50/50 relative">
-          {/* Header do Chat */}
-          <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between shadow-sm z-10 shrink-0">
-            <div className="flex items-center gap-4">
+            <div className="flex gap-2">
               <button
-                className="md:hidden p-2 -ml-2 text-slate-400"
-                onClick={() => setActiveChat(null)}
+                onClick={() => setActiveFilter("all")}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${activeFilter === "all" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
               >
-                Voltar
+                Todas
               </button>
-              <div>
-                <h3 className="font-black text-slate-900">
-                  {getDisplayName(activeChat)}
-                </h3>
-                <p className="text-xs font-bold text-slate-500">
-                  {activeChat.room_name}
-                </p>
-              </div>
-            </div>
-            {isChatLocked() && (
-              <Badge
-                variant="outline"
-                className="bg-slate-100 text-slate-500 border-slate-200 flex items-center gap-1"
+              <button
+                onClick={() => setActiveFilter("unread")}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${activeFilter === "unread" ? "bg-[#f05e23] text-white shadow-md shadow-orange-500/20" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
               >
-                <Lock className="w-3 h-3" /> Encerrado
-              </Badge>
-            )}
-          </div>
-
-          <div className="flex-1 overflow-y-auto flex flex-col relative">
-            {/* CONTEXTO DA RESERVA */}
-            {activeChat.type === "booking" && activeChat.booking && (
-              <div className="m-4 p-4 bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col sm:flex-row justify-between sm:items-center gap-4 shrink-0">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-full bg-orange-50 flex items-center justify-center shrink-0">
-                    <Calendar className="w-5 h-5 text-[#f05e23]" />
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">
-                      Detalhes do Agendamento
-                    </p>
-                    <p className="text-sm font-black text-slate-900">
-                      {format(
-                        parseISO(activeChat.booking.start_time),
-                        "EEEE, dd 'de' MMMM",
-                        { locale: ptBR },
-                      )}
-                    </p>
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500 mt-1">
-                      <Clock className="w-3.5 h-3.5 text-[#f05e23]" />
-                      {format(
-                        parseISO(activeChat.booking.start_time),
-                        "HH:mm",
-                      )}{" "}
-                      às{" "}
-                      {format(parseISO(activeChat.booking.end_time), "HH:mm")}
-                    </div>
-                  </div>
-                </div>
-                <div className="sm:text-right border-t sm:border-t-0 border-slate-100 pt-3 sm:pt-0">
-                  <Badge
-                    className={
-                      activeChat.booking.status === "confirmed"
-                        ? "bg-emerald-100 text-emerald-700"
-                        : "bg-amber-100 text-amber-700"
-                    }
-                  >
-                    {activeChat.booking.status === "confirmed"
-                      ? "Confirmada"
-                      : "Pendente"}
-                  </Badge>
-                </div>
-              </div>
-            )}
-
-            {activeChat.type === "negotiation" && (
-              <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl flex gap-3 mx-4 my-4 shadow-sm shrink-0">
-                <ShieldAlert className="w-5 h-5 text-blue-600 shrink-0" />
-                <p className="text-xs font-medium text-blue-800 leading-relaxed">
-                  Esta é uma negociação de contrato. Para a sua segurança, o
-                  envio de telefones e e-mails é bloqueado. A equipe Fusion
-                  acompanha este chat.
-                </p>
-              </div>
-            )}
-
-            {/* MENSAGENS COM SISTEMA DE LEITURA (TICKS) */}
-            <div className="p-6 space-y-4 flex-1">
-              {messages.map((msg) => {
-                const isMe = msg.sender_id === myId;
-                return (
-                  <div
-                    key={msg.id}
-                    className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}
-                  >
-                    <div
-                      className={`max-w-[85%] md:max-w-[75%] px-4 py-3 rounded-2xl text-sm font-medium shadow-sm ${isMe ? "bg-[#f05e23] text-white rounded-br-none" : "bg-white border border-slate-200 text-slate-700 rounded-bl-none"}`}
-                    >
-                      {msg.content}
-                    </div>
-                    <span className="text-[10px] text-slate-400 mt-1 px-1 font-bold flex items-center gap-1">
-                      {format(new Date(msg.created_at), "HH:mm")}
-
-                      {/* Ícone de Visualizado apenas para as mensagens que EU enviei */}
-                      {isMe &&
-                        (msg.read_at ? (
-                          <CheckCheck className="w-3.5 h-3.5 text-blue-500" />
-                        ) : (
-                          <Check className="w-3.5 h-3.5 text-slate-400" />
-                        ))}
-                    </span>
-                  </div>
-                );
-              })}
-              <div ref={messagesEndRef} />
+                Não Lidas
+                {chats.some((c) => c.unread_count > 0) && (
+                  <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                )}
+              </button>
             </div>
           </div>
 
-          {/* ÁREA DE INPUT */}
-          <div className="bg-white p-4 border-t border-slate-200 shrink-0">
-            {isChatLocked() ? (
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-center">
-                <p className="text-sm font-bold text-slate-500 flex items-center justify-center gap-2">
-                  <Lock className="w-4 h-4" /> Este agendamento foi finalizado e
-                  o chat está bloqueado.
+          <div className="flex-1 overflow-y-auto">
+            {filteredChats.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full p-8 text-center">
+                <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4">
+                  <MessageSquare className="w-8 h-8 text-slate-300" />
+                </div>
+                <p className="font-bold text-slate-900">
+                  Nenhuma conversa encontrada
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  {activeFilter === "unread"
+                    ? "Você leu todas as suas mensagens."
+                    : "Suas conversas com anfitriões aparecerão aqui."}
                 </p>
               </div>
             ) : (
-              <form
-                onSubmit={handleSendMessage}
-                className="flex items-center gap-2 max-w-4xl mx-auto relative"
-              >
-                <Input
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                  placeholder="Digite sua mensagem..."
-                  className="h-12 bg-slate-50 border-slate-200 pr-14 rounded-xl focus-visible:ring-[#f05e23]"
-                  autoComplete="off"
-                />
-                <Button
-                  type="submit"
-                  size="icon"
-                  disabled={!newMessage.trim()}
-                  className="absolute right-1 h-10 w-10 rounded-lg bg-[#f05e23] hover:bg-[#d6521e] text-white transition-all"
-                >
-                  <Send className="w-4 h-4" />
-                </Button>
-              </form>
+              <div className="divide-y divide-slate-50">
+                {filteredChats.map((chat) => {
+                  const isSelected = selectedChat?.id === chat.id;
+                  const hasUnread = chat.unread_count > 0;
+
+                  return (
+                    <button
+                      key={chat.id}
+                      onClick={() => setSelectedChat(chat)}
+                      className={`w-full text-left p-4 flex gap-4 transition-all hover:bg-slate-50 ${isSelected ? "bg-orange-50/50" : ""} ${hasUnread ? "bg-slate-50/50" : ""}`}
+                    >
+                      <div className="relative">
+                        <div className="w-14 h-14 rounded-2xl overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
+                          <img
+                            src={chat.room_image}
+                            alt={chat.room_name}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        {hasUnread && (
+                          <div className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center text-white text-[10px] font-black border-2 border-white shadow-sm">
+                            {chat.unread_count}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex-1 min-w-0 flex flex-col justify-center">
+                        <div className="flex justify-between items-start mb-0.5">
+                          <h4
+                            className={`text-sm truncate pr-2 ${hasUnread ? "font-black text-slate-900" : "font-bold text-slate-800"}`}
+                          >
+                            {chat.other_person_name}
+                          </h4>
+                          {chat.last_message_date && (
+                            <span
+                              className={`text-[10px] whitespace-nowrap ${hasUnread ? "font-bold text-[#f05e23]" : "text-slate-400"}`}
+                            >
+                              {format(
+                                parseISO(chat.last_message_date),
+                                "HH:mm",
+                              )}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <Building2 className="w-3 h-3 text-slate-400" />
+                          <span className="text-[10px] font-bold text-slate-500 uppercase truncate">
+                            {chat.room_name}{" "}
+                            {chat.booking_start
+                              ? ` • ${format(parseISO(chat.booking_start), "dd/MM")}`
+                              : ""}
+                          </span>
+                        </div>
+
+                        <p
+                          className={`text-xs truncate ${hasUnread ? "font-bold text-slate-700" : "text-slate-500"}`}
+                        >
+                          {chat.last_message
+                            ? chat.last_message
+                            : "Envie a primeira mensagem"}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             )}
           </div>
         </div>
-      ) : (
-        <div className="hidden md:flex flex-1 items-center justify-center flex-col text-slate-400">
-          <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mb-4">
-            <MessageSquare className="w-10 h-10 opacity-40" />
-          </div>
-          <p className="font-bold text-slate-500">
-            Selecione uma conversa para começar
-          </p>
+
+        {/* ========================================== */}
+        {/* PAINEL DIREITO: CONVERSA ATIVA               */}
+        {/* ========================================== */}
+        <div
+          className={`flex-1 flex flex-col bg-[#f8f9fa] relative ${!selectedChat ? "hidden md:flex" : "flex"}`}
+        >
+          {!selectedChat ? (
+            <div className="hidden md:flex flex-col items-center justify-center h-full text-center p-8 bg-slate-50/50">
+              <div className="w-24 h-24 bg-white rounded-full shadow-sm flex items-center justify-center mb-6">
+                <MessageSquare className="w-10 h-10 text-slate-300" />
+              </div>
+              <h2 className="text-2xl font-black text-slate-900 mb-2">
+                Suas Conversas
+              </h2>
+              <p className="text-slate-500 font-medium max-w-md">
+                Selecione um chat no menu lateral para visualizar ou enviar
+                mensagens para o anfitrião.
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* CABEÇALHO DO CHAT */}
+              <div className="h-[72px] bg-white border-b border-slate-200 px-4 flex items-center gap-4 shrink-0 shadow-sm z-20">
+                <button
+                  onClick={() => setSelectedChat(null)}
+                  className="md:hidden w-10 h-10 bg-slate-50 rounded-full flex items-center justify-center text-slate-600"
+                >
+                  <ArrowLeft className="w-5 h-5" />
+                </button>
+
+                <div className="w-10 h-10 rounded-full overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
+                  <div className="w-full h-full flex items-center justify-center bg-orange-50 text-[#f05e23]">
+                    <User className="w-5 h-5" />
+                  </div>
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-black text-slate-900 truncate leading-tight">
+                    {selectedChat.other_person_name}
+                  </h3>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase truncate">
+                    Anfitrião da Sala
+                  </p>
+                </div>
+              </div>
+
+              {/* CARD DE CONTEXTO DA RESERVA (FIXO NO TOPO) */}
+              {selectedChat.booking_start && (
+                <div className="bg-slate-50 border-b border-slate-200 p-3 sm:px-6 flex flex-row items-center justify-between shrink-0 z-10">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg overflow-hidden border border-slate-200 shrink-0 shadow-sm">
+                      <img
+                        src={selectedChat.room_image}
+                        alt="Sala"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <div>
+                      <p className="text-xs sm:text-sm font-black text-slate-900 leading-tight">
+                        {selectedChat.room_name}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] sm:text-xs font-bold text-slate-500 mt-0.5">
+                        <span className="flex items-center gap-1">
+                          <CalendarIcon className="w-3 h-3 text-[#f05e23]" />
+                          {format(
+                            parseISO(selectedChat.booking_start),
+                            "dd MMM, yyyy",
+                            { locale: ptBR },
+                          )}
+                        </span>
+                        <span className="hidden sm:inline w-1 h-1 bg-slate-300 rounded-full"></span>
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-3 h-3 text-[#f05e23]" />
+                          {format(
+                            parseISO(selectedChat.booking_start),
+                            "HH:mm",
+                          )}{" "}
+                          às{" "}
+                          {format(parseISO(selectedChat.booking_end!), "HH:mm")}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="shrink-0 pl-2">
+                    {getBookingStatusBadge(selectedChat.booking_status)}
+                  </div>
+                </div>
+              )}
+
+              {/* ÁREA DE MENSAGENS */}
+              <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+                <div className="text-center my-4">
+                  <Badge
+                    variant="outline"
+                    className="bg-white text-slate-400 border-slate-200 text-[10px] uppercase font-bold flex items-center justify-center gap-1 w-fit mx-auto"
+                  >
+                    <Info className="w-3 h-3" />
+                    Início da conversa
+                  </Badge>
+                </div>
+
+                {messages.map((msg, idx) => {
+                  const isMe = msg.sender_id === myId;
+                  const isRead = !!msg.read_at;
+
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}
+                    >
+                      <div
+                        className={`max-w-[85%] md:max-w-[70%] rounded-2xl px-4 py-3 shadow-sm ${
+                          isMe
+                            ? "bg-[#f05e23] text-white rounded-tr-sm"
+                            : "bg-white border border-slate-200 text-slate-800 rounded-tl-sm"
+                        }`}
+                      >
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap word-break">
+                          {msg.content}
+                        </p>
+                      </div>
+                      <div
+                        className={`flex items-center gap-1 mt-1 px-1 ${isMe ? "text-slate-400" : "text-slate-400"}`}
+                      >
+                        <span className="text-[10px] font-medium">
+                          {format(parseISO(msg.created_at), "HH:mm")}
+                        </span>
+                        {isMe && (
+                          <CheckCheck
+                            className={`w-3.5 h-3.5 ${isRead ? "text-blue-500" : "text-slate-300"}`}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                <div ref={messagesEndRef} />
+              </div>
+
+              {/* INPUT AREA */}
+              <div className="p-4 bg-white border-t border-slate-200 shrink-0">
+                <form
+                  onSubmit={handleSendMessage}
+                  className="flex items-end gap-3 bg-slate-50 border border-slate-200 p-2 rounded-2xl focus-within:ring-2 ring-[#f05e23]/20 transition-all"
+                >
+                  <textarea
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    placeholder="Digite sua mensagem..."
+                    className="flex-1 bg-transparent border-0 resize-none outline-none max-h-32 min-h-[44px] px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400"
+                    rows={1}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSendMessage(e);
+                      }
+                    }}
+                  />
+                  <Button
+                    type="submit"
+                    disabled={!newMessage.trim() || sending}
+                    className="w-12 h-12 rounded-xl bg-[#f05e23] hover:bg-[#d6521e] text-white shrink-0 shadow-md mb-0.5"
+                  >
+                    {sending ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <Send className="w-5 h-5 ml-1" />
+                    )}
+                  </Button>
+                </form>
+              </div>
+            </>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

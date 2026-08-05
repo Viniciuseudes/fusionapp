@@ -2,14 +2,15 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/utils/supabase/client";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
   Building,
   CalendarClock,
   CalendarDays,
-  MessageSquare, // <-- Novo Ícone Chat
-  Star, // <-- Novo Ícone Avaliações
+  MessageSquare,
+  Star,
   Wallet,
   LogOut,
 } from "lucide-react";
@@ -21,14 +22,14 @@ import { HostSpaceForm } from "@/components/host/space-form";
 import { AvailabilityTab } from "@/components/host/availability-tab";
 import { AvailabilityConfig } from "@/components/host/availability-config";
 import { HostBookingsTab } from "@/components/host/bookings-tab";
-import { HostChatTab } from "@/components/host/chat-tab"; // <-- Import Chat
-import { HostReviewsTab } from "@/components/host/reviews-tab"; // <-- Import Avaliações
+import { HostChatTab } from "@/components/host/chat-tab";
+import { HostReviewsTab } from "@/components/host/reviews-tab";
 
 type HostView =
   | "overview"
   | "bookings"
-  | "messages" // <-- Nova Vista
-  | "reviews" // <-- Nova Vista
+  | "messages"
+  | "reviews"
   | "spaces"
   | "create_space"
   | "edit_space"
@@ -36,12 +37,11 @@ type HostView =
   | "availability_config"
   | "financial";
 
-// Menu atualizado com Chat e Avaliações
 const navItems = [
   { id: "overview", label: "Visão Geral", icon: LayoutDashboard },
   { id: "bookings", label: "Agenda", icon: CalendarDays },
-  { id: "messages", label: "Mensagens", icon: MessageSquare }, // Aba Chat
-  { id: "reviews", label: "Avaliações", icon: Star }, // Aba Avaliações
+  { id: "messages", label: "Mensagens", icon: MessageSquare },
+  { id: "reviews", label: "Avaliações", icon: Star },
   { id: "spaces", label: "Meus Espaços", icon: Building },
   { id: "availability", label: "Horários", icon: CalendarClock },
   { id: "financial", label: "Financeiro", icon: Wallet },
@@ -53,8 +53,22 @@ export default function HostPage() {
   const [currentView, setCurrentView] = useState<HostView>("overview");
   const [selectedSpaceId, setSelectedSpaceId] = useState<string | null>(null);
 
-  const handleLogout = () => {
-    router.push("/");
+  // LOGOUT SÊNIOR COM HARD RELOAD E LIMPEZA DE CACHE
+  const handleLogout = async () => {
+    try {
+      const supabase = createClient();
+
+      // 1. Destrói a sessão real no banco de dados (Supabase)
+      await supabase.auth.signOut();
+
+      // 2. Limpa qualquer lixo de sessão do navegador
+      sessionStorage.clear();
+
+      // 3. HARD RELOAD: Força a página a recarregar limpando o cache do Next.js
+      window.location.replace("/login");
+    } catch (error) {
+      console.error("Erro ao sair:", error);
+    }
   };
 
   return (
@@ -119,6 +133,7 @@ export default function HostPage() {
       {/* CONTEÚDO DINÂMICO */}
       <main className="flex-1 lg:ml-64 pb-20 lg:pb-0 h-screen overflow-hidden">
         <div className="h-full overflow-y-auto">
+          {/* O onNavigate DEVE ficar apenas aqui no HostOverview */}
           {currentView === "overview" && (
             <HostOverview
               onNavigate={(view) => setCurrentView(view as HostView)}
@@ -127,27 +142,18 @@ export default function HostPage() {
 
           {currentView === "bookings" && <HostBookingsTab />}
 
-          {/* NOVOS MÓDULOS INSERIDOS */}
           {currentView === "messages" && <HostChatTab />}
 
           {currentView === "reviews" && <HostReviewsTab />}
 
-          {currentView === "spaces" && (
-            <HostSpaceList
-              onNavigate={(view) => setCurrentView(view as HostView)}
-            />
-          )}
+          {/* O HostSpaceList fica sem props, conforme exigido pelo componente */}
+          {currentView === "spaces" && <HostSpaceList />}
+
           {currentView === "create_space" && (
-            <HostSpaceForm
-              onBack={() => setCurrentView("spaces")}
-              isEditing={false}
-            />
+            <HostSpaceForm onSuccess={() => setCurrentView("spaces")} />
           )}
           {currentView === "edit_space" && (
-            <HostSpaceForm
-              onBack={() => setCurrentView("spaces")}
-              isEditing={true}
-            />
+            <HostSpaceForm onSuccess={() => setCurrentView("spaces")} />
           )}
 
           {currentView === "availability" && (
@@ -184,7 +190,6 @@ export default function HostPage() {
 
       {/* NAVEGAÇÃO MOBILE (BOTTOM NAV) */}
       <nav className="fixed inset-x-0 bottom-0 z-50 flex lg:hidden items-stretch justify-around border-t border-slate-800 bg-slate-900 pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_40px_rgba(0,0,0,0.2)] overflow-x-auto scrollbar-hide">
-        {/* No mobile, filtramos alguns ícones menos usados diariamente para não espremer muito, ou mostramos todos permitindo scroll */}
         {navItems
           .filter((item) => !["financial", "availability"].includes(item.id))
           .map((item) => {

@@ -43,6 +43,7 @@ interface Booking {
   rooms: {
     id: string;
     name: string;
+    tier?: string; // <-- ADICIONADO PARA O ESTORNO INTELIGENTE
     image_url: string;
     address_details: any;
     host_id: string;
@@ -89,8 +90,8 @@ export function BookingsTab({
         .select(
           `
           id, room_id, start_time, end_time, status, total_cost,
-          rooms ( id, name, image_url, address_details, host_id, profiles (full_name, phone) )
-        `,
+          rooms ( id, name, tier, image_url, address_details, host_id, profiles (full_name, phone) )
+        `, // <-- ADICIONADO O 'tier' NA BUSCA
         )
         .eq("user_id", user.id)
         .order("start_time", { ascending: true });
@@ -129,6 +130,9 @@ export function BookingsTab({
   const displayBookings =
     activeTab === "upcoming" ? upcomingBookings : pastBookings;
 
+  // ==========================================
+  // FUNÇÃO: ABRIR O CHAT DA RESERVA
+  // ==========================================
   const handleOpenChat = async (booking: Booking) => {
     setActionLoading(true);
     try {
@@ -143,8 +147,7 @@ export function BookingsTab({
         .eq("booking_id", booking.id)
         .maybeSingle();
 
-      // Se a tabela não existir, o erro vaza aqui
-      if (searchError && Object.keys(searchError).length > 0) throw searchError;
+      if (searchError) throw searchError;
 
       if (!existingChat) {
         const { error: insertError } = await supabase.from("chats").insert({
@@ -156,11 +159,7 @@ export function BookingsTab({
           booking_id: booking.id,
         });
 
-        // Captura explícita de erro de inserção
-        if (insertError) {
-          console.error("Erro detalhado do Supabase no Insert:", insertError);
-          throw insertError;
-        }
+        if (insertError) throw insertError;
       }
 
       if (onNavigateToChat) {
@@ -172,23 +171,20 @@ export function BookingsTab({
         });
       }
     } catch (err: any) {
-      console.error("Erro mapeado ao criar chat:", err);
-      // Blindagem: se o erro for vazio, avisa sobre as permissões
-      const errorMessage =
-        !err.message || Object.keys(err).length === 0
-          ? "As tabelas de chat não foram configuradas corretamente ou o RLS está bloqueando a criação."
-          : err.message;
-
+      console.error("Erro ao criar chat:", err);
       toast({
         variant: "destructive",
         title: "Erro ao abrir chat",
-        description: errorMessage,
+        description: err.message,
       });
     } finally {
       setActionLoading(false);
     }
   };
 
+  // ==========================================
+  // ESTORNO INTELIGENTE (30 DIAS + TIER CORRETO)
+  // ==========================================
   const handleConfirmCancel = async () => {
     const booking = cancelModal.booking;
     if (!booking) return;
@@ -214,13 +210,19 @@ export function BookingsTab({
       if (updateError) throw updateError;
 
       if (isRefundable) {
+        // Calcula a data de expiração para daqui a 30 dias
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + 30);
+
         const { error: refundError } = await supabase
           .from("wallet_transactions")
           .insert({
             user_id: user.id,
             amount: booking.total_cost,
             type: "refund",
+            tier: booking.rooms.tier || "start", // <-- ESTORNA NA CATEGORIA EXATA DA SALA
             description: `Estorno (Cancelamento antecipado): ${booking.rooms.name}`,
+            expires_at: expiresAt.toISOString(), // <-- VALIDADE DE 30 DIAS
           });
         if (refundError) throw refundError;
       }
@@ -230,7 +232,7 @@ export function BookingsTab({
           ? "Reserva Cancelada e Reembolsada"
           : "Reserva Cancelada",
         description: isRefundable
-          ? `O valor de ${booking.total_cost}h foi devolvido à sua carteira.`
+          ? `O valor de ${booking.total_cost}h foi devolvido à sua carteira com validade de 30 dias.`
           : "Como faltavam menos de 24h, não houve estorno de saldo conforme a política.",
       });
 
@@ -493,12 +495,7 @@ export function BookingsTab({
                       variant="outline"
                       className="flex-1 md:w-full h-10 rounded-lg text-xs font-bold border-zinc-200 text-zinc-700 hover:bg-zinc-100"
                     >
-                      {actionLoading ? (
-                        <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                      ) : (
-                        <MessageCircle className="w-3.5 h-3.5 mr-1.5" />
-                      )}
-                      Falar
+                      <MessageCircle className="w-3.5 h-3.5 mr-1.5" /> Falar
                     </Button>
                     <Button
                       onClick={handleRescheduleClick}

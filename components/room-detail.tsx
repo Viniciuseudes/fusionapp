@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useMemo } from "react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { ptBR } from "date-fns/locale";
 import {
@@ -16,6 +17,7 @@ import {
   eachDayOfInterval,
   isBefore,
   isSameMonth,
+  parseISO,
 } from "date-fns";
 import {
   ArrowLeft,
@@ -41,11 +43,12 @@ import {
   Shield,
   MessageSquare,
   Lock,
+  User,
+  Check,
+  Crown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-
-// Importação do modal e do tipo de resumo
 import { CheckoutModal, CheckoutSummary } from "@/components/checkout-modal";
 
 const AMENITIES_LIST = [
@@ -62,11 +65,13 @@ interface RoomDetailProps {
   roomId?: string | any;
   room?: any;
   onBack: () => void;
+  onNavigateToProfile?: () => void;
   initialModality?: "hora" | "turno" | "fixo";
 }
 
 export function RoomDetail(props: RoomDetailProps) {
-  const { onBack, initialModality = "hora" } = props;
+  const { onBack, onNavigateToProfile, initialModality = "hora" } = props;
+  const router = useRouter();
   const supabase = createClient();
   const { toast } = useToast();
 
@@ -74,10 +79,8 @@ export function RoomDetail(props: RoomDetailProps) {
   const [actionLoading, setActionLoading] = useState(false);
   const [roomData, setRoomData] = useState<any>(null);
 
-  // ABA ATIVA (Controle de Modalidade) forçada para iniciar em hora
   const [activeTab, setActiveTab] = useState<"hora" | "turno" | "fixo">("hora");
 
-  // ESTADOS: POR HORA
   const today = startOfToday();
   const [selectedDate, setSelectedDate] = useState<Date>(today);
   const [selectedSlots, setSelectedSlots] = useState<string[]>([]);
@@ -85,18 +88,17 @@ export function RoomDetail(props: RoomDetailProps) {
     startOfMonth(today),
   );
 
-  // ESTADOS: POR TURNO
+  const [roomBookings, setRoomBookings] = useState<any[]>([]);
+
   const [selectedShift, setSelectedShift] = useState<
     "morning" | "afternoon" | "night" | null
   >(null);
   const [selectedDays, setSelectedDays] = useState<number[]>([]);
 
-  // ESTADOS DO CHECKOUT
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [checkoutSummary, setCheckoutSummary] =
     useState<CheckoutSummary | null>(null);
 
-  // ESTADO DE FAVORITOS E GALERIA
   const [isFavorited, setIsFavorited] = useState(false);
   const [isFavoriteLoading, setIsFavoriteLoading] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
@@ -105,6 +107,11 @@ export function RoomDetail(props: RoomDetailProps) {
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
   const lightboxRef = useRef<HTMLDivElement>(null);
+
+  const [reviews, setReviews] = useState<any[]>([]);
+  const [loadingReviews, setLoadingReviews] = useState(true);
+
+  const [showProfileModal, setShowProfileModal] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -131,7 +138,6 @@ export function RoomDetail(props: RoomDetailProps) {
           setRoomData(data);
           const mods = data.modalities || [];
 
-          // TRAVA DE PRODUÇÃO: Força o modo "hora" como prioridade absoluta se a sala permitir
           if (mods.includes("hora")) {
             setActiveTab("hora");
           } else if (mods.includes(initialModality)) {
@@ -152,6 +158,47 @@ export function RoomDetail(props: RoomDetailProps) {
       isMounted = false;
     };
   }, [props.roomId, props.room, initialModality, supabase]);
+
+  useEffect(() => {
+    async function fetchRoomBookings() {
+      if (!roomData?.id) return;
+      const { data, error } = await supabase
+        .from("bookings")
+        .select("start_time, end_time, status")
+        .eq("room_id", roomData.id)
+        .in("status", ["confirmed", "pending_payment", "completed"]);
+
+      if (!error && data) {
+        setRoomBookings(data);
+      }
+    }
+    fetchRoomBookings();
+  }, [roomData?.id, supabase]);
+
+  useEffect(() => {
+    async function fetchReviews() {
+      const rawInput = props.roomId || props.room;
+      const idToFetch = typeof rawInput === "object" ? rawInput?.id : rawInput;
+      if (!idToFetch) return;
+
+      setLoadingReviews(true);
+      try {
+        const { data, error } = await supabase
+          .from("reviews")
+          .select("*, profiles:guest_id(full_name, avatar_url)")
+          .eq("room_id", idToFetch)
+          .order("created_at", { ascending: false });
+
+        if (error) throw error;
+        setReviews(data || []);
+      } catch (error) {
+        console.error("Erro ao buscar avaliações:", error);
+      } finally {
+        setLoadingReviews(false);
+      }
+    }
+    fetchReviews();
+  }, [props.roomId, props.room, supabase]);
 
   useEffect(() => {
     async function checkFavoriteStatus() {
@@ -175,6 +222,13 @@ export function RoomDetail(props: RoomDetailProps) {
     }
     checkFavoriteStatus();
   }, [props.roomId, props.room, supabase]);
+
+  const avgRating =
+    reviews.length > 0
+      ? (
+          reviews.reduce((acc, curr) => acc + curr.rating, 0) / reviews.length
+        ).toFixed(1)
+      : "Novo";
 
   const availableSlots = useMemo(() => {
     if (!roomData || activeTab !== "hora") return [];
@@ -334,9 +388,25 @@ export function RoomDetail(props: RoomDetailProps) {
     );
   };
 
-  // ==========================================
-  // AÇÃO DE RESERVA
-  // ==========================================
+  const isSlotBooked = (slotKey: string) => {
+    const [dateStr, timeStr] = slotKey.split("|");
+    const startHour = timeStr.split(" - ")[0].replace("h", ":");
+    const slotStart = new Date(`${dateStr}T${startHour}:00`).getTime();
+
+    return roomBookings.some((b) => {
+      const bStart = new Date(b.start_time).getTime();
+      const bEnd = new Date(b.end_time).getTime();
+      return slotStart >= bStart && slotStart < bEnd;
+    });
+  };
+
+  const isSlotPast = (slotKey: string) => {
+    const [dateStr, timeStr] = slotKey.split("|");
+    const startHour = timeStr.split(" - ")[0].replace("h", ":");
+    const slotStart = new Date(`${dateStr}T${startHour}:00`).getTime();
+    return slotStart < new Date().getTime();
+  };
+
   const handleAction = async () => {
     if (activeTab === "hora" && selectedSlots.length === 0) {
       return toast({
@@ -358,13 +428,44 @@ export function RoomDetail(props: RoomDetailProps) {
 
     setActionLoading(true);
     try {
+      // 1. VERIFICAÇÃO ESTRITA NO SERVIDOR (IGNORA CACHE MENTIROSO)
       const {
         data: { user },
-        error: userError,
+        error: authError,
       } = await supabase.auth.getUser();
-      if (userError || !user)
-        throw new Error("Você precisa estar logado para prosseguir.");
 
+      if (authError || !user) {
+        toast({
+          title: "Acesso restrito",
+          description: "Você precisa entrar na sua conta para continuar.",
+        });
+        router.push("/login"); // Agora sim, manda pro login de verdade se não estiver autenticado
+        return;
+      }
+
+      // 2. BUSCA O PERFIL DO USUÁRIO LOGADO EM TEMPO REAL
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("full_name, cpf, birth_date, address_street, address_number")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      const isProfileComplete = Boolean(
+        profile?.full_name &&
+        profile?.cpf &&
+        profile?.birth_date &&
+        profile?.address_street &&
+        profile?.address_number,
+      );
+
+      // BLOQUEIO 2: Modal de Nível Bronze se faltar dados
+      if (!isProfileComplete) {
+        setShowProfileModal(true);
+        setActionLoading(false);
+        return;
+      }
+
+      // 3. FLUXO NORMAL DE RESERVA (Aprovado em todas as validações)
       if (activeTab === "hora") {
         const totalHours = selectedSlots.length;
         const firstSlot = selectedSlots[0];
@@ -388,24 +489,19 @@ export function RoomDetail(props: RoomDetailProps) {
 
         const contentType = response.headers.get("content-type");
         if (!contentType || !contentType.includes("application/json")) {
-          throw new Error(
-            "Erro de rota: A API não foi encontrada ou o nome do arquivo está incorreto.",
-          );
+          throw new Error("Erro de rota: A API não foi encontrada.");
         }
 
         const summaryData = await response.json();
-
-        if (!response.ok) {
+        if (!response.ok)
           throw new Error(summaryData.error || "Erro ao calcular valores.");
-        }
 
         setCheckoutSummary(summaryData);
         setIsCheckoutOpen(true);
       } else {
         toast({
           title: "Iniciando ambiente seguro...",
-          description:
-            "Criando canal de negociação com o anfitrião. Você será redirecionado para o chat.",
+          description: "Criando canal de negociação. Você será redirecionado.",
         });
         setTimeout(() => onBack(), 1500);
       }
@@ -421,10 +517,7 @@ export function RoomDetail(props: RoomDetailProps) {
     }
   };
 
-  // ==========================================
-  // CONFIRMAÇÃO DO CHECKOUT
-  // ==========================================
-  const handleConfirmCheckout = async () => {
+  const handleConfirmCheckout = async (method: "wallet" | "pix" | "card") => {
     if (!checkoutSummary) return;
     setActionLoading(true);
 
@@ -434,51 +527,91 @@ export function RoomDetail(props: RoomDetailProps) {
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuário não autenticado.");
 
-      const creditCostPerHour =
-        checkoutSummary.creditsRequired / selectedSlots.length;
-      const upgradeFeePerHour =
-        checkoutSummary.upgradeFeeBRL / selectedSlots.length;
+      if (method === "wallet") {
+        const creditCostPerHour =
+          checkoutSummary.creditsRequired / selectedSlots.length;
 
-      const bookingPayloads = selectedSlots.map((slotKey) => {
-        const [dateStr, slotTime] = slotKey.split("|");
-        const startSlot = slotTime.split(" - ")[0].replace("h", ":");
-        const endSlot = slotTime.split(" - ")[1].replace("h", ":");
+        const bookingPayloads = selectedSlots.map((slotKey) => {
+          const [dateStr, slotTime] = slotKey.split("|");
+          const startSlot = slotTime.split(" - ")[0].replace("h", ":");
+          const endSlot = slotTime.split(" - ")[1].replace("h", ":");
 
-        return {
-          user_id: user.id,
-          room_id: roomData.id,
-          start_time: new Date(`${dateStr}T${startSlot}:00`).toISOString(),
-          end_time: new Date(`${dateStr}T${endSlot}:00`).toISOString(),
-          total_cost: creditCostPerHour,
-          upgrade_fee_amount: upgradeFeePerHour,
-          status: "pending_payment",
-        };
-      });
-
-      const { error: bookingError } = await supabase
-        .from("bookings")
-        .insert(bookingPayloads);
-      if (bookingError) throw bookingError;
-
-      const { error: walletError } = await supabase
-        .from("wallet_transactions")
-        .insert({
-          user_id: user.id,
-          amount: checkoutSummary.creditsRequired,
-          type: "usage",
-          description: `Reserva: ${roomData.name}`,
+          return {
+            user_id: user.id,
+            room_id: roomData.id,
+            start_time: new Date(`${dateStr}T${startSlot}:00`).toISOString(),
+            end_time: new Date(`${dateStr}T${endSlot}:00`).toISOString(),
+            total_cost: creditCostPerHour,
+            status: "confirmed",
+          };
         });
-      if (walletError) throw walletError;
 
-      toast({
-        title: "Reserva Confirmada! 🎉",
-        description:
-          "Sua sala foi agendada e os créditos foram consumidos com sucesso.",
-      });
+        const { error: bookingError } = await supabase
+          .from("bookings")
+          .insert(bookingPayloads);
+        if (bookingError) throw bookingError;
 
-      setIsCheckoutOpen(false);
-      setCheckoutSummary(null);
-      onBack();
+        const { error: walletError } = await supabase
+          .from("wallet_transactions")
+          .insert({
+            user_id: user.id,
+            amount: -checkoutSummary.creditsRequired,
+            type: "usage",
+            tier: roomData.tier || "start",
+            description: `Reserva em Créditos: ${roomData.name}`,
+          });
+        if (walletError) throw walletError;
+
+        toast({
+          title: "Reserva Confirmada! 🎉",
+          description: "A sala foi agendada e os créditos consumidos.",
+        });
+        setIsCheckoutOpen(false);
+        setCheckoutSummary(null);
+        onBack();
+      } else {
+        toast({
+          title: "Gerando pagamento...",
+          description: "Redirecionando para o gateway.",
+        });
+
+        const paymentRef = `REF_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+        const bookingPayloads = selectedSlots.map((slotKey) => {
+          const [dateStr, slotTime] = slotKey.split("|");
+          const startSlot = slotTime.split(" - ")[0].replace("h", ":");
+          const endSlot = slotTime.split(" - ")[1].replace("h", ":");
+
+          return {
+            user_id: user.id,
+            room_id: roomData.id,
+            start_time: new Date(`${dateStr}T${startSlot}:00`).toISOString(),
+            end_time: new Date(`${dateStr}T${endSlot}:00`).toISOString(),
+            total_cost: 0,
+            status: "pending_payment",
+            asaas_payment_id: paymentRef,
+          };
+        });
+
+        const { error: bookingError } = await supabase
+          .from("bookings")
+          .insert(bookingPayloads);
+        if (bookingError) throw bookingError;
+
+        const response = await fetch("/api/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            checkoutType: "booking",
+            price: totalHourlyCost,
+            paymentRef: paymentRef,
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error);
+
+        window.location.href = data.invoiceUrl;
+      }
     } catch (err: any) {
       console.error(err);
       toast({
@@ -491,19 +624,22 @@ export function RoomDetail(props: RoomDetailProps) {
     }
   };
 
-  // ==========================================
-  // UI FUNCTIONS
-  // ==========================================
   const handleFavoriteToggle = async () => {
     if (isFavoriteLoading || !roomData) return;
+
+    // Verificação estrita para botão de Favoritar também
     const {
       data: { user },
+      error: authError,
     } = await supabase.auth.getUser();
-    if (!user) {
-      return toast({
+
+    if (authError || !user) {
+      toast({
         title: "Acesso restrito",
-        description: "Você precisa fazer login para favoritar uma sala.",
+        description: "Você precisa fazer login para favoritar.",
       });
+      router.push("/login");
+      return;
     }
 
     setIsFavoriteLoading(true);
@@ -679,14 +815,12 @@ export function RoomDetail(props: RoomDetailProps) {
     return index === 0 ? "col-span-2 row-span-2" : "col-span-1 row-span-1";
   };
 
-  // Google Maps Base Query
   const mapSearchQuery = encodeURIComponent(
     `${address.neighborhood || ""}, ${address.city || ""}`,
   );
 
   return (
     <div className="fixed inset-0 z-[100] bg-white flex flex-col animate-in slide-in-from-bottom-4 duration-300">
-      {/* HEADER FIXO */}
       <div className="flex-none bg-white z-30 border-b border-slate-100 md:border-transparent">
         <div className="max-w-5xl mx-auto pt-6 px-5 flex justify-between items-center pb-4">
           <button
@@ -716,7 +850,6 @@ export function RoomDetail(props: RoomDetailProps) {
       </div>
 
       <div className="flex-1 overflow-y-auto pb-8 md:pb-12 scrollbar-hide">
-        {/* TÍTULO E RATING */}
         <div className="max-w-5xl mx-auto px-5 pt-2 pb-6">
           {isPartner && (
             <div className="mb-3 inline-flex items-center gap-1.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white text-[10px] font-black px-3 py-1.5 rounded-lg uppercase tracking-widest shadow-md">
@@ -730,9 +863,9 @@ export function RoomDetail(props: RoomDetailProps) {
             <div className="flex items-center gap-1 bg-amber-50 px-2 py-1 rounded-md shrink-0 border border-amber-100 mt-1">
               <Star className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
               <span className="text-xs font-bold text-slate-700">
-                5.0{" "}
+                {avgRating}{" "}
                 <span className="text-slate-400 font-normal hidden md:inline">
-                  (124)
+                  ({reviews.length} avaliações)
                 </span>
               </span>
             </div>
@@ -752,7 +885,6 @@ export function RoomDetail(props: RoomDetailProps) {
           </div>
         </div>
 
-        {/* GALERIA MOBILE */}
         <div className="md:hidden relative w-full h-[35vh] bg-slate-100 flex overflow-x-auto snap-x snap-mandatory scrollbar-hide">
           {allImages.length > 0 ? (
             allImages.map((img, idx) => (
@@ -786,7 +918,6 @@ export function RoomDetail(props: RoomDetailProps) {
           )}
         </div>
 
-        {/* GALERIA DESKTOP */}
         <div className="hidden md:block max-w-5xl mx-auto px-5 mb-8">
           <div className="grid grid-cols-4 grid-rows-2 gap-2 h-[420px] w-full rounded-2xl overflow-hidden relative bg-slate-50">
             {imagesToShow.map((img, idx) => {
@@ -820,9 +951,8 @@ export function RoomDetail(props: RoomDetailProps) {
           </div>
         </div>
 
-        {/* CONTEÚDO PRINCIPAL (Infos e Agendamento) */}
-        <div className="px-5 py-6 max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-10">
-          <div className="md:col-span-7 space-y-10">
+        <div className="px-5 py-6 max-w-5xl mx-auto flex flex-col lg:grid lg:grid-cols-12 gap-10">
+          <div className="order-1 lg:order-1 lg:col-span-8 space-y-10">
             <section>
               <h2 className="text-lg font-black text-slate-900 mb-3">
                 Sobre o espaço
@@ -861,17 +991,12 @@ export function RoomDetail(props: RoomDetailProps) {
 
             <div className="w-full h-px bg-slate-100" />
 
-            {/* ========================================== */}
-            {/* MAPA DE RAIO / PROXIMIDADE (REAL MAP)      */}
-            {/* ========================================== */}
             <section>
               <h2 className="text-lg font-black text-slate-900 mb-4">
                 Localização da Sala
               </h2>
-
               <div className="relative w-full h-64 bg-slate-100 rounded-2xl overflow-hidden border border-slate-200 shadow-inner">
-                {/* Iframe Real do Google Maps (pointer-events-none para não sair do centro do raio) */}
-                <div className="absolute inset-0 pointer-events-none">
+                <div className="absolute top-[-70px] left-0 w-full h-[calc(100%+70px)] pointer-events-none">
                   <iframe
                     width="100%"
                     height="100%"
@@ -881,13 +1006,9 @@ export function RoomDetail(props: RoomDetailProps) {
                     src={`https://www.google.com/maps?q=${mapSearchQuery}&output=embed&z=15`}
                   ></iframe>
                 </div>
-
-                {/* Overlay do Raio de Proximidade Azul Claro */}
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                   <div className="w-48 h-48 bg-[#00bcd4]/20 border-2 border-[#00bcd4]/40 rounded-full shadow-[0_0_15px_rgba(0,188,212,0.3)]"></div>
                 </div>
-
-                {/* Card Flutuante de Região */}
                 <div className="absolute bottom-4 left-4 right-4 md:right-auto md:w-64 bg-white/95 backdrop-blur-md px-4 py-3 rounded-xl shadow-md border border-slate-100 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-cyan-50 flex items-center justify-center shrink-0">
                     <MapPin className="w-5 h-5 text-cyan-600" />
@@ -905,7 +1026,6 @@ export function RoomDetail(props: RoomDetailProps) {
                 </div>
               </div>
 
-              {/* Mensagem de Segurança */}
               <div className="bg-slate-50 rounded-xl p-4 mt-4 border border-slate-100 flex items-start gap-3">
                 <Lock className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
                 <div>
@@ -924,81 +1044,10 @@ export function RoomDetail(props: RoomDetailProps) {
               </div>
             </section>
 
-            <div className="w-full h-px bg-slate-100" />
-
-            {/* ========================================== */}
-            {/* AVALIAÇÕES E COMENTÁRIOS (SOCIAL PROOF)    */}
-            {/* ========================================== */}
-            <section>
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-lg font-black text-slate-900">
-                  Avaliações
-                </h2>
-                <div className="flex items-center gap-1.5">
-                  <Star className="w-5 h-5 fill-amber-500 text-amber-500" />
-                  <span className="font-black text-lg text-slate-900">5.0</span>
-                  <span className="text-sm font-medium text-slate-500">
-                    (124 avaliações)
-                  </span>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                {/* Mock Review 1 */}
-                <div className="bg-white border border-slate-100 p-5 rounded-2xl shadow-sm">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center font-bold text-slate-600">
-                      C
-                    </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-900">
-                        Dr. Carlos Eduardo
-                      </p>
-                      <p className="text-xs font-medium text-slate-500">
-                        Cardiologia • Há 2 semanas
-                      </p>
-                    </div>
-                  </div>
-                  <p className="text-sm text-slate-600 leading-relaxed font-medium">
-                    "Sala impecável, internet rápida e muito silenciosa. A
-                    recepção foi super cordial com meus pacientes. Voltarei a
-                    agendar com certeza."
-                  </p>
-                </div>
-
-                {/* Mock Review 2 */}
-                <div className="bg-white border border-slate-100 p-5 rounded-2xl shadow-sm">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center font-bold text-slate-600">
-                      M
-                    </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-900">
-                        Dra. Mariana Silva
-                      </p>
-                      <p className="text-xs font-medium text-slate-500">
-                        Psicologia • Há 1 mês
-                      </p>
-                    </div>
-                  </div>
-                  <p className="text-sm text-slate-600 leading-relaxed font-medium">
-                    "Excelente infraestrutura. O isolamento acústico é perfeito
-                    para os meus atendimentos e a localização do prédio me
-                    passou muita segurança."
-                  </p>
-                </div>
-              </div>
-
-              <Button
-                variant="outline"
-                className="w-full mt-4 h-12 rounded-xl font-bold text-slate-700 border-slate-200"
-              >
-                Ler todas as 124 avaliações
-              </Button>
-            </section>
+            <div className="w-full h-px bg-slate-100 hidden lg:block" />
           </div>
 
-          <div className="md:col-span-5 bg-white md:p-6 md:border md:border-slate-200 md:rounded-2xl md:shadow-lg md:h-fit md:sticky md:top-6 flex flex-col">
+          <div className="order-2 lg:order-2 lg:col-span-4 bg-white md:p-6 md:border md:border-slate-200 md:rounded-2xl md:shadow-lg md:h-fit md:sticky md:top-24 flex flex-col">
             <div className="flex bg-slate-100 p-1.5 rounded-xl mb-6">
               {roomModalities.includes("hora") && (
                 <button
@@ -1026,7 +1075,6 @@ export function RoomDetail(props: RoomDetailProps) {
               )}
             </div>
 
-            {/* SEÇÃO DE CÁLCULO POR HORA E CALENDÁRIO */}
             {activeTab === "hora" && (
               <section className="animate-in fade-in">
                 <div className="flex items-center gap-2 mb-4">
@@ -1127,24 +1175,30 @@ export function RoomDetail(props: RoomDetailProps) {
                   <div className="grid grid-cols-2 gap-2 max-h-[220px] overflow-y-auto pr-1 scrollbar-hide">
                     {availableSlots.map((slotTime: string) => {
                       const slotKey = `${format(selectedDate, "yyyy-MM-dd")}|${slotTime}`;
+                      const isBooked = isSlotBooked(slotKey);
+                      const isPastSlot = isSlotPast(slotKey);
+                      const isUnavailable = isBooked || isPastSlot;
                       const isSelected = selectedSlots.includes(slotKey);
                       const slotPrice = getSlotPrice(slotKey);
 
                       return (
                         <button
                           key={slotKey}
-                          onClick={() => toggleSlot(slotKey)}
-                          className={`h-14 rounded-xl flex flex-col items-center justify-center transition-all border-2 ${isSelected ? "border-[#f05e23] bg-orange-50" : "border-slate-100 bg-white hover:border-slate-300"}`}
+                          onClick={() => !isUnavailable && toggleSlot(slotKey)}
+                          disabled={isUnavailable}
+                          className={`h-14 rounded-xl flex flex-col items-center justify-center transition-all border-2 ${isUnavailable ? "border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed" : isSelected ? "border-[#f05e23] bg-orange-50" : "border-slate-100 bg-white hover:border-slate-300"}`}
                         >
                           <span
-                            className={`text-xs font-bold ${isSelected ? "text-[#f05e23]" : "text-slate-700"}`}
+                            className={`text-xs font-bold ${isUnavailable ? "text-slate-400 line-through" : isSelected ? "text-[#f05e23]" : "text-slate-700"}`}
                           >
                             {slotTime}
                           </span>
                           <span
-                            className={`text-[10px] font-semibold mt-0.5 ${isSelected ? "text-[#f05e23]/80" : "text-slate-400"}`}
+                            className={`text-[10px] font-semibold mt-0.5 ${isUnavailable ? "text-slate-400" : isSelected ? "text-[#f05e23]/80" : "text-slate-400"}`}
                           >
-                            R$ {slotPrice.toFixed(2).replace(".", ",")}
+                            {isUnavailable
+                              ? "Indisponível"
+                              : `R$ ${slotPrice.toFixed(2).replace(".", ",")}`}
                           </span>
                         </button>
                       );
@@ -1152,7 +1206,6 @@ export function RoomDetail(props: RoomDetailProps) {
                   </div>
                 )}
 
-                {/* BOTÃO DESKTOP */}
                 <div className="hidden md:block pt-6 border-t border-slate-100 mt-6">
                   <div className="flex items-center justify-between mb-4">
                     <div>
@@ -1182,7 +1235,6 @@ export function RoomDetail(props: RoomDetailProps) {
               </section>
             )}
 
-            {/* SEÇÃO: POR TURNO */}
             {activeTab === "turno" && (
               <section className="animate-in fade-in space-y-6">
                 <div>
@@ -1271,7 +1323,6 @@ export function RoomDetail(props: RoomDetailProps) {
               </section>
             )}
 
-            {/* SEÇÃO: MENSAL (FIXO) */}
             {activeTab === "fixo" && (
               <section className="animate-in fade-in space-y-6">
                 <div className="text-center py-8 bg-slate-50 rounded-2xl border border-slate-200">
@@ -1279,7 +1330,7 @@ export function RoomDetail(props: RoomDetailProps) {
                     Contrato Mensal (Exclusivo)
                   </p>
                   <h3 className="text-3xl font-black text-slate-900">
-                    R$ {pricingData.monthly || "--"}
+                    {pricingData.monthly ? `R$ ${pricingData.monthly}` : "--"}
                   </h3>
                 </div>
                 <div className="bg-emerald-50/50 border border-emerald-100 p-4 rounded-xl flex gap-3">
@@ -1307,10 +1358,108 @@ export function RoomDetail(props: RoomDetailProps) {
               </section>
             )}
           </div>
+
+          <div className="order-3 lg:order-3 lg:col-span-8 lg:col-start-1 pt-8 border-t border-slate-100 lg:border-none lg:pt-0">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-lg font-black text-slate-900">Avaliações</h2>
+              <div className="flex items-center gap-1.5">
+                <Star className="w-5 h-5 fill-amber-500 text-amber-500" />
+                <span className="font-black text-lg text-slate-900">
+                  {avgRating}
+                </span>
+                <span className="text-sm font-medium text-slate-500">
+                  ({reviews.length} avaliações)
+                </span>
+              </div>
+            </div>
+
+            {loadingReviews ? (
+              <div className="flex justify-center py-10">
+                <Loader2 className="w-8 h-8 animate-spin text-slate-300" />
+              </div>
+            ) : reviews.length === 0 ? (
+              <div className="text-center py-12 bg-slate-50 rounded-[2rem] border border-slate-100">
+                <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
+                  <Star className="w-8 h-8 text-slate-300" />
+                </div>
+                <p className="font-bold text-slate-900 text-lg">
+                  Ainda não há avaliações
+                </p>
+                <p className="text-sm text-slate-500 font-medium mt-1">
+                  Seja o primeiro a avaliar este espaço após seu uso!
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {reviews.map((review) => (
+                  <div
+                    key={review.id}
+                    className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm"
+                  >
+                    <div className="flex items-center gap-4 mb-4">
+                      <div className="w-12 h-12 rounded-full overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
+                        {review.profiles?.avatar_url ? (
+                          <img
+                            src={review.profiles.avatar_url}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-slate-400">
+                            <User className="w-6 h-6" />
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <p className="font-black text-slate-900">
+                          {review.profiles?.full_name ||
+                            "Profissional Verificado"}
+                        </p>
+                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                          {format(parseISO(review.created_at), "dd MMM yyyy", {
+                            locale: ptBR,
+                          })}
+                        </p>
+                      </div>
+                      <div className="ml-auto flex items-center gap-1 bg-amber-50 px-3 py-1.5 rounded-xl border border-amber-100">
+                        <Star className="w-4 h-4 fill-amber-500 text-amber-500" />
+                        <span className="font-black text-amber-700">
+                          {Number(review.rating).toFixed(1)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="text-slate-600 leading-relaxed font-medium">
+                      "{review.comment}"
+                    </p>
+
+                    {review.host_reply && (
+                      <div className="mt-5 p-5 bg-slate-50 rounded-2xl border border-slate-200 md:ml-12 relative">
+                        <div className="absolute top-0 left-6 -mt-2 w-4 h-4 bg-slate-50 border-t border-l border-slate-200 rotate-45"></div>
+                        <p className="text-xs font-black text-slate-900 mb-1 flex items-center gap-1">
+                          <Check className="w-3.5 h-3.5 text-[#f05e23]" />{" "}
+                          Resposta do Anfitrião
+                        </p>
+                        <p className="text-sm font-medium text-slate-600">
+                          {review.host_reply}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {reviews.length > 3 && (
+                  <Button
+                    variant="outline"
+                    className="w-full h-12 rounded-xl font-bold text-slate-700 border-slate-200"
+                  >
+                    Ler todas as avaliações
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* RODAPÉ MOBILE INTELIGENTE */}
       <div className="md:hidden flex-none bg-white border-t border-slate-200 p-4 pb-safe flex items-center justify-between shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)] z-50">
         <div>
           <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5">
@@ -1367,7 +1516,6 @@ export function RoomDetail(props: RoomDetailProps) {
         )}
       </div>
 
-      {/* GALERIA LIGHTBOX E FULL */}
       {isAllPhotosOpen && (
         <div className="fixed inset-0 z-[150] bg-white flex flex-col animate-in fade-in duration-200">
           <div className="flex-none p-4 flex justify-between items-center bg-white border-b border-slate-100 z-10 sticky top-0">
@@ -1472,17 +1620,59 @@ export function RoomDetail(props: RoomDetailProps) {
         </div>
       )}
 
+      {showProfileModal && (
+        <div className="fixed inset-0 z-[250] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-300">
+          <div className="bg-white rounded-3xl p-6 md:p-8 max-w-sm w-full shadow-2xl animate-in zoom-in-95 duration-300 relative">
+            <button
+              onClick={() => setShowProfileModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"
+            >
+              <AlertCircle className="w-5 h-5 opacity-0" />
+            </button>
+            <div className="w-16 h-16 bg-amber-50 border border-amber-100 rounded-full flex items-center justify-center mb-4 mx-auto shadow-sm">
+              <Crown className="w-8 h-8 text-amber-500" />
+            </div>
+            <h3 className="text-xl font-black text-center text-slate-900 mb-2 tracking-tight">
+              Falta muito pouco!
+            </h3>
+            <p className="text-sm text-center text-slate-600 font-medium mb-6 leading-relaxed">
+              Para confirmar sua reserva com total segurança, você precisa
+              atingir o <b className="text-amber-600">Nível Bronze</b>. É rápido
+              e leva menos de 1 minuto!
+            </p>
+            <div className="space-y-3">
+              <Button
+                onClick={() => {
+                  setShowProfileModal(false);
+                  if (onNavigateToProfile) onNavigateToProfile();
+                }}
+                className="w-full h-12 rounded-xl font-black bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/25"
+              >
+                Completar Perfil
+              </Button>
+              <Button
+                onClick={() => setShowProfileModal(false)}
+                variant="ghost"
+                className="w-full h-12 rounded-xl font-bold text-slate-500 hover:bg-slate-50"
+              >
+                Agora não
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <CheckoutModal
         isOpen={isCheckoutOpen}
         onClose={() => setIsCheckoutOpen(false)}
         onConfirm={(method) => {
-          handleConfirmCheckout();
+          handleConfirmCheckout(method);
         }}
         loading={actionLoading}
         summary={checkoutSummary}
         room={roomData}
         selectedSlots={selectedSlots}
-        selectedDate={selectedDate}
+        selectedDate={selectedDate || new Date()}
         totalBaseBRL={totalHourlyCost}
       />
     </div>
