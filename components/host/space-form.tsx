@@ -47,8 +47,15 @@ import {
   Sun,
   Moon,
   CalendarDays,
+  Info,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import ReactCrop, { type Crop, type PixelCrop } from "react-image-crop";
 // @ts-ignore
 import "react-image-crop/dist/ReactCrop.css";
@@ -60,6 +67,17 @@ type RoomImage = {
   isCover: boolean;
   isExisting?: boolean;
 };
+
+// Constante com as Especialidades Fixas
+const SPECIALTIES = [
+  "Multiuso",
+  "Estética",
+  "Psicologia",
+  "Nutrição",
+  "Salas com Maca",
+  "Odontologia",
+  "Fisioterapia",
+];
 
 const AMENITIES_LIST = [
   { id: "wifi", label: "Wi-Fi", icon: Wifi },
@@ -119,6 +137,9 @@ export function HostSpaceForm({
   // DADOS BÁSICOS
   const [name, setName] = useState("");
   const [specialty, setSpecialty] = useState("");
+  const [secondarySpecialties, setSecondarySpecialties] = useState<string[]>(
+    [],
+  );
   const [description, setDescription] = useState("");
   const [contactName, setContactName] = useState("");
   const [contactPhone, setContactPhone] = useState("");
@@ -132,6 +153,9 @@ export function HostSpaceForm({
   // CAMPOS DO ENDEREÇO REAIS
   const [street, setStreet] = useState("");
   const [number, setNumber] = useState("");
+  const [floor, setFloor] = useState(""); // NOVO: Andar
+  const [roomNumber, setRoomNumber] = useState(""); // NOVO: Nº da Sala
+  const [complement, setComplement] = useState(""); // NOVO: Complemento
   const [neighborhood, setNeighborhood] = useState("");
   const [city, setCity] = useState("");
   const [stateUF, setStateUF] = useState("");
@@ -149,8 +173,8 @@ export function HostSpaceForm({
   const [modalities, setModalities] = useState<string[]>(["turno", "fixo"]);
   const [prices, setPrices] = useState({
     hourly: "",
-    afterHours: "", // NOVO: Precificação Noturna
-    weekend: "", // NOVO: Precificação Fim de Semana
+    afterHours: "",
+    weekend: "",
     morning: "",
     afternoon: "",
     night: "",
@@ -184,12 +208,16 @@ export function HostSpaceForm({
         const ad = initialData.address_details;
         setStreet(ad.street || "");
         setNumber(ad.number || "");
+        setFloor(ad.floor || ""); // NOVO: Andar
+        setRoomNumber(ad.roomNumber || ""); // NOVO: Nº da Sala
+        setComplement(ad.complement || ""); // NOVO: Complemento
         setNeighborhood(ad.neighborhood || "");
         setCity(ad.city || "");
         setStateUF(ad.state || "");
         setCapacity(ad.capacity || "");
         setArea(ad.area || "");
         setAmenities(ad.amenities || []);
+        setSecondarySpecialties(ad.secondary_specialties || []);
 
         if (ad.policies) {
           setMinNotice(ad.policies.min_notice || "2");
@@ -276,7 +304,7 @@ export function HostSpaceForm({
     toast({
       title: "Endereço selecionado!",
       description:
-        "Preenchemos os campos estruturais abaixo. Insira apenas o número.",
+        "Preenchemos os campos estruturais abaixo. Insira apenas o número e os detalhes da sala.",
     });
   };
 
@@ -366,6 +394,12 @@ export function HostSpaceForm({
     );
   };
 
+  const toggleSecondarySpecialty = (spec: string) => {
+    setSecondarySpecialties((prev) =>
+      prev.includes(spec) ? prev.filter((s) => s !== spec) : [...prev, spec],
+    );
+  };
+
   const handlePreSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (images.length === 0)
@@ -373,6 +407,12 @@ export function HostSpaceForm({
         variant: "destructive",
         title: "Atenção",
         description: "Adicione ao menos uma foto do espaço.",
+      });
+    if (!specialty)
+      return toast({
+        variant: "destructive",
+        title: "Atenção",
+        description: "Selecione a especialidade principal.",
       });
     if (!city || !neighborhood || !street)
       return toast({
@@ -422,12 +462,16 @@ export function HostSpaceForm({
       const address_details = {
         street,
         number,
+        floor, // NOVO: Andar
+        roomNumber, // NOVO: Nº Sala
+        complement, // NOVO: Complemento
         neighborhood,
         city,
         state: stateUF,
         capacity,
         area,
         amenities,
+        secondary_specialties: secondarySpecialties,
         policies: { min_notice: minNotice, cancellation: cancellationPolicy },
         pricing: {
           hourly: prices.hourly ? Number(prices.hourly) : null,
@@ -588,12 +632,12 @@ export function HostSpaceForm({
               )}
             </section>
 
-            {/* SEÇÃO 2: DADOS BÁSICOS */}
+            {/* SEÇÃO 2: DADOS BÁSICOS & ESPECIALIDADES */}
             <section className="space-y-4">
               <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
                 <Tag className="w-5 h-5 text-slate-400" />
                 <h3 className="text-lg font-bold text-slate-800">
-                  2. Informações Gerais
+                  2. Informações e Especialidades
                 </h3>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -609,23 +653,68 @@ export function HostSpaceForm({
                     className="h-11 bg-white"
                   />
                 </div>
-                <div className="space-y-2 md:col-span-2">
-                  <Label>
+
+                {/* GRID DE ESPECIALIDADE PRINCIPAL */}
+                <div className="space-y-3 md:col-span-2 pt-2">
+                  <Label className="font-bold text-slate-700">
                     Especialidade Principal{" "}
                     <span className="text-red-500">*</span>
                   </Label>
-                  <Input
-                    placeholder="Ex: Psicologia, Odontologia..."
-                    value={specialty}
-                    onChange={(e) => setSpecialty(e.target.value)}
-                    required
-                    className="h-11 bg-white"
-                  />
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {SPECIALTIES.map((spec) => (
+                      <button
+                        key={spec}
+                        type="button"
+                        onClick={() => setSpecialty(spec)}
+                        className={`p-3 rounded-xl border-2 text-sm font-bold transition-all text-left flex justify-between items-center ${
+                          specialty === spec
+                            ? "border-[#f05e23] bg-orange-50 text-[#f05e23]"
+                            : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                        }`}
+                      >
+                        <span className="truncate pr-2">{spec}</span>
+                        {specialty === spec && (
+                          <Check className="w-4 h-4 shrink-0" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <div className="space-y-2 md:col-span-2">
+
+                {/* BADGES DE ESPECIALIDADES SECUNDÁRIAS */}
+                <div className="space-y-3 md:col-span-2 bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                  <Label className="font-bold text-slate-700">
+                    Outras Especialidades Atendidas (Opcional)
+                  </Label>
+                  <p className="text-xs text-slate-500 font-medium mb-2">
+                    Sua sala é flexível? Marque outras utilidades para ajudar
+                    nas buscas.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {SPECIALTIES.filter((s) => s !== specialty).map((spec) => {
+                      const isSelected = secondarySpecialties.includes(spec);
+                      return (
+                        <Badge
+                          key={spec}
+                          onClick={() => toggleSecondarySpecialty(spec)}
+                          className={`cursor-pointer px-4 py-2 text-xs font-bold border transition-colors ${
+                            isSelected
+                              ? "bg-slate-900 text-white border-slate-900 hover:bg-slate-800"
+                              : "bg-white text-slate-500 border-slate-200 hover:bg-slate-100"
+                          }`}
+                        >
+                          {isSelected && <Check className="w-3 h-3 mr-1.5" />}
+                          {spec}
+                        </Badge>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="space-y-2 md:col-span-2 pt-2">
                   <Label>Descrição</Label>
                   <Textarea
-                    placeholder="Descreva equipamentos..."
+                    placeholder="Descreva equipamentos, estrutura e o que faz seu espaço ser especial..."
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     className="min-h-[100px] bg-white"
@@ -697,6 +786,7 @@ export function HostSpaceForm({
                 )}
               </div>
 
+              {/* GRID DE ENDEREÇO ATUALIZADO */}
               <div className="grid grid-cols-1 md:grid-cols-12 gap-4 bg-slate-50/70 p-5 rounded-2xl border border-slate-200">
                 <div className="space-y-2 md:col-span-9">
                   <Label className="text-slate-500 font-bold">
@@ -711,14 +801,43 @@ export function HostSpaceForm({
                 </div>
                 <div className="space-y-2 md:col-span-3">
                   <Label className="font-black text-[#f05e23]">
-                    Nº / Sala *
+                    Nº do Prédio *
                   </Label>
                   <Input
-                    placeholder="Digite o Nº"
+                    placeholder="Ex: 123"
                     value={number}
                     onChange={(e) => setNumber(e.target.value)}
                     required
                     className="h-11 bg-white border-orange-300 ring-orange-100 font-bold"
+                  />
+                </div>
+                <div className="space-y-2 md:col-span-3">
+                  <Label className="text-slate-700 font-bold">Andar</Label>
+                  <Input
+                    placeholder="Ex: 5º Andar"
+                    value={floor}
+                    onChange={(e) => setFloor(e.target.value)}
+                    className="h-11 bg-white"
+                  />
+                </div>
+                <div className="space-y-2 md:col-span-3">
+                  <Label className="text-slate-700 font-bold">Nº da Sala</Label>
+                  <Input
+                    placeholder="Ex: 502"
+                    value={roomNumber}
+                    onChange={(e) => setRoomNumber(e.target.value)}
+                    className="h-11 bg-white"
+                  />
+                </div>
+                <div className="space-y-2 md:col-span-6">
+                  <Label className="text-slate-700 font-bold">
+                    Complemento
+                  </Label>
+                  <Input
+                    placeholder="Ponto de referência, bloco..."
+                    value={complement}
+                    onChange={(e) => setComplement(e.target.value)}
+                    className="h-11 bg-white"
                   />
                 </div>
                 <div className="space-y-2 md:col-span-4">
@@ -862,43 +981,78 @@ export function HostSpaceForm({
               </div>
 
               <div className="grid grid-cols-1 gap-6 bg-slate-50 p-5 rounded-xl border border-slate-200">
-                {/* Disponibilizar por Hora (Precificação Dinâmica) */}
+                {/* Disponibilizar por Hora (Precificação Dinâmica) + Banner Partner */}
                 <div
-                  className={`space-y-4 p-5 rounded-xl border ${isPartner ? "bg-white border-amber-200 shadow-sm" : "bg-white border-slate-200 opacity-80"}`}
+                  className={`space-y-4 p-5 rounded-2xl border transition-all ${isPartner ? "bg-white border-orange-200 shadow-sm" : "bg-slate-100/50 border-slate-200"}`}
                 >
-                  <div className="flex items-center space-x-2 border-b border-slate-100 pb-4">
-                    <Checkbox
-                      id="hora"
-                      disabled={!isPartner}
-                      checked={modalities.includes("hora")}
-                      onCheckedChange={() =>
-                        setModalities((prev) =>
-                          prev.includes("hora")
-                            ? prev.filter((m) => m !== "hora")
-                            : [...prev, "hora"],
-                        )
-                      }
-                    />
-                    <Label
-                      htmlFor="hora"
-                      className={`font-bold text-base cursor-pointer flex items-center gap-2 ${!isPartner && "text-slate-400"}`}
-                    >
-                      Disponibilizar por Hora (Dinâmico)
+                  <div className="flex items-center justify-between border-b border-slate-200/60 pb-4">
+                    <div className="flex items-center space-x-3">
+                      <Checkbox
+                        id="hora"
+                        disabled={!isPartner}
+                        checked={modalities.includes("hora")}
+                        onCheckedChange={() =>
+                          setModalities((prev) =>
+                            prev.includes("hora")
+                              ? prev.filter((m) => m !== "hora")
+                              : [...prev, "hora"],
+                          )
+                        }
+                        className={!isPartner ? "opacity-50" : ""}
+                      />
+                      <Label
+                        htmlFor="hora"
+                        className={`font-black text-base md:text-lg cursor-pointer flex items-center gap-2 ${!isPartner ? "text-slate-400" : "text-slate-900"}`}
+                      >
+                        Locação Por Hora (Dinâmico)
+                      </Label>
+                    </div>
+
+                    {/* BADGE E TOOLTIP DO FUSION PARTNER */}
+                    <div className="flex items-center gap-2">
                       {!isPartner ? (
-                        <Badge
-                          variant="outline"
-                          className="bg-slate-100 text-slate-500 border-slate-200 text-[10px] ml-2"
-                        >
-                          <Lock className="w-3 h-3 mr-1" /> Exclusivo Partner
-                        </Badge>
+                        <>
+                          <Badge
+                            variant="outline"
+                            className="bg-white text-slate-500 border-slate-200 font-bold flex items-center gap-1.5 py-1 px-3 shadow-sm"
+                          >
+                            <Lock className="w-3.5 h-3.5" /> Bloqueado
+                          </Badge>
+                          <TooltipProvider delayDuration={100}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  type="button"
+                                  className="text-slate-400 hover:text-[#f05e23] transition-colors p-1"
+                                >
+                                  <Info className="w-5 h-5" />
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent className="bg-slate-900 text-white p-4 max-w-xs border-0 shadow-xl rounded-xl">
+                                <p className="text-sm font-medium leading-relaxed">
+                                  Apenas salas certificadas com o selo{" "}
+                                  <strong className="text-orange-400">
+                                    Fusion Partner
+                                  </strong>{" "}
+                                  podem oferecer locação flexível Por Hora. Após
+                                  concluir este cadastro, acesse seu painel para
+                                  solicitar a auditoria da nossa equipe.
+                                </p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </>
                       ) : (
-                        <Star className="w-4 h-4 text-amber-500 fill-amber-500 ml-1" />
+                        <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100 font-black border-0 px-3 py-1 shadow-sm">
+                          <Star className="w-3.5 h-3.5 fill-orange-500 text-orange-500 mr-1.5" />{" "}
+                          Fusion Partner
+                        </Badge>
                       )}
-                    </Label>
+                    </div>
                   </div>
 
                   {modalities.includes("hora") && isPartner && (
-                    <div className="pt-2">
+                    <div className="pt-2 animate-in fade-in slide-in-from-top-2">
                       <p className="text-sm text-slate-500 font-medium mb-5">
                         Maximize seus lucros definindo valores estratégicos para
                         diferentes períodos.
@@ -934,7 +1088,8 @@ export function HostSpaceForm({
                         </div>
 
                         {/* Card 2: Horário Noturno */}
-                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
+                          <div className="absolute top-0 left-0 w-1 h-full bg-indigo-500" />
                           <div className="flex items-center gap-2 mb-1">
                             <Moon className="w-4 h-4 text-indigo-500" />
                             <h4 className="font-bold text-slate-900 text-sm">
@@ -958,13 +1113,14 @@ export function HostSpaceForm({
                                   afterHours: e.target.value,
                                 })
                               }
-                              className="w-full pl-9 h-11 bg-slate-50 border-slate-200 font-bold focus:border-indigo-500 focus:ring-indigo-500/20"
+                              className="w-full pl-9 h-11 bg-slate-50 border-slate-200 font-bold focus-visible:ring-indigo-500/20 focus-visible:border-indigo-500"
                             />
                           </div>
                         </div>
 
                         {/* Card 3: Final de Semana */}
-                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
+                          <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500" />
                           <div className="flex items-center gap-2 mb-1">
                             <CalendarDays className="w-4 h-4 text-emerald-500" />
                             <h4 className="font-bold text-slate-900 text-sm">
@@ -988,7 +1144,7 @@ export function HostSpaceForm({
                                   weekend: e.target.value,
                                 })
                               }
-                              className="w-full pl-9 h-11 bg-slate-50 border-slate-200 font-bold focus:border-emerald-500 focus:ring-emerald-500/20"
+                              className="w-full pl-9 h-11 bg-slate-50 border-slate-200 font-bold focus-visible:ring-emerald-500/20 focus-visible:border-emerald-500"
                             />
                           </div>
                         </div>
@@ -998,8 +1154,8 @@ export function HostSpaceForm({
                 </div>
 
                 {/* Disponibilizar por Turno */}
-                <div className="space-y-4">
-                  <div className="flex items-center space-x-2">
+                <div className="space-y-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                  <div className="flex items-center space-x-3 border-b border-slate-100 pb-3">
                     <Checkbox
                       id="turno"
                       checked={modalities.includes("turno")}
@@ -1013,61 +1169,77 @@ export function HostSpaceForm({
                     />
                     <Label
                       htmlFor="turno"
-                      className="font-bold text-base cursor-pointer"
+                      className="font-black text-slate-900 text-base cursor-pointer"
                     >
                       Disponibilizar por Turno
                     </Label>
                   </div>
                   {modalities.includes("turno") && (
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pl-7">
-                      <div className="space-y-1">
-                        <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 animate-in fade-in slide-in-from-top-2">
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
                           Manhã (R$)
                         </Label>
-                        <Input
-                          placeholder="Ex: 100"
-                          value={prices.morning}
-                          onChange={(e) =>
-                            setPrices({ ...prices, morning: e.target.value })
-                          }
-                          className="h-11 bg-white"
-                        />
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">
+                            R$
+                          </span>
+                          <Input
+                            placeholder="Ex: 100"
+                            value={prices.morning}
+                            onChange={(e) =>
+                              setPrices({ ...prices, morning: e.target.value })
+                            }
+                            className="h-11 pl-9 bg-slate-50 border-slate-200"
+                          />
+                        </div>
                       </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
                           Tarde (R$)
                         </Label>
-                        <Input
-                          placeholder="Ex: 120"
-                          value={prices.afternoon}
-                          onChange={(e) =>
-                            setPrices({ ...prices, afternoon: e.target.value })
-                          }
-                          className="h-11 bg-white"
-                        />
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">
+                            R$
+                          </span>
+                          <Input
+                            placeholder="Ex: 120"
+                            value={prices.afternoon}
+                            onChange={(e) =>
+                              setPrices({
+                                ...prices,
+                                afternoon: e.target.value,
+                              })
+                            }
+                            className="h-11 pl-9 bg-slate-50 border-slate-200"
+                          />
+                        </div>
                       </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
                           Noite (R$)
                         </Label>
-                        <Input
-                          placeholder="Ex: 150"
-                          value={prices.night}
-                          onChange={(e) =>
-                            setPrices({ ...prices, night: e.target.value })
-                          }
-                          className="h-11 bg-white"
-                        />
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">
+                            R$
+                          </span>
+                          <Input
+                            placeholder="Ex: 150"
+                            value={prices.night}
+                            onChange={(e) =>
+                              setPrices({ ...prices, night: e.target.value })
+                            }
+                            className="h-11 pl-9 bg-slate-50 border-slate-200"
+                          />
+                        </div>
                       </div>
                     </div>
                   )}
                 </div>
 
-                <div className="h-px bg-slate-200 w-full" />
-
                 {/* Contrato Fixo */}
-                <div className="space-y-3">
-                  <div className="flex items-center space-x-2">
+                <div className="space-y-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                  <div className="flex items-center space-x-3 border-b border-slate-100 pb-3">
                     <Checkbox
                       id="fixo"
                       checked={modalities.includes("fixo")}
@@ -1081,24 +1253,29 @@ export function HostSpaceForm({
                     />
                     <Label
                       htmlFor="fixo"
-                      className="font-bold text-base cursor-pointer"
+                      className="font-black text-slate-900 text-base cursor-pointer"
                     >
                       Contrato Mensal Fixo
                     </Label>
                   </div>
                   {modalities.includes("fixo") && (
-                    <div className="pl-7 w-full sm:w-1/3">
-                      <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                    <div className="pt-2 sm:w-1/3 animate-in fade-in slide-in-from-top-2">
+                      <Label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block mb-1.5">
                         Valor Mensal (R$)
                       </Label>
-                      <Input
-                        placeholder="Ex: 2500"
-                        value={prices.monthly}
-                        onChange={(e) =>
-                          setPrices({ ...prices, monthly: e.target.value })
-                        }
-                        className="h-11 bg-white"
-                      />
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">
+                          R$
+                        </span>
+                        <Input
+                          placeholder="Ex: 2500"
+                          value={prices.monthly}
+                          onChange={(e) =>
+                            setPrices({ ...prices, monthly: e.target.value })
+                          }
+                          className="h-11 pl-9 bg-slate-50 border-slate-200"
+                        />
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1108,7 +1285,7 @@ export function HostSpaceForm({
             <Button
               type="submit"
               disabled={loading}
-              className="w-full h-14 text-lg rounded-xl font-bold bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/20"
+              className="w-full h-14 text-lg rounded-xl font-bold bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/20 transition-all active:scale-95"
             >
               {loading
                 ? "Processando..."
@@ -1158,29 +1335,32 @@ export function HostSpaceForm({
 
       {/* Modal de Confirmação */}
       <Dialog open={confirmSaveModal} onOpenChange={setConfirmSaveModal}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-md rounded-3xl">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-amber-500" /> Confirmação
-              de Dados
+            <div className="w-12 h-12 bg-amber-100 text-amber-500 rounded-full flex items-center justify-center mb-4 mx-auto">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <DialogTitle className="text-xl font-black text-center text-slate-900">
+              Confirmação de Dados
             </DialogTitle>
-            <DialogDescription className="text-base text-slate-600 mt-2">
-              Deseja realmente salvar as informações desta sala?
+            <DialogDescription className="text-sm font-medium text-slate-500 text-center mt-2">
+              Você está prestes a enviar sua sala para nossa curadoria. Tem
+              certeza que os dados estão corretos?
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter className="mt-4 gap-2 flex-col sm:flex-row">
+          <DialogFooter className="mt-6 flex flex-row gap-3">
             <Button
               variant="outline"
               onClick={() => setConfirmSaveModal(false)}
-              className="w-full sm:w-auto"
+              className="flex-1 h-12 rounded-xl font-bold border-slate-200 text-slate-600"
             >
               Voltar
             </Button>
             <Button
               onClick={executeSave}
-              className="bg-[#f05e23] hover:bg-[#d6521e] text-white font-bold w-full sm:w-auto"
+              className="flex-1 h-12 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold shadow-md"
             >
-              Sim, Salvar
+              Sim, Enviar
             </Button>
           </DialogFooter>
         </DialogContent>

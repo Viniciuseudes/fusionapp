@@ -1,0 +1,38 @@
+{
+  "id": "/",
+  "name": "Fusion Clinic",
+  "short_name": "Fusion",
+  "description": "Marketplace de Espaços para Profissionais de Saúde",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#f05e23",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/placeholder.jpg",
+      "sizes": "1280x720",
+      "type": "image/jpeg",
+      "form_factor": "wide"
+    },
+    {
+      "src": "/placeholder.jpg",
+      "sizes": "720x1280",
+      "type": "image/jpeg"
+    }
+  ]
+}

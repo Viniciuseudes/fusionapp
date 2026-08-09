@@ -55,6 +55,8 @@ export interface Room {
   isPartner: boolean;
   locationString: string;
   rawAddress?: any;
+  host_id?: string; // <-- ADICIONADO PARA O CHAT
+  selectedModality?: RentalType; // <-- ADICIONADO PARA O ROOM DETAIL
 }
 
 // ==========================================
@@ -230,10 +232,11 @@ export function SearchTab({
         });
       }
 
+      // <-- ADICIONADO host_id NO SELECT
       const { data: roomsData } = await supabase
         .from("rooms")
         .select(
-          `id, name, image_url, modalities, is_partner, specialty, tier, address_details`,
+          `id, name, image_url, modalities, is_partner, specialty, tier, address_details, host_id`,
         )
         .eq("is_active", true)
         .eq("is_paused", false);
@@ -304,6 +307,7 @@ export function SearchTab({
               .filter(Boolean)
               .join(", "),
             rawAddress: address,
+            host_id: r.host_id, // <-- ADICIONADO AQUI
           };
         });
         setDbRooms(formattedRooms);
@@ -916,12 +920,12 @@ export function SearchTab({
           </div>
 
           <div className="w-full px-4 mb-8">
-            <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-2 max-w-5xl mx-auto">
+            <div className="flex flex-nowrap items-center gap-2 overflow-x-auto scrollbar-hide pb-2 max-w-5xl mx-auto">
               {availableCategories.map((cat) => (
                 <button
                   key={cat}
                   onClick={() => setSelectedCategory(cat)}
-                  className={`whitespace-nowrap px-4 py-2 rounded-full text-xs font-semibold transition-all border ${selectedCategory === cat ? "bg-[#f05e23] text-white border-[#f05e23]" : "bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50"}`}
+                  className={`shrink-0 whitespace-nowrap px-4 py-2 rounded-full text-xs font-semibold transition-all border ${selectedCategory === cat ? "bg-[#f05e23] text-white border-[#f05e23]" : "bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50"}`}
                 >
                   {cat}
                 </button>
@@ -982,7 +986,7 @@ export function SearchTab({
                           {masterRooms.map((room) => (
                             <RoomCard
                               key={room.id}
-                              room={room}
+                              room={{ ...room, selectedModality: rentalType }} // <-- INJETA A MODALIDADE AQUI
                               isFavorited={favorites.has(room.id)}
                               onToggleFavorite={toggleFavorite}
                               onOpen={onOpenRoom}
@@ -1015,7 +1019,7 @@ export function SearchTab({
                           {vipRooms.map((room) => (
                             <RoomCard
                               key={room.id}
-                              room={room}
+                              room={{ ...room, selectedModality: rentalType }} // <-- INJETA A MODALIDADE AQUI
                               isFavorited={favorites.has(room.id)}
                               onToggleFavorite={toggleFavorite}
                               onOpen={onOpenRoom}
@@ -1048,7 +1052,7 @@ export function SearchTab({
                           {startRooms.map((room) => (
                             <RoomCard
                               key={room.id}
-                              room={room}
+                              room={{ ...room, selectedModality: rentalType }} // <-- INJETA A MODALIDADE AQUI
                               isFavorited={favorites.has(room.id)}
                               onToggleFavorite={toggleFavorite}
                               onOpen={onOpenRoom}
@@ -1081,7 +1085,7 @@ export function SearchTab({
                     {processedRooms.map((room) => (
                       <RoomCard
                         key={room.id}
-                        room={room}
+                        room={{ ...room, selectedModality: rentalType }} // <-- INJETA A MODALIDADE AQUI
                         isFavorited={favorites.has(room.id)}
                         onToggleFavorite={toggleFavorite}
                         onOpen={onOpenRoom}

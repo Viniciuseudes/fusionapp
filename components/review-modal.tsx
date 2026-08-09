@@ -81,8 +81,14 @@ export function ReviewModal({
   if (!booking) return null;
 
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-md text-center">
+    // Removemos a lógica do onOpenChange que fechava sozinho
+    <Dialog open={isOpen}>
+      <DialogContent
+        className="sm:max-w-md text-center"
+        // BLINDAGEM DO MODAL: Impede fechamento ao clicar fora ou apertar ESC
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onEscapeKeyDown={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle className="text-2xl font-black text-center">
             Como foi sua experiência?
@@ -138,17 +144,29 @@ export function ReviewModal({
           </div>
         </div>
 
-        <Button
-          onClick={handleSubmit}
-          disabled={isSubmitting || rating === 0}
-          className="w-full h-12 text-lg font-black bg-[#f05e23] hover:bg-[#d6521e] text-white"
-        >
-          {isSubmitting ? (
-            <Loader2 className="w-5 h-5 animate-spin" />
-          ) : (
-            "Enviar Avaliação"
-          )}
-        </Button>
+        {/* BOTOES DE AÇÃO */}
+        <div className="flex flex-col gap-2">
+          <Button
+            onClick={handleSubmit}
+            disabled={isSubmitting || rating === 0}
+            className="w-full h-12 text-lg font-black bg-[#f05e23] hover:bg-[#d6521e] text-white"
+          >
+            {isSubmitting ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              "Enviar Avaliação"
+            )}
+          </Button>
+
+          <Button
+            onClick={onClose}
+            disabled={isSubmitting}
+            variant="ghost"
+            className="w-full h-12 font-bold text-slate-400 hover:text-slate-600 hover:bg-slate-50"
+          >
+            Pular avaliação
+          </Button>
+        </div>
       </DialogContent>
     </Dialog>
   );

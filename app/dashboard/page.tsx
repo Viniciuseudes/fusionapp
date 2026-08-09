@@ -2,7 +2,14 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/utils/supabase/client";
-import { Search, Heart, Calendar, MessageSquare, User } from "lucide-react";
+import {
+  Search,
+  Heart,
+  Calendar,
+  MessageSquare,
+  User,
+  Loader2,
+} from "lucide-react";
 
 // Importando os componentes das abas e complementos
 import { SearchTab } from "@/components/search-tab";
@@ -12,10 +19,11 @@ import { ChatTab } from "@/components/chat-tab";
 import { ProfileTab } from "@/components/profile-tab";
 import { NotificationBell } from "@/components/notification-bell";
 
-// Importando a tela de detalhes, o modal de avaliação e o nosso novo Tutorial
+// Importando a tela de detalhes, o modal de avaliação, o Tutorial e a SESSÃO ATIVA
 import { RoomDetail } from "@/components/room-detail";
 import { ReviewModal } from "@/components/review-modal";
 import { OnboardingTutorial } from "@/components/onboarding-tutorial";
+import { ActiveSession } from "@/components/active-session";
 
 type TabType = "search" | "favorites" | "bookings" | "chat" | "profile";
 
@@ -28,25 +36,37 @@ export default function DashboardPage() {
     null,
   );
 
+  // ==========================================
+  // ESTADOS DA SESSÃO ATIVA (HORA CLÍNICA)
+  // ==========================================
+  const [activeBooking, setActiveBooking] = useState<any | null>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+
   useEffect(() => {
-    async function checkForPendingReviews() {
+    async function fetchDashboardData() {
       try {
         const {
           data: { user },
         } = await supabase.auth.getUser();
-        if (!user) return;
 
+        if (!user) {
+          setCheckingSession(false);
+          return;
+        }
+
+        const now = new Date().toISOString();
+
+        // 1. CHECA REVIEWS PENDENTES
         const { data: bookings, error: bookingsError } = await supabase
           .from("bookings")
           .select(`id, room_id, end_time, status, rooms ( name )`)
           .eq("user_id", user.id)
-          .eq("status", "completed")
+          .in("status", ["confirmed", "completed"])
+          .lt("end_time", now)
           .order("end_time", { ascending: false })
-          .limit(3);
+          .limit(5);
 
-        if (bookingsError) throw bookingsError;
-
-        if (bookings && bookings.length > 0) {
+        if (!bookingsError && bookings && bookings.length > 0) {
           for (const booking of bookings) {
             const { data: reviewData } = await supabase
               .from("reviews")
@@ -60,15 +80,42 @@ export default function DashboardPage() {
             }
           }
         }
+
+        // 2. CHECA SESSÃO ATIVA (Reserva acontecendo AGORA)
+        const { data: currentSession } = await supabase
+          .from("bookings")
+          .select(`*, rooms(name)`)
+          .eq("user_id", user.id)
+          .eq("status", "confirmed")
+          .lte("start_time", now)
+          .gt("end_time", now)
+          .maybeSingle();
+
+        if (currentSession) {
+          setActiveBooking(currentSession);
+        }
       } catch (error) {
-        console.error("Erro ao checar avaliações pendentes:", error);
+        console.error("Erro ao carregar dados do dashboard:", error);
+      } finally {
+        setCheckingSession(false);
       }
     }
 
-    checkForPendingReviews();
+    fetchDashboardData();
   }, [supabase]);
 
   const renderTab = () => {
+    // Sequestro de Tela: Se tiver sessão ativa, mostra SÓ O CRONÔMETRO
+    if (activeBooking) {
+      return (
+        <ActiveSession
+          booking={activeBooking}
+          onSessionEnd={() => setActiveBooking(null)}
+        />
+      );
+    }
+
+    // Fluxo normal do Dashboard
     switch (activeTab) {
       case "search":
         return <SearchTab onOpenRoom={setSelectedRoom} />;
@@ -90,35 +137,49 @@ export default function DashboardPage() {
     }
   };
 
+  // Tela de bloqueio enquanto verifica se tem reserva rolando
+  if (checkingSession) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-slate-50">
+        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-slate-50 relative flex">
+    <div className="flex min-h-svh flex-col bg-slate-50">
       {/* ========================================== */}
       {/* TUTORIAL DE ONBOARDING (Aparece apenas 1 vez) */}
       {/* ========================================== */}
       <OnboardingTutorial />
 
       {/* ========================================== */}
-      {/* SINO FLUTUANTE (Agora no canto direito sem quebrar o layout) */}
+      {/* SINO FLUTUANTE (No canto direito sem quebrar o layout) */}
       {/* ========================================== */}
-      {!selectedRoom && (
-        <div className="absolute top-6 right-6 md:top-8 md:right-8 z-50">
+      {!selectedRoom && !activeBooking && (
+        <div className="absolute top-6 right-6 lg:top-8 lg:right-8 z-50">
           <NotificationBell />
         </div>
       )}
 
       {/* 1. Navegação Desktop (Sidebar Lateral Fixa) */}
-      {!selectedRoom && (
-        <aside className="hidden md:flex flex-col fixed top-0 left-0 w-64 h-screen bg-white border-r border-slate-200 z-40 py-8 px-4 shadow-[10px_0_40px_-15px_rgba(0,0,0,0.05)]">
-          <div className="flex items-center gap-3 px-3 mb-10">
-            <div className="w-10 h-10 bg-[#f05e23] rounded-xl flex items-center justify-center text-white font-black text-sm shadow-md shadow-orange-500/20">
-              FC
+      {!selectedRoom && !activeBooking && (
+        <aside className="hidden lg:flex fixed inset-y-0 left-0 z-40 w-64 flex-col border-r border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center gap-3 px-6 py-5 border-b border-slate-100">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f05e23] font-black text-xl text-white shadow-sm">
+              F
             </div>
-            <span className="font-black text-xl text-slate-900 tracking-tight">
-              Fusion Clinic
-            </span>
+            <div>
+              <h1 className="text-base font-bold text-slate-900 tracking-tight">
+                Fusion Clinic
+              </h1>
+              <p className="text-xs text-slate-500 font-medium">
+                Painel do Profissional
+              </p>
+            </div>
           </div>
 
-          <ul className="flex flex-col gap-2">
+          <ul className="flex flex-col gap-1 p-3 flex-1">
             <DesktopNavItem
               icon={Search}
               label="Explorar Salas"
@@ -153,17 +214,17 @@ export default function DashboardPage() {
         </aside>
       )}
 
-      {/* CONTEÚDO PRINCIPAL */}
+      {/* CONTEÚDO PRINCIPAL - min-w-0 evita o estouro de tela no PC */}
       <main
-        className={`flex-1 h-full min-h-screen flex flex-col ${!selectedRoom ? "md:pl-64" : ""}`}
+        className={`flex-1 min-w-0 ${!selectedRoom && !activeBooking ? "lg:ml-64 pb-20 lg:pb-0" : ""}`}
       >
-        <div className="flex-1 w-full">{renderTab()}</div>
+        {renderTab()}
       </main>
 
       {/* 2. Barra de Navegação Inferior (Mobile) */}
-      {!selectedRoom && (
-        <nav className="fixed bottom-0 left-0 w-full bg-white border-t border-slate-200 px-6 py-3 pb-safe z-40 shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.05)] md:hidden">
-          <ul className="flex justify-between items-center max-w-md mx-auto">
+      {!selectedRoom && !activeBooking && (
+        <nav className="fixed inset-x-0 bottom-0 z-50 flex lg:hidden items-stretch justify-around border-t border-slate-200 bg-white/90 backdrop-blur-md pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
+          <ul className="flex justify-between items-center w-full max-w-md mx-auto">
             <MobileNavItem
               icon={Search}
               label="Buscar"
@@ -198,23 +259,27 @@ export default function DashboardPage() {
         </nav>
       )}
 
-      {/* 3. Tela de Detalhes da Sala (Sobreposição full-screen) */}
-      {selectedRoom && (
+      {/* 3. Tela de Detalhes da Sala */}
+      {selectedRoom && !activeBooking && (
         <RoomDetail
           roomId={selectedRoom.id}
           room={selectedRoom}
           onBack={() => setSelectedRoom(null)}
           onNavigateToProfile={() => {
-            setSelectedRoom(null); // Fecha o detalhe da sala
-            setActiveTab("profile"); // Redireciona magicamente para a aba de Perfil
+            setSelectedRoom(null);
+            setActiveTab("profile");
           }}
-          initialModality="hora"
+          onNavigateToChat={() => {
+            setSelectedRoom(null);
+            setActiveTab("chat");
+          }}
+          initialModality={selectedRoom.selectedModality || "hora"}
         />
       )}
 
-      {/* 4. O "EFEITO UBER": Modal de Avaliação Obrigatória / Sugerida */}
+      {/* 4. Modal de Avaliação (Efeito Uber ativado no término da reserva) */}
       <ReviewModal
-        isOpen={!!pendingReviewBooking}
+        isOpen={!!pendingReviewBooking && !activeBooking}
         booking={pendingReviewBooking}
         onClose={() => setPendingReviewBooking(null)}
         onSuccess={() => {
@@ -241,10 +306,10 @@ function DesktopNavItem({
     <li>
       <button
         onClick={onClick}
-        className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl font-bold transition-all duration-200 ${
+        className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all duration-200 ${
           isActive
-            ? "bg-orange-50 text-[#f05e23]"
-            : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+            ? "bg-[#f05e23]/10 text-[#f05e23]"
+            : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"
         }`}
       >
         <Icon
@@ -269,11 +334,13 @@ function MobileNavItem({
   onClick: () => void;
 }) {
   return (
-    <li>
+    <li className="flex-1">
       <button
         onClick={onClick}
-        className={`flex flex-col items-center justify-center w-14 h-12 transition-all duration-200 ${
-          isActive ? "text-[#f05e23]" : "text-slate-400 hover:text-slate-600"
+        className={`flex w-full flex-col items-center justify-center gap-1.5 py-3 text-[10px] font-bold transition-all duration-200 ${
+          isActive
+            ? "text-[#f05e23] scale-105"
+            : "text-slate-400 hover:text-slate-700"
         }`}
       >
         <div
@@ -282,7 +349,9 @@ function MobileNavItem({
           }`}
         >
           <Icon
-            className={`w-6 h-6 ${isActive ? "stroke-[2.5px]" : "stroke-2"}`}
+            className={`w-5 h-5 transition-colors ${
+              isActive ? "fill-[#f05e23]/20 stroke-[2.5px]" : "stroke-2"
+            }`}
           />
           {isActive && (
             <span className="absolute -bottom-3 w-1.5 h-1.5 bg-[#f05e23] rounded-full animate-in zoom-in" />

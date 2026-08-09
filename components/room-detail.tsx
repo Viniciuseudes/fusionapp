@@ -61,16 +61,22 @@ const AMENITIES_LIST = [
   { id: "security", label: "Segurança 24h", icon: ShieldCheck },
 ];
 
-interface RoomDetailProps {
+export interface RoomDetailProps {
   roomId?: string | any;
   room?: any;
   onBack: () => void;
   onNavigateToProfile?: () => void;
   initialModality?: "hora" | "turno" | "fixo";
+  onNavigateToChat?: () => void;
 }
 
 export function RoomDetail(props: RoomDetailProps) {
-  const { onBack, onNavigateToProfile, initialModality = "hora" } = props;
+  const {
+    onBack,
+    onNavigateToProfile,
+    initialModality = "hora",
+    onNavigateToChat,
+  } = props;
   const router = useRouter();
   const supabase = createClient();
   const { toast } = useToast();
@@ -138,10 +144,10 @@ export function RoomDetail(props: RoomDetailProps) {
           setRoomData(data);
           const mods = data.modalities || [];
 
-          if (mods.includes("hora")) {
-            setActiveTab("hora");
-          } else if (mods.includes(initialModality)) {
+          if (mods.includes(initialModality)) {
             setActiveTab(initialModality);
+          } else if (mods.includes("hora")) {
+            setActiveTab("hora");
           } else if (mods.length > 0) {
             setActiveTab(mods[0]);
           }
@@ -230,6 +236,9 @@ export function RoomDetail(props: RoomDetailProps) {
         ).toFixed(1)
       : "Novo";
 
+  // ==========================================
+  // GERAÇÃO DE SLOTS COM HORA CLÍNICA (50 MIN)
+  // ==========================================
   const availableSlots = useMemo(() => {
     if (!roomData || activeTab !== "hora") return [];
     let avail = roomData.availability;
@@ -269,7 +278,9 @@ export function RoomDetail(props: RoomDetailProps) {
           if (!h || typeof h !== "string") return "";
           const parts = h.split("-");
           if (parts.length < 2) return h;
-          return `${parts[0].trim()}00 - ${parts[1].trim()}00`;
+          // Adapta para os 50 min
+          const startH = parts[0].trim().padStart(2, "0");
+          return `${startH}:00 - ${startH}:50`;
         })
         .filter(Boolean);
     }
@@ -278,27 +289,29 @@ export function RoomDetail(props: RoomDetailProps) {
     const shifts = Array.isArray(configForDay.selectedShifts)
       ? configForDay.selectedShifts
       : [];
+
+    // BLOCOS DE HORA CLÍNICA (50 minutos de uso + 10 min de limpeza)
     if (shifts.includes("morning"))
       shiftHours.push(
-        "08h00 - 09h00",
-        "09h00 - 10h00",
-        "10h00 - 11h00",
-        "11h00 - 12h00",
+        "08:00 - 08:50",
+        "09:00 - 09:50",
+        "10:00 - 10:50",
+        "11:00 - 11:50",
       );
     if (shifts.includes("afternoon"))
       shiftHours.push(
-        "13h00 - 14h00",
-        "14h00 - 15h00",
-        "15h00 - 16h00",
-        "16h00 - 17h00",
-        "17h00 - 18h00",
+        "13:00 - 13:50",
+        "14:00 - 14:50",
+        "15:00 - 15:50",
+        "16:00 - 16:50",
+        "17:00 - 17:50",
       );
     if (shifts.includes("night"))
       shiftHours.push(
-        "18h00 - 19h00",
-        "19h00 - 20h00",
-        "20h00 - 21h00",
-        "21h00 - 22h00",
+        "18:00 - 18:50",
+        "19:00 - 19:50",
+        "20:00 - 20:50",
+        "21:00 - 21:50",
       );
 
     return shiftHours;
@@ -388,23 +401,59 @@ export function RoomDetail(props: RoomDetailProps) {
     );
   };
 
-  const isSlotBooked = (slotKey: string) => {
-    const [dateStr, timeStr] = slotKey.split("|");
-    const startHour = timeStr.split(" - ")[0].replace("h", ":");
-    const slotStart = new Date(`${dateStr}T${startHour}:00`).getTime();
+  // ==========================================
+  // FUNÇÃO BLINDADA PARA CONVERSÃO DE DATAS
+  // Resolve o problema de "Invalid Date" em browsers
+  // usando a classe Date numérica segura.
+  // ==========================================
+  const parseSlotDate = (dateStr: string, timeStr: string): Date => {
+    try {
+      const cleanTime = timeStr.trim().replace("h", ":");
+      const parts = cleanTime.split(":");
+      const hh = parseInt(parts[0], 10);
+      const mm = parts[1] ? parseInt(parts[1].substring(0, 2), 10) : 0;
 
-    return roomBookings.some((b) => {
-      const bStart = new Date(b.start_time).getTime();
-      const bEnd = new Date(b.end_time).getTime();
-      return slotStart >= bStart && slotStart < bEnd;
-    });
+      const [year, month, day] = dateStr.split("-").map(Number);
+
+      // Construtor numérico é 100% à prova de falhas de Timezone em Safari/Mobile
+      const dateObj = new Date(year, month - 1, day, hh, mm, 0);
+
+      if (isNaN(dateObj.getTime())) {
+        throw new Error("Data Inválida gerada");
+      }
+      return dateObj;
+    } catch (e) {
+      throw new Error(
+        `Erro ao interpretar horário: ${timeStr} na data ${dateStr}`,
+      );
+    }
+  };
+
+  const isSlotBooked = (slotKey: string) => {
+    try {
+      const [dateStr, timeStr] = slotKey.split("|");
+      const startSlotStr = timeStr.split(" - ")[0];
+      const slotStart = parseSlotDate(dateStr, startSlotStr).getTime();
+
+      return roomBookings.some((b) => {
+        const bStart = new Date(b.start_time).getTime();
+        const bEnd = new Date(b.end_time).getTime();
+        return slotStart >= bStart && slotStart < bEnd;
+      });
+    } catch {
+      return false;
+    }
   };
 
   const isSlotPast = (slotKey: string) => {
-    const [dateStr, timeStr] = slotKey.split("|");
-    const startHour = timeStr.split(" - ")[0].replace("h", ":");
-    const slotStart = new Date(`${dateStr}T${startHour}:00`).getTime();
-    return slotStart < new Date().getTime();
+    try {
+      const [dateStr, timeStr] = slotKey.split("|");
+      const startSlotStr = timeStr.split(" - ")[0];
+      const slotStart = parseSlotDate(dateStr, startSlotStr).getTime();
+      return slotStart < new Date().getTime();
+    } catch {
+      return true;
+    }
   };
 
   const handleAction = async () => {
@@ -428,7 +477,6 @@ export function RoomDetail(props: RoomDetailProps) {
 
     setActionLoading(true);
     try {
-      // 1. VERIFICAÇÃO ESTRITA NO SERVIDOR (IGNORA CACHE MENTIROSO)
       const {
         data: { user },
         error: authError,
@@ -439,11 +487,10 @@ export function RoomDetail(props: RoomDetailProps) {
           title: "Acesso restrito",
           description: "Você precisa entrar na sua conta para continuar.",
         });
-        router.push("/login"); // Agora sim, manda pro login de verdade se não estiver autenticado
+        router.push("/login");
         return;
       }
 
-      // 2. BUSCA O PERFIL DO USUÁRIO LOGADO EM TEMPO REAL
       const { data: profile } = await supabase
         .from("profiles")
         .select("full_name, cpf, birth_date, address_street, address_number")
@@ -458,22 +505,30 @@ export function RoomDetail(props: RoomDetailProps) {
         profile?.address_number,
       );
 
-      // BLOQUEIO 2: Modal de Nível Bronze se faltar dados
       if (!isProfileComplete) {
         setShowProfileModal(true);
         setActionLoading(false);
         return;
       }
 
-      // 3. FLUXO NORMAL DE RESERVA (Aprovado em todas as validações)
+      // FLUXO DE RESERVA POR HORA
       if (activeTab === "hora") {
-        const totalHours = selectedSlots.length;
-        const firstSlot = selectedSlots[0];
-        const [dateStr, timeStr] = firstSlot.split("|");
-        const startHour = timeStr.split(" - ")[0].replace("h", ":");
+        if (!selectedDate || isNaN(selectedDate.getTime())) {
+          throw new Error("A data base selecionada é inválida.");
+        }
 
-        const startDate = new Date(`${dateStr}T${startHour}:00`);
-        const endDate = new Date(
+        const sortedSlots = [...selectedSlots].sort();
+        const firstSlot = sortedSlots[0];
+
+        const [startDateStr, startTimeStr] = firstSlot.split("|");
+        const startSlotStr = startTimeStr.split(" - ")[0];
+
+        const startDate = parseSlotDate(startDateStr, startSlotStr);
+
+        // MÁGICA DE PREÇO: A API de cálculo multiplica a (Diferença de Horas) X (Valor/Hora).
+        // Se passarmos 50 minutos pra ela, ela quebra. Enviamos o bloco cheio para o cálculo:
+        const totalHours = selectedSlots.length;
+        const endDateForApi = new Date(
           startDate.getTime() + totalHours * 60 * 60 * 1000,
         );
 
@@ -483,13 +538,15 @@ export function RoomDetail(props: RoomDetailProps) {
           body: JSON.stringify({
             roomId: roomData.id,
             startTime: startDate.toISOString(),
-            endTime: endDate.toISOString(),
+            endTime: endDateForApi.toISOString(),
           }),
         });
 
         const contentType = response.headers.get("content-type");
         if (!contentType || !contentType.includes("application/json")) {
-          throw new Error("Erro de rota: A API não foi encontrada.");
+          throw new Error(
+            "Erro de rota: A API de pagamento não foi encontrada.",
+          );
         }
 
         const summaryData = await response.json();
@@ -499,11 +556,42 @@ export function RoomDetail(props: RoomDetailProps) {
         setCheckoutSummary(summaryData);
         setIsCheckoutOpen(true);
       } else {
+        // FLUXO DE NEGOCIAÇÃO (Turno e Fixo)
         toast({
-          title: "Iniciando ambiente seguro...",
-          description: "Criando canal de negociação. Você será redirecionado.",
+          title: "Iniciando negociação...",
+          description: "Criando canal seguro com o anfitrião e a Fusion...",
         });
-        setTimeout(() => onBack(), 1500);
+
+        const { data: existingChat } = await supabase
+          .from("chats")
+          .select("id")
+          .eq("room_id", roomData.id)
+          .eq("guest_id", user.id)
+          .eq("type", "negotiation")
+          .maybeSingle();
+
+        if (!existingChat) {
+          const { error: insertError } = await supabase.from("chats").insert({
+            type: "negotiation",
+            status: "open",
+            room_id: roomData.id,
+            guest_id: user.id,
+            host_id: roomData.host_id,
+          });
+
+          if (insertError) throw insertError;
+        }
+
+        toast({
+          title: "Chat aberto!",
+          description: "Redirecionando para as mensagens...",
+        });
+
+        if (onNavigateToChat) {
+          onNavigateToChat();
+        } else {
+          onBack();
+        }
       }
     } catch (err: any) {
       console.error("Erro no handleAction:", err);
@@ -533,14 +621,18 @@ export function RoomDetail(props: RoomDetailProps) {
 
         const bookingPayloads = selectedSlots.map((slotKey) => {
           const [dateStr, slotTime] = slotKey.split("|");
-          const startSlot = slotTime.split(" - ")[0].replace("h", ":");
-          const endSlot = slotTime.split(" - ")[1].replace("h", ":");
+          const startSlotStr = slotTime.split(" - ")[0];
+          const endSlotStr = slotTime.split(" - ")[1];
+
+          // AQUI SALVAMOS A HORA CLÍNICA REAL NO BANCO (08:00 - 08:50)
+          const startTime = parseSlotDate(dateStr, startSlotStr);
+          const endTime = parseSlotDate(dateStr, endSlotStr);
 
           return {
             user_id: user.id,
             room_id: roomData.id,
-            start_time: new Date(`${dateStr}T${startSlot}:00`).toISOString(),
-            end_time: new Date(`${dateStr}T${endSlot}:00`).toISOString(),
+            start_time: startTime.toISOString(),
+            end_time: endTime.toISOString(),
             total_cost: creditCostPerHour,
             status: "confirmed",
           };
@@ -579,14 +671,18 @@ export function RoomDetail(props: RoomDetailProps) {
 
         const bookingPayloads = selectedSlots.map((slotKey) => {
           const [dateStr, slotTime] = slotKey.split("|");
-          const startSlot = slotTime.split(" - ")[0].replace("h", ":");
-          const endSlot = slotTime.split(" - ")[1].replace("h", ":");
+          const startSlotStr = slotTime.split(" - ")[0];
+          const endSlotStr = slotTime.split(" - ")[1];
+
+          // AQUI SALVAMOS A HORA CLÍNICA REAL NO BANCO (08:00 - 08:50)
+          const startTime = parseSlotDate(dateStr, startSlotStr);
+          const endTime = parseSlotDate(dateStr, endSlotStr);
 
           return {
             user_id: user.id,
             room_id: roomData.id,
-            start_time: new Date(`${dateStr}T${startSlot}:00`).toISOString(),
-            end_time: new Date(`${dateStr}T${endSlot}:00`).toISOString(),
+            start_time: startTime.toISOString(),
+            end_time: endTime.toISOString(),
             total_cost: 0,
             status: "pending_payment",
             asaas_payment_id: paymentRef,
@@ -627,7 +723,6 @@ export function RoomDetail(props: RoomDetailProps) {
   const handleFavoriteToggle = async () => {
     if (isFavoriteLoading || !roomData) return;
 
-    // Verificação estrita para botão de Favoritar também
     const {
       data: { user },
       error: authError,
@@ -755,7 +850,7 @@ export function RoomDetail(props: RoomDetailProps) {
   if (loading) {
     return (
       <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-6 text-center">
-        <Loader2 className="h-12 w-12 animate-spin text-[#f05e23] mb-4" />
+        <Loader2 className="h-12 w-12 animate-spin text-[#f05e23]" />
         <h2 className="text-xl font-black text-slate-900 mb-2">
           Preparando o espaço...
         </h2>
@@ -1465,7 +1560,7 @@ export function RoomDetail(props: RoomDetailProps) {
           <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5">
             {activeTab === "hora"
               ? selectedSlots.length > 0
-                ? `Total (${selectedSlots.length} h)`
+                ? `Total (${selectedSlots.length} horas)`
                 : "A partir de"
               : activeTab === "turno"
                 ? "Estimativa Semanal"

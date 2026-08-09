@@ -3,7 +3,6 @@
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-// AQUI ESTAVA O ERRO! Agora estamos importando a Room direto da SearchTab
 import { SearchTab, type Room } from "@/components/search-tab";
 import { RoomDetail } from "@/components/room-detail";
 import { Search, Heart, CalendarDays, LogIn, UserPlus } from "lucide-react";
@@ -107,7 +106,13 @@ export default function AppPage() {
         className={cn("flex-1 lg:ml-64", selectedRoom ? "" : "pb-20 lg:pb-0")}
       >
         {selectedRoom ? (
-          <RoomDetail room={selectedRoom} onBack={handleCloseRoom} />
+          <RoomDetail
+            roomId={selectedRoom.id}
+            room={selectedRoom}
+            onBack={handleCloseRoom}
+            onNavigateToChat={() => router.push("/login")}
+            initialModality={selectedRoom.selectedModality || "hora"}
+          />
         ) : (
           <>
             {activeTab === "buscar" && (
