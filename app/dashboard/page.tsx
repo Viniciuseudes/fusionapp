@@ -14,6 +14,7 @@ import { NotificationBell } from "@/components/notification-bell";
 import { RoomDetail } from "@/components/room-detail";
 import { ReviewModal } from "@/components/review-modal";
 import { OnboardingTutorial } from "@/components/onboarding-tutorial";
+import { PushRegistry } from "@/components/push-registry"; // <-- IMPORTAÇÃO ADICIONADA
 
 type TabType = "search" | "favorites" | "bookings" | "chat" | "profile";
 
@@ -91,13 +92,12 @@ export default function DashboardPage() {
   return (
     <div className="flex min-h-svh flex-col bg-slate-50">
       <OnboardingTutorial />
-
+      <PushRegistry /> {/* <-- COMPONENTE ADICIONADO AQUI */}
       {!selectedRoom && (
-        <div className="absolute top-6 right-6 lg:top-8 lg:right-8 z-50">
+        <div className="absolute top-10 right-5 lg:top-8 lg:right-8 z-50">
           <NotificationBell />
         </div>
       )}
-
       {!selectedRoom && (
         <aside className="hidden lg:flex fixed inset-y-0 left-0 z-40 w-64 flex-col border-r border-slate-200 bg-white shadow-sm">
           <div className="flex items-center gap-3 px-6 py-5 border-b border-slate-100">
@@ -147,13 +147,11 @@ export default function DashboardPage() {
           </ul>
         </aside>
       )}
-
       <main
         className={`flex-1 min-w-0 ${!selectedRoom ? "lg:ml-64 pb-20 lg:pb-0" : ""}`}
       >
         {renderTab()}
       </main>
-
       {!selectedRoom && (
         <nav className="fixed inset-x-0 bottom-0 z-50 flex lg:hidden items-stretch justify-around border-t border-slate-200 bg-white/90 backdrop-blur-md pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
           <ul className="flex justify-between items-center w-full max-w-md mx-auto">
@@ -190,7 +188,6 @@ export default function DashboardPage() {
           </ul>
         </nav>
       )}
-
       {selectedRoom && (
         <RoomDetail
           roomId={selectedRoom.id}
@@ -207,7 +204,6 @@ export default function DashboardPage() {
           initialModality={selectedRoom.selectedModality || "hora"}
         />
       )}
-
       <ReviewModal
         isOpen={!!pendingReviewBooking}
         booking={pendingReviewBooking}

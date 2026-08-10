@@ -326,8 +326,8 @@ export function BookingsTab({
     <>
       {" "}
       {/* FRAGMENTO RAIZ NECESSÁRIO PARA O SCANNER FICAR LIVRE DO CSS */}
-      <div className="space-y-6 max-w-4xl mx-auto animate-in fade-in pb-24 pt-6 px-4">
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-2">
+      <div className="space-y-6 max-w-4xl mx-auto animate-in fade-in pb-24 pt-10 px-4">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-2 pr-16 md:pr-0">
           <div>
             <h2 className="text-2xl font-black text-zinc-950 tracking-tight flex items-center gap-2">
               <CalendarDays className="w-6 h-6 text-[#f05e23]" /> Minhas
@@ -416,7 +416,7 @@ export function BookingsTab({
               } catch (e) {}
               const fullAddress = `${address.street || ""}, ${address.number || ""} ${address.complement ? `- ${address.complement}` : ""}`;
 
-              // O Botão de Check-in aparece 15 minutos antes da consulta e dura até o fim dela.
+              // Regra do Check-in: O botão aparece 15 minutos antes da consulta começar e continua visível enquanto não passar a hora final.
               const fifteenMinutesMs = 15 * 60 * 1000;
               const isReadyForCheckin =
                 booking.status === "confirmed" &&

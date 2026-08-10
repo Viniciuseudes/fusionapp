@@ -16,12 +16,9 @@ import {
   Navigation,
   Shield,
   Crown,
-  History,
-  CreditCard,
   CheckCircle2,
   ArrowLeft,
   ArrowRight,
-  TrendingDown,
   Building2,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -35,8 +32,6 @@ import {
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
-import { format } from "date-fns";
-import { ptBR } from "date-fns/locale";
 
 export type RentalType = "hora" | "turno" | "fixo";
 
@@ -55,8 +50,8 @@ export interface Room {
   isPartner: boolean;
   locationString: string;
   rawAddress?: any;
-  host_id?: string; // <-- ADICIONADO PARA O CHAT
-  selectedModality?: RentalType; // <-- ADICIONADO PARA O ROOM DETAIL
+  host_id?: string;
+  selectedModality?: RentalType;
 }
 
 // ==========================================
@@ -232,7 +227,6 @@ export function SearchTab({
         });
       }
 
-      // <-- ADICIONADO host_id NO SELECT
       const { data: roomsData } = await supabase
         .from("rooms")
         .select(
@@ -307,7 +301,7 @@ export function SearchTab({
               .filter(Boolean)
               .join(", "),
             rawAddress: address,
-            host_id: r.host_id, // <-- ADICIONADO AQUI
+            host_id: r.host_id,
           };
         });
         setDbRooms(formattedRooms);
@@ -456,6 +450,7 @@ export function SearchTab({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          checkoutType: "package",
           packageId: pkg.id,
           hours: option.hours,
           price: option.price,
@@ -670,7 +665,7 @@ export function SearchTab({
 
             <div
               onClick={() => setIsWalletOpen(!isWalletOpen)}
-              className="flex flex-col items-end cursor-pointer group transition-opacity"
+              className="flex flex-col items-end cursor-pointer group transition-opacity mr-14 mt-1"
             >
               <span className="text-[10px] text-white/80 font-bold uppercase tracking-widest group-hover:text-white">
                 {isWalletOpen ? "Voltar para Busca" : "Saldo Fusion"}
@@ -986,7 +981,7 @@ export function SearchTab({
                           {masterRooms.map((room) => (
                             <RoomCard
                               key={room.id}
-                              room={{ ...room, selectedModality: rentalType }} // <-- INJETA A MODALIDADE AQUI
+                              room={{ ...room, selectedModality: rentalType }}
                               isFavorited={favorites.has(room.id)}
                               onToggleFavorite={toggleFavorite}
                               onOpen={onOpenRoom}
@@ -1019,7 +1014,7 @@ export function SearchTab({
                           {vipRooms.map((room) => (
                             <RoomCard
                               key={room.id}
-                              room={{ ...room, selectedModality: rentalType }} // <-- INJETA A MODALIDADE AQUI
+                              room={{ ...room, selectedModality: rentalType }}
                               isFavorited={favorites.has(room.id)}
                               onToggleFavorite={toggleFavorite}
                               onOpen={onOpenRoom}
@@ -1052,7 +1047,7 @@ export function SearchTab({
                           {startRooms.map((room) => (
                             <RoomCard
                               key={room.id}
-                              room={{ ...room, selectedModality: rentalType }} // <-- INJETA A MODALIDADE AQUI
+                              room={{ ...room, selectedModality: rentalType }}
                               isFavorited={favorites.has(room.id)}
                               onToggleFavorite={toggleFavorite}
                               onOpen={onOpenRoom}
@@ -1064,7 +1059,6 @@ export function SearchTab({
                     )}
                 </>
               ) : (
-                /* GRID SIMPLES PARA TURNO OU FIXO */
                 <section className="pt-4 pb-8">
                   <div className="flex items-center gap-3 mb-6">
                     <Building2 className="w-6 h-6 text-[#f05e23]" />
@@ -1085,7 +1079,7 @@ export function SearchTab({
                     {processedRooms.map((room) => (
                       <RoomCard
                         key={room.id}
-                        room={{ ...room, selectedModality: rentalType }} // <-- INJETA A MODALIDADE AQUI
+                        room={{ ...room, selectedModality: rentalType }}
                         isFavorited={favorites.has(room.id)}
                         onToggleFavorite={toggleFavorite}
                         onOpen={onOpenRoom}
