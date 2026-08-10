@@ -37,6 +37,31 @@ import { Badge } from "@/components/ui/badge";
 
 type ViewState = "overview" | "edit" | "wallet";
 
+// Função Sênior de Validação Matemática de CPF
+const isValidCPF = (cpf: string) => {
+  cpf = cpf.replace(/[^\d]+/g, "");
+  if (cpf.length !== 11 || !!cpf.match(/(\d)\1{10}/)) return false;
+  let sum = 0,
+    rest;
+  for (let i = 1; i <= 9; i++)
+    sum = sum + parseInt(cpf.substring(i - 1, i)) * (11 - i);
+  rest = (sum * 10) % 11;
+  if (rest === 10 || rest === 11) rest = 0;
+  if (rest !== parseInt(cpf.substring(9, 10))) return false;
+  sum = 0;
+  for (let i = 1; i <= 10; i++)
+    sum = sum + parseInt(cpf.substring(i - 1, i)) * (12 - i);
+  rest = (sum * 10) % 11;
+  if (rest === 10 || rest === 11) rest = 0;
+  if (rest !== parseInt(cpf.substring(10, 11))) return false;
+  return true;
+};
+
+// Componente para o Asterisco Vermelho
+const RequiredAsterisk = () => (
+  <span className="text-red-500 ml-1 font-black">*</span>
+);
+
 export function ProfileTab() {
   const router = useRouter();
   const supabase = createClient();
@@ -63,7 +88,7 @@ export function ProfileTab() {
     full_name: "",
     email: "",
     cpf: "",
-    birth_date: "",
+    birth_date: "", // Será manipulada no formato DD/MM/YYYY para a tela
     phone: "",
     specialty: "",
     council: "CRM",
@@ -98,11 +123,18 @@ export function ProfileTab() {
         if (error) throw error;
 
         if (data) {
+          // Converte YYYY-MM-DD do banco para DD/MM/YYYY na tela
+          let displayBirthDate = "";
+          if (data.birth_date) {
+            const [y, m, d] = data.birth_date.split("-");
+            if (y && m && d) displayBirthDate = `${d}/${m}/${y}`;
+          }
+
           setFormData({
             full_name: data.full_name || "",
             email: user.email || "",
             cpf: data.cpf || "",
-            birth_date: data.birth_date || "",
+            birth_date: displayBirthDate,
             phone: data.phone || "",
             specialty: data.specialty || "",
             council: data.council || "CRM",
@@ -236,6 +268,17 @@ export function ProfileTab() {
     setFormData({ ...formData, cpf: value });
   };
 
+  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let value = e.target.value.replace(/\D/g, "");
+    if (value.length > 8) value = value.slice(0, 8);
+    if (value.length > 4) {
+      value = value.replace(/^(\d{2})(\d{2})(\d{1,4}).*/, "$1/$2/$3");
+    } else if (value.length > 2) {
+      value = value.replace(/^(\d{2})(\d{1,2}).*/, "$1/$2");
+    }
+    setFormData({ ...formData, birth_date: value });
+  };
+
   const handleCepChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     let value = e.target.value.replace(/\D/g, "");
     if (value.length > 8) value = value.slice(0, 8);
@@ -331,6 +374,43 @@ export function ProfileTab() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // 1. Validação de CPF
+    if (formData.cpf && !isValidCPF(formData.cpf)) {
+      return toast({
+        variant: "destructive",
+        title: "CPF Inválido",
+        description: "Por favor, digite um CPF válido e real.",
+      });
+    }
+
+    // 2. Validação e Conversão da Data de Nascimento (DD/MM/YYYY -> YYYY-MM-DD)
+    let dbBirthDate = null;
+    if (formData.birth_date) {
+      if (formData.birth_date.length !== 10) {
+        return toast({
+          variant: "destructive",
+          title: "Data Inválida",
+          description: "Digite a data completa no formato DD/MM/AAAA.",
+        });
+      }
+      const [d, m, y] = formData.birth_date.split("/");
+      dbBirthDate = `${y}-${m}-${d}`;
+
+      const dateObj = new Date(`${y}-${m}-${d}T00:00:00`);
+      if (
+        isNaN(dateObj.getTime()) ||
+        dateObj.getFullYear() > new Date().getFullYear() ||
+        dateObj.getFullYear() < 1900
+      ) {
+        return toast({
+          variant: "destructive",
+          title: "Data Inválida",
+          description: "A data de nascimento informada não é coerente.",
+        });
+      }
+    }
+
     setSaving(true);
 
     try {
@@ -344,7 +424,7 @@ export function ProfileTab() {
         .update({
           full_name: formData.full_name,
           cpf: formData.cpf,
-          birth_date: formData.birth_date || null,
+          birth_date: dbBirthDate, // Envia para o DB no formato YYYY-MM-DD
           phone: formData.phone,
           specialty: formData.specialty,
           council: formData.council,
@@ -790,9 +870,14 @@ export function ProfileTab() {
             />
           </div>
           <div className="text-center sm:text-left">
-            <h3 className="font-bold text-slate-900">Foto de Perfil</h3>
+            <h3 className="font-bold text-slate-900 flex items-center justify-center sm:justify-start gap-2">
+              Foto de Perfil{" "}
+              <span className="text-xs text-slate-400 font-normal">
+                (Opcional)
+              </span>
+            </h3>
             <p className="text-xs text-slate-500 mt-1">
-              Sua foto será mostrada para os anfitriões. (Opcional)
+              Sua foto será mostrada para os anfitriões ao realizar uma reserva.
             </p>
           </div>
         </div>
@@ -804,7 +889,9 @@ export function ProfileTab() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
-              <Label className="font-bold text-slate-700">Nome Completo</Label>
+              <Label className="font-bold text-slate-700">
+                Nome Completo <RequiredAsterisk />
+              </Label>
               <Input
                 required
                 value={formData.full_name}
@@ -816,7 +903,9 @@ export function ProfileTab() {
             </div>
 
             <div className="space-y-2">
-              <Label className="font-bold text-slate-700">CPF</Label>
+              <Label className="font-bold text-slate-700">
+                CPF <RequiredAsterisk />
+              </Label>
               <Input
                 required
                 placeholder="000.000.000-00"
@@ -828,24 +917,24 @@ export function ProfileTab() {
 
             <div className="space-y-2">
               <Label className="font-bold text-slate-700">
-                Data de Nascimento
+                Data de Nascimento <RequiredAsterisk />
               </Label>
               <Input
-                type="date"
+                type="text"
                 required
+                placeholder="DD/MM/AAAA"
                 value={formData.birth_date}
-                onChange={(e) =>
-                  setFormData({ ...formData, birth_date: e.target.value })
-                }
+                onChange={handleDateChange}
                 className="h-12 bg-slate-50 border-slate-200 rounded-xl"
               />
             </div>
 
             <div className="space-y-2">
               <Label className="font-bold text-slate-700">
-                Telefone / WhatsApp
+                Telefone / WhatsApp <RequiredAsterisk />
               </Label>
               <Input
+                required
                 placeholder="(00) 00000-0000"
                 value={formData.phone}
                 onChange={(e) =>
@@ -863,10 +952,11 @@ export function ProfileTab() {
 
             <div className="space-y-2">
               <Label className="font-bold text-slate-700">
-                Conselho e Número
+                Conselho e Número <RequiredAsterisk />
               </Label>
               <div className="flex gap-2">
                 <select
+                  required
                   value={formData.council}
                   onChange={(e) =>
                     setFormData({ ...formData, council: e.target.value })
@@ -880,6 +970,7 @@ export function ProfileTab() {
                   <option value="OUTRO">Outro</option>
                 </select>
                 <Input
+                  required
                   placeholder="Nº do Registro"
                   value={formData.council_number}
                   onChange={(e) =>
@@ -891,8 +982,11 @@ export function ProfileTab() {
             </div>
 
             <div className="space-y-2">
-              <Label className="font-bold text-slate-700">Especialidade</Label>
+              <Label className="font-bold text-slate-700">
+                Especialidade <RequiredAsterisk />
+              </Label>
               <Input
+                required
                 placeholder="Ex: Psicologia Clínica"
                 value={formData.specialty}
                 onChange={(e) =>
@@ -911,7 +1005,9 @@ export function ProfileTab() {
 
           <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
             <div className="space-y-2 md:col-span-4">
-              <Label className="font-bold text-slate-700">CEP</Label>
+              <Label className="font-bold text-slate-700">
+                CEP <RequiredAsterisk />
+              </Label>
               <div className="relative flex items-center">
                 <Input
                   required
@@ -937,7 +1033,7 @@ export function ProfileTab() {
 
             <div className="space-y-2 md:col-span-8">
               <Label className="font-bold text-slate-700">
-                Rua / Logradouro
+                Rua / Logradouro <RequiredAsterisk />
               </Label>
               <Input
                 required
@@ -951,7 +1047,9 @@ export function ProfileTab() {
             </div>
 
             <div className="space-y-2 md:col-span-4">
-              <Label className="font-bold text-slate-700">Número</Label>
+              <Label className="font-bold text-slate-700">
+                Número <RequiredAsterisk />
+              </Label>
               <Input
                 required
                 placeholder="Ex: 1234"
@@ -964,7 +1062,12 @@ export function ProfileTab() {
             </div>
 
             <div className="space-y-2 md:col-span-8">
-              <Label className="font-bold text-slate-700">Complemento</Label>
+              <Label className="font-bold text-slate-700">
+                Complemento{" "}
+                <span className="text-xs text-slate-400 font-normal">
+                  (Opcional)
+                </span>
+              </Label>
               <Input
                 placeholder="Apto, Bloco, etc."
                 value={formData.address_complement}
@@ -979,7 +1082,9 @@ export function ProfileTab() {
             </div>
 
             <div className="space-y-2 md:col-span-4">
-              <Label className="font-bold text-slate-700">Bairro</Label>
+              <Label className="font-bold text-slate-700">
+                Bairro <RequiredAsterisk />
+              </Label>
               <Input
                 required
                 value={formData.address_neighborhood}
@@ -994,7 +1099,9 @@ export function ProfileTab() {
             </div>
 
             <div className="space-y-2 md:col-span-5">
-              <Label className="font-bold text-slate-700">Cidade</Label>
+              <Label className="font-bold text-slate-700">
+                Cidade <RequiredAsterisk />
+              </Label>
               <Input
                 required
                 value={formData.address_city}
@@ -1006,7 +1113,9 @@ export function ProfileTab() {
             </div>
 
             <div className="space-y-2 md:col-span-3">
-              <Label className="font-bold text-slate-700">Estado (UF)</Label>
+              <Label className="font-bold text-slate-700">
+                Estado (UF) <RequiredAsterisk />
+              </Label>
               <Input
                 required
                 maxLength={2}
