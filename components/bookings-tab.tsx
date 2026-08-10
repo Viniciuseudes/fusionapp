@@ -23,6 +23,8 @@ import {
   QrCode,
   Timer,
   ArrowLeft,
+  LogOut,
+  LogIn,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +46,9 @@ interface Booking {
     | "completed"
     | "in_progress";
   total_cost: number;
+  checkin_time?: string;
+  checkout_time?: string;
+  penalty_status?: string;
   rooms: {
     id: string;
     name: string;
@@ -108,7 +113,7 @@ export function BookingsTab({
         .from("bookings")
         .select(
           `
-          id, room_id, start_time, end_time, status, total_cost,
+          id, room_id, start_time, end_time, status, total_cost, checkin_time, checkout_time, penalty_status,
           rooms ( id, name, tier, image_url, address_details, host_id, profiles (full_name, phone) )
         `,
         )
@@ -145,6 +150,23 @@ export function BookingsTab({
         title: "Check-in Realizado! 🔓",
         description: "Sala liberada com sucesso.",
       });
+
+      // DISPARO DA NOTIFICAÇÃO PUSH DE CHECK-IN
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user) {
+        await fetch("/api/push", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: user.id,
+            title: "Check-in Confirmado! ✅",
+            body: `Sua sessão na ${scannerConfig.booking.rooms.name} começou. Excelente atendimento!`,
+            url: "/dashboard",
+          }),
+        }).catch((err) => console.error("Erro ao enviar push:", err));
+      }
 
       setActiveSessionBooking(scannerConfig.booking);
       fetchBookings();
@@ -266,12 +288,11 @@ export function BookingsTab({
 
   const upcomingBookings = bookings
     .filter((b) => {
+      // REGRA DE OURO: Se estiver em andamento, NUNCA sai da aba "Próximas", mesmo que passe da hora
+      if (b.status === "in_progress") return true;
+
       const endTime = new Date(b.end_time).getTime();
-      const isValidStatus = [
-        "confirmed",
-        "pending_payment",
-        "in_progress",
-      ].includes(b.status);
+      const isValidStatus = ["confirmed", "pending_payment"].includes(b.status);
       return isValidStatus && endTime > nowTime;
     })
     .filter((b) => {
@@ -283,6 +304,9 @@ export function BookingsTab({
     });
 
   const pastBookings = bookings.filter((b) => {
+    // REGRA DE OURO: Se estiver em andamento, NÃO pode estar no histórico
+    if (b.status === "in_progress") return false;
+
     const endTime = new Date(b.end_time).getTime();
     return (
       ["completed", "cancelled", "no_show"].includes(b.status) ||
@@ -324,8 +348,6 @@ export function BookingsTab({
 
   return (
     <>
-      {" "}
-      {/* FRAGMENTO RAIZ NECESSÁRIO PARA O SCANNER FICAR LIVRE DO CSS */}
       <div className="space-y-6 max-w-4xl mx-auto animate-in fade-in pb-24 pt-10 px-4">
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-2 pr-16 md:pr-0">
           <div>
@@ -469,6 +491,12 @@ export function BookingsTab({
                             Liberada para Check-in
                           </Badge>
                         )}
+                        {activeTab === "past" &&
+                          booking.status === "completed" && (
+                            <Badge className="bg-emerald-100 text-emerald-800 border-0 mb-2 font-bold px-2 py-0.5">
+                              Concluída
+                            </Badge>
+                          )}
 
                         <h3 className="text-xl font-black text-zinc-950 leading-tight">
                           {booking.rooms.name}
@@ -507,6 +535,59 @@ export function BookingsTab({
                               <Navigation className="w-4 h-4 fill-white" />
                             </button>
                           </div>
+                        </div>
+                      )}
+
+                    {/* MOSTRA O REGISTRO REAL NO HISTÓRICO */}
+                    {activeTab === "past" &&
+                      (booking.checkin_time || booking.checkout_time) && (
+                        <div className="mt-4 pt-4 border-t border-zinc-100 flex flex-col gap-2">
+                          <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">
+                            Registro de Acesso
+                          </p>
+                          <div className="flex flex-wrap items-center gap-4">
+                            <div className="flex items-center gap-1.5">
+                              <LogIn className="w-4 h-4 text-emerald-500" />
+                              <span className="text-sm font-medium text-zinc-600">
+                                Check-in:{" "}
+                                <strong className="text-zinc-900">
+                                  {booking.checkin_time
+                                    ? format(
+                                        new Date(booking.checkin_time),
+                                        "HH:mm",
+                                      )
+                                    : "--:--"}
+                                </strong>
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <LogOut className="w-4 h-4 text-blue-500" />
+                              <span className="text-sm font-medium text-zinc-600">
+                                Check-out:{" "}
+                                <strong className="text-zinc-900">
+                                  {booking.checkout_time
+                                    ? format(
+                                        new Date(booking.checkout_time),
+                                        "HH:mm",
+                                      )
+                                    : "--:--"}
+                                </strong>
+                              </span>
+                            </div>
+                          </div>
+
+                          {booking.penalty_status === "fined" && (
+                            <div className="mt-2 bg-red-50 text-red-700 px-3 py-2 rounded-lg flex items-center gap-2 text-xs font-bold border border-red-100">
+                              <AlertTriangle className="w-4 h-4 shrink-0" />
+                              Multa aplicada por atraso no Check-out
+                            </div>
+                          )}
+                          {booking.penalty_status === "warning" && (
+                            <div className="mt-2 bg-amber-50 text-amber-700 px-3 py-2 rounded-lg flex items-center gap-2 text-xs font-bold border border-amber-100">
+                              <AlertTriangle className="w-4 h-4 shrink-0" />
+                              Atenção: Saída no tempo limite de tolerância
+                            </div>
+                          )}
                         </div>
                       )}
                   </div>
