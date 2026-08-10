@@ -68,9 +68,12 @@ export function AdminSpecialistsTab() {
   const [profileBookings, setProfileBookings] = useState<any[]>([]);
   const [profileLoading, setProfileLoading] = useState(false);
 
-  // Controle do Modal de Adicionar Créditos
+  // Controle do Modal de Adicionar Créditos (Nova Arquitetura)
   const [creditModalOpen, setCreditModalOpen] = useState(false);
   const [creditAmount, setCreditAmount] = useState("");
+  const [creditTier, setCreditTier] = useState<"start" | "vip" | "master">(
+    "start",
+  );
   const [actionLoading, setActionLoading] = useState(false);
 
   useEffect(() => {
@@ -93,6 +96,16 @@ export function AdminSpecialistsTab() {
         .in("status", ["confirmed", "completed", "pending_payment"]);
 
       if (bErr) throw bErr;
+
+      // Busca as transações ativas para calcular o saldo real de créditos em horas
+      const { data: transactions, error: tErr } = await supabase
+        .from("wallet_transactions")
+        .select("user_id, amount, expires_at")
+        .gt("amount", 0);
+
+      if (tErr) throw tErr;
+
+      const now = new Date();
 
       const processedData: Specialist[] = profiles.map((p) => {
         const userBookings = bookings?.filter((b) => b.user_id === p.id) || [];
@@ -119,12 +132,15 @@ export function AdminSpecialistsTab() {
         if (rawSpecialty.toLowerCase().includes("nutri")) council = "CRN";
 
         // ==========================================
-        // DADOS REAIS DEFINITIVOS (ZERO POR PADRÃO)
+        // CÁLCULO DINÂMICO DO BANCO DE HORAS
         // ==========================================
-        // Busca o saldo real do banco. Se não existir ou for nulo, inicia com 0.
-        const walletBalance = Number(p.wallet_balance) || 0;
+        const userTransactions =
+          transactions?.filter((t) => t.user_id === p.id) || [];
+        const validCredits = userTransactions.reduce((acc, tx) => {
+          if (tx.expires_at && new Date(tx.expires_at) < now) return acc;
+          return acc + Number(tx.amount);
+        }, 0);
 
-        // Busca o plano real. Se não existir, força o cadastro como Básico.
         const plan = p.subscription_plan || "Básico (Start)";
 
         return {
@@ -137,7 +153,7 @@ export function AdminSpecialistsTab() {
           city: "Natal",
           state: "RN",
           created_at: p.created_at,
-          phone: p.phone || "Não informado", // Evita campo vazio
+          phone: p.phone || "Não informado",
           email:
             p.email ||
             `${p.full_name?.split(" ")[0]?.toLowerCase() || "user"}@email.com`,
@@ -146,7 +162,7 @@ export function AdminSpecialistsTab() {
           lastBookingDate: lastBooking ? lastBooking.start_time : null,
           tier,
           status: "active",
-          walletBalance,
+          walletBalance: validCredits,
           plan,
         };
       });
@@ -191,31 +207,45 @@ export function AdminSpecialistsTab() {
     setProfileLoading(false);
   };
 
-  // Função disparada ao injetar créditos pelo Admin
+  // ========================================================
+  // INJEÇÃO DE CRÉDITOS NA NOVA ARQUITETURA (WALLET TRANSACTIONS)
+  // ========================================================
   const handleAddCredits = async () => {
-    if (!selectedProfile || !creditAmount) return;
+    if (!selectedProfile || !creditAmount || !creditTier) return;
 
     setActionLoading(true);
     try {
-      const amount = parseFloat(creditAmount);
+      const hours = parseInt(creditAmount, 10);
+      if (hours <= 0)
+        throw new Error("A quantidade de horas deve ser maior que zero.");
 
-      // Atualiza o saldo real no Supabase na tabela de perfis (profiles)
-      const novoSaldo = selectedProfile.walletBalance + amount;
+      // Validade de 30 dias para os créditos injetados
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 30);
 
-      const { error } = await supabase
+      // Insere a transação real de Créditos no Banco
+      const { error: txError } = await supabase
+        .from("wallet_transactions")
+        .insert({
+          user_id: selectedProfile.id,
+          amount: hours,
+          type: "admin_bonus",
+          tier: creditTier,
+          description: `Bônus Admin: ${creditTier.toUpperCase()}`,
+          expires_at: expiresAt.toISOString(),
+        });
+
+      if (txError) throw txError;
+
+      // Opcional: Para compatibilidade com outras telas que possam ler o saldo consolidado, atualizamos o perfil
+      const novoSaldo = selectedProfile.walletBalance + hours;
+      await supabase
         .from("profiles")
         .update({ wallet_balance: novoSaldo })
         .eq("id", selectedProfile.id);
 
-      if (error) throw error;
-
-      // Opcional futuro: Gravar histórico na tabela "wallet_transactions"
-      // await supabase.from("wallet_transactions").insert({ user_id: selectedProfile.id, amount, type: "admin_bonus", description: "Recarga manual via Admin" });
-
       // Atualiza a interface localmente para mostrar o sucesso imediato
       setSelectedProfile({ ...selectedProfile, walletBalance: novoSaldo });
-
-      // Atualiza também na listagem principal no background
       setSpecialists((prev) =>
         prev.map((s) =>
           s.id === selectedProfile.id ? { ...s, walletBalance: novoSaldo } : s,
@@ -223,19 +253,21 @@ export function AdminSpecialistsTab() {
       );
 
       toast({
-        title: "Créditos Adicionados!",
-        description: `R$ ${amount.toLocaleString("pt-BR")} foram inseridos na carteira de ${selectedProfile.full_name}.`,
+        title: "Créditos Injetados com Sucesso!",
+        description: `${hours} Horas (${creditTier.toUpperCase()}) foram adicionadas à carteira de ${selectedProfile.full_name}.`,
       });
 
       setCreditModalOpen(false);
       setCreditAmount("");
-    } catch (error) {
+      setCreditTier("start");
+    } catch (error: any) {
       console.error(error);
       toast({
         variant: "destructive",
-        title: "Erro",
+        title: "Erro ao Injetar Créditos",
         description:
-          "Não foi possível adicionar o saldo. Verifique se a coluna 'wallet_balance' existe na tabela 'profiles'.",
+          error.message ||
+          "Verifique se a tabela wallet_transactions está acessível.",
       });
     } finally {
       setActionLoading(false);
@@ -386,19 +418,17 @@ export function AdminSpecialistsTab() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* CARTEIRA E PLANO DO USUÁRIO */}
+            {/* CARTEIRA E PLANO DO USUÁRIO (ATUALIZADA PARA CR) */}
             <div className="bg-[#f05e23] rounded-3xl p-6 text-white shadow-lg relative overflow-hidden group col-span-1 md:col-span-2">
               <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl transition-transform group-hover:scale-150"></div>
               <div className="relative z-10 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6">
                 <div>
                   <p className="text-xs font-bold text-white/70 uppercase tracking-wider mb-2 flex items-center gap-2">
-                    <CreditCard className="w-4 h-4" /> Saldo na Carteira
+                    <CreditCard className="w-4 h-4" /> Banco de Horas
                   </p>
                   <h3 className="text-4xl font-black mb-1">
-                    <span className="text-xl font-bold mr-1">R$</span>
-                    {selectedProfile.walletBalance.toLocaleString("pt-BR", {
-                      minimumFractionDigits: 2,
-                    })}
+                    {selectedProfile.walletBalance}
+                    <span className="text-xl font-bold ml-2">CR</span>
                   </h3>
                   <div className="flex items-center gap-2 mt-3">
                     <Badge className="bg-white/20 hover:bg-white/30 text-white border-0">
@@ -500,7 +530,7 @@ export function AdminSpecialistsTab() {
           </div>
         </div>
 
-        {/* MODAL DE ADICIONAR CRÉDITOS */}
+        {/* MODAL DE ADICIONAR CRÉDITOS (NOVA ARQUITETURA) */}
         {creditModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm px-4">
             <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 w-full max-w-md animate-in zoom-in-95">
@@ -513,7 +543,7 @@ export function AdminSpecialistsTab() {
                     Injetar Créditos
                   </h3>
                   <p className="text-sm font-medium text-slate-500">
-                    Adicionar saldo à carteira do profissional.
+                    Adicionar horas ao banco do profissional.
                   </p>
                 </div>
               </div>
@@ -527,17 +557,36 @@ export function AdminSpecialistsTab() {
                     {selectedProfile.full_name}
                   </p>
                 </div>
+
                 <div>
                   <label className="text-sm font-bold text-slate-700 mb-2 block">
-                    Valor da Recarga (R$)
+                    Categoria do Crédito (Tier)
+                  </label>
+                  <select
+                    value={creditTier}
+                    onChange={(e) => setCreditTier(e.target.value as any)}
+                    className="w-full h-14 bg-slate-50 border border-slate-200 rounded-xl px-4 font-bold text-slate-700 outline-none"
+                  >
+                    <option value="start">Basic (Start)</option>
+                    <option value="vip">VIP</option>
+                    <option value="master">Master</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-sm font-bold text-slate-700 mb-2 block">
+                    Quantidade de Horas (CR)
                   </label>
                   <Input
                     type="number"
-                    placeholder="Ex: 150.00"
+                    placeholder="Ex: 10"
                     value={creditAmount}
                     onChange={(e) => setCreditAmount(e.target.value)}
                     className="h-14 font-black text-lg bg-slate-50 border-slate-200"
                   />
+                  <p className="text-xs font-medium text-slate-400 mt-2">
+                    Os créditos injetados expirarão automaticamente em 30 dias.
+                  </p>
                 </div>
               </div>
 
@@ -557,7 +606,7 @@ export function AdminSpecialistsTab() {
                   {actionLoading ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
                   ) : (
-                    "Confirmar Recarga"
+                    "Confirmar Injeção"
                   )}
                 </Button>
               </div>
@@ -715,10 +764,7 @@ export function AdminSpecialistsTab() {
                     <td className="px-6 py-4">
                       <p className="font-bold text-slate-900">{spec.plan}</p>
                       <p className="text-[10px] font-bold text-emerald-600 mt-0.5">
-                        Saldo: R${" "}
-                        {spec.walletBalance.toLocaleString("pt-BR", {
-                          minimumFractionDigits: 2,
-                        })}
+                        Saldo: {spec.walletBalance} CR
                       </p>
                     </td>
                     <td className="px-6 py-4 text-center">
