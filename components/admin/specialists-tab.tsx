@@ -24,6 +24,9 @@ import {
   CreditCard,
   PlusCircle,
   AlertTriangle,
+  Shield,
+  Star,
+  Crown,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -50,6 +53,7 @@ interface Specialist {
   tier: "Start" | "Silver" | "Gold" | "Black";
   status: "active" | "pending" | "blocked";
   walletBalance: number;
+  walletBalances: { start: number; vip: number; master: number };
   plan: string;
 }
 
@@ -100,7 +104,7 @@ export function AdminSpecialistsTab() {
       // Busca as transações ativas para calcular o saldo real de créditos em horas
       const { data: transactions, error: tErr } = await supabase
         .from("wallet_transactions")
-        .select("user_id, amount, expires_at")
+        .select("user_id, amount, expires_at, tier")
         .gt("amount", 0);
 
       if (tErr) throw tErr;
@@ -132,15 +136,23 @@ export function AdminSpecialistsTab() {
         if (rawSpecialty.toLowerCase().includes("nutri")) council = "CRN";
 
         // ==========================================
-        // CÁLCULO DINÂMICO DO BANCO DE HORAS
+        // CÁLCULO DINÂMICO DO BANCO DE HORAS (AGORA SEPARADO POR TIER)
         // ==========================================
         const userTransactions =
           transactions?.filter((t) => t.user_id === p.id) || [];
-        const validCredits = userTransactions.reduce((acc, tx) => {
-          if (tx.expires_at && new Date(tx.expires_at) < now) return acc;
-          return acc + Number(tx.amount);
-        }, 0);
+        let startBal = 0,
+          vipBal = 0,
+          masterBal = 0;
 
+        userTransactions.forEach((tx) => {
+          if (tx.expires_at && new Date(tx.expires_at) < now) return; // Ignora expirados
+          const amt = Number(tx.amount);
+          if (tx.tier === "master") masterBal += amt;
+          else if (tx.tier === "vip") vipBal += amt;
+          else startBal += amt;
+        });
+
+        const validCredits = startBal + vipBal + masterBal;
         const plan = p.subscription_plan || "Básico (Start)";
 
         return {
@@ -163,6 +175,7 @@ export function AdminSpecialistsTab() {
           tier,
           status: "active",
           walletBalance: validCredits,
+          walletBalances: { start: startBal, vip: vipBal, master: masterBal },
           plan,
         };
       });
@@ -237,18 +250,34 @@ export function AdminSpecialistsTab() {
 
       if (txError) throw txError;
 
-      // Opcional: Para compatibilidade com outras telas que possam ler o saldo consolidado, atualizamos o perfil
-      const novoSaldo = selectedProfile.walletBalance + hours;
+      // Opcional: Atualiza o banco do perfil para compatibilidade legada
+      const novoSaldoTotal = selectedProfile.walletBalance + hours;
       await supabase
         .from("profiles")
-        .update({ wallet_balance: novoSaldo })
+        .update({ wallet_balance: novoSaldoTotal })
         .eq("id", selectedProfile.id);
 
-      // Atualiza a interface localmente para mostrar o sucesso imediato
-      setSelectedProfile({ ...selectedProfile, walletBalance: novoSaldo });
+      // Atualiza a interface localmente (Total + Detalhado)
+      const novoWalletBalances = { ...selectedProfile.walletBalances };
+      if (creditTier === "start") novoWalletBalances.start += hours;
+      else if (creditTier === "vip") novoWalletBalances.vip += hours;
+      else if (creditTier === "master") novoWalletBalances.master += hours;
+
+      setSelectedProfile({
+        ...selectedProfile,
+        walletBalance: novoSaldoTotal,
+        walletBalances: novoWalletBalances,
+      });
+
       setSpecialists((prev) =>
         prev.map((s) =>
-          s.id === selectedProfile.id ? { ...s, walletBalance: novoSaldo } : s,
+          s.id === selectedProfile.id
+            ? {
+                ...s,
+                walletBalance: novoSaldoTotal,
+                walletBalances: novoWalletBalances,
+              }
+            : s,
         ),
       );
 
@@ -418,20 +447,37 @@ export function AdminSpecialistsTab() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* CARTEIRA E PLANO DO USUÁRIO (ATUALIZADA PARA CR) */}
+            {/* CARTEIRA E PLANO DO USUÁRIO (ATUALIZADA PARA CR E COM COMPOSIÇÃO DE SALDO) */}
             <div className="bg-[#f05e23] rounded-3xl p-6 text-white shadow-lg relative overflow-hidden group col-span-1 md:col-span-2">
               <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl transition-transform group-hover:scale-150"></div>
               <div className="relative z-10 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6">
-                <div>
+                <div className="flex-1">
                   <p className="text-xs font-bold text-white/70 uppercase tracking-wider mb-2 flex items-center gap-2">
-                    <CreditCard className="w-4 h-4" /> Banco de Horas
+                    <CreditCard className="w-4 h-4" /> Banco de Horas Total
                   </p>
-                  <h3 className="text-4xl font-black mb-1">
+                  <h3 className="text-4xl font-black mb-4">
                     {selectedProfile.walletBalance}
                     <span className="text-xl font-bold ml-2">CR</span>
                   </h3>
-                  <div className="flex items-center gap-2 mt-3">
-                    <Badge className="bg-white/20 hover:bg-white/30 text-white border-0">
+
+                  {/* Composição do Saldo */}
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Badge className="bg-white/20 hover:bg-white/30 text-white border-0 flex items-center gap-1.5 px-3 py-1 text-xs">
+                      <Shield className="w-3 h-3" /> Basic:{" "}
+                      {selectedProfile.walletBalances.start}
+                    </Badge>
+                    <Badge className="bg-white/20 hover:bg-white/30 text-white border-0 flex items-center gap-1.5 px-3 py-1 text-xs">
+                      <Star className="w-3 h-3 text-purple-200" /> VIP:{" "}
+                      {selectedProfile.walletBalances.vip}
+                    </Badge>
+                    <Badge className="bg-white/20 hover:bg-white/30 text-white border-0 flex items-center gap-1.5 px-3 py-1 text-xs">
+                      <Crown className="w-3 h-3 text-amber-200" /> Master:{" "}
+                      {selectedProfile.walletBalances.master}
+                    </Badge>
+                  </div>
+
+                  <div className="flex items-center gap-2 mt-5">
+                    <Badge className="bg-white/10 text-white border-0">
                       {selectedProfile.plan}
                     </Badge>
                     <span className="text-xs font-medium text-white/80">
@@ -440,7 +486,7 @@ export function AdminSpecialistsTab() {
                   </div>
                 </div>
 
-                <div className="w-full sm:w-auto">
+                <div className="w-full sm:w-auto self-start sm:self-center">
                   <Button
                     onClick={() => setCreditModalOpen(true)}
                     className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white font-bold h-12 px-6 rounded-xl shadow-md border border-slate-700"
