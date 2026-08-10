@@ -27,11 +27,19 @@ import {
   Shield,
   Star,
   Crown,
+  IdCard,
+  Cake,
+  CalendarClock,
+  ArrowDownRight,
+  ArrowUpRight,
+  Receipt,
+  Download,
+  FileSpreadsheet,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { format, parseISO } from "date-fns";
+import { format, parseISO, differenceInDays } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useToast } from "@/hooks/use-toast";
 
@@ -42,6 +50,9 @@ interface Specialist {
   specialty: string;
   council: string;
   council_number: string;
+  cpf: string;
+  birth_date: string | null;
+  address: string;
   city: string;
   state: string;
   created_at: string;
@@ -49,13 +60,38 @@ interface Specialist {
   email: string;
   ltv: number;
   bookingsCount: number;
+  canceledCount: number;
   lastBookingDate: string | null;
-  tier: "Start" | "Silver" | "Gold" | "Black";
+  tier: "Iniciante" | "Bronze" | "Prata" | "Ouro" | "Diamante";
   status: "active" | "pending" | "blocked";
   walletBalance: number;
   walletBalances: { start: number; vip: number; master: number };
   plan: string;
 }
+
+// Motor Sênior de Exportação para Excel (CSV compatível com o Brasil)
+const exportToCSV = (headers: string[], rows: any[][], filename: string) => {
+  const csvContent = [
+    headers.join(";"),
+    ...rows.map((row) =>
+      row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(";"),
+    ),
+  ].join("\n");
+
+  const blob = new Blob(["\ufeff", csvContent], {
+    type: "text/csv;charset=utf-8;",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.setAttribute(
+    "download",
+    `${filename}_${format(new Date(), "dd-MM-yyyy")}.csv`,
+  );
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
 
 export function AdminSpecialistsTab() {
   const supabase = createClient();
@@ -69,8 +105,26 @@ export function AdminSpecialistsTab() {
   const [selectedProfile, setSelectedProfile] = useState<Specialist | null>(
     null,
   );
+
+  // Dados aprofundados do Dossiê
   const [profileBookings, setProfileBookings] = useState<any[]>([]);
+  const [profileTransactions, setProfileTransactions] = useState<any[]>([]);
   const [profileLoading, setProfileLoading] = useState(false);
+
+  // Controles de View do Dossiê
+  const [dossierTab, setDossierTab] = useState<"bookings" | "transactions">(
+    "bookings",
+  );
+
+  // Filtros de Reservas
+  const [bookingFilter, setBookingFilter] = useState<
+    "all" | "30" | "90" | "custom"
+  >("all");
+  const [customStartDate, setCustomStartDate] = useState("");
+  const [customEndDate, setCustomEndDate] = useState("");
+
+  // Filtros de Transações
+  const [txFilter, setTxFilter] = useState<"all" | "in" | "out">("all");
 
   // Controle do Modal de Adicionar Créditos
   const [creditModalOpen, setCreditModalOpen] = useState(false);
@@ -91,41 +145,55 @@ export function AdminSpecialistsTab() {
         .from("profiles")
         .select("*")
         .order("created_at", { ascending: false });
-
       if (pErr) throw pErr;
 
       const { data: bookings, error: bErr } = await supabase
         .from("bookings")
-        .select("user_id, total_cost, start_time, status")
-        .in("status", ["confirmed", "completed", "pending_payment"]);
-
+        .select("user_id, total_cost, start_time, end_time, status");
       if (bErr) throw bErr;
 
-      // ATUALIZAÇÃO SÊNIOR: Removemos o filtro gt("amount", 0) para trazer TAMBÉM os gastos (valores negativos)
       const { data: transactions, error: tErr } = await supabase
         .from("wallet_transactions")
         .select("user_id, amount, expires_at, tier");
-
       if (tErr) throw tErr;
 
       const now = new Date();
 
       const processedData: Specialist[] = profiles.map((p) => {
         const userBookings = bookings?.filter((b) => b.user_id === p.id) || [];
-        const ltv = userBookings.reduce(
+        const validBookings = userBookings.filter((b) =>
+          ["confirmed", "completed"].includes(b.status),
+        );
+        const ltv = validBookings.reduce(
           (acc, curr) => acc + (Number(curr.total_cost) || 0) * 45,
           0,
         );
-        const bookingsCount = userBookings.length;
-        const lastBooking = userBookings.sort(
+        const bookingsCount = validBookings.length;
+        const canceledCount = userBookings.filter(
+          (b) => b.status === "cancelled",
+        ).length;
+
+        const lastBooking = validBookings.sort(
           (a, b) =>
             new Date(b.start_time).getTime() - new Date(a.start_time).getTime(),
         )[0];
 
-        let tier: Specialist["tier"] = "Start";
-        if (ltv >= 5000) tier = "Black";
-        else if (ltv >= 2000) tier = "Gold";
-        else if (ltv >= 500) tier = "Silver";
+        // ==========================================
+        // SISTEMA DE NÍVEIS (GAMIFICAÇÃO BLINDADA)
+        // ==========================================
+        const hasBookings = bookingsCount > 0;
+        // Lógica: Ele é "Completo" se tiver todos os dados OU se já tiver conseguido fazer alguma reserva no passado
+        const isProfileComplete =
+          Boolean(p.cpf && p.address_street && p.birth_date) || hasBookings;
+
+        let tier: Specialist["tier"] = "Iniciante";
+
+        if (isProfileComplete) {
+          if (bookingsCount >= 50) tier = "Diamante";
+          else if (bookingsCount >= 30) tier = "Ouro";
+          else if (bookingsCount >= 10) tier = "Prata";
+          else tier = "Bronze";
+        }
 
         const rawSpecialty = p.specialty || "Clínico Geral";
         let council = "CRM";
@@ -134,9 +202,6 @@ export function AdminSpecialistsTab() {
         if (rawSpecialty.toLowerCase().includes("fisio")) council = "CREFITO";
         if (rawSpecialty.toLowerCase().includes("nutri")) council = "CRN";
 
-        // ==========================================
-        // CÁLCULO DINÂMICO REAL DO BANCO DE HORAS
-        // ==========================================
         const userTransactions =
           transactions?.filter((t) => t.user_id === p.id) || [];
         let startBal = 0,
@@ -145,19 +210,19 @@ export function AdminSpecialistsTab() {
 
         userTransactions.forEach((tx) => {
           const amt = Number(tx.amount);
-
-          // Se for uma entrada de crédito (positiva) que já passou da validade, a gente ignora da soma
           if (amt > 0 && tx.expires_at && new Date(tx.expires_at) < now) return;
 
-          // Adiciona o valor (seja entrada positiva ou gasto negativo) à prateleira correta
           if (tx.tier === "master") masterBal += amt;
           else if (tx.tier === "vip") vipBal += amt;
           else startBal += amt;
         });
 
-        // O saldo total é a soma exata de tudo o que restou utilizável
         const validCredits = startBal + vipBal + masterBal;
         const plan = p.subscription_plan || "Básico (Start)";
+
+        const fullAddress = p.address_street
+          ? `${p.address_street}, ${p.address_number || "S/N"} ${p.address_complement ? `(${p.address_complement})` : ""} - ${p.address_neighborhood || ""}`
+          : "Endereço não preenchido";
 
         return {
           id: p.id,
@@ -165,16 +230,18 @@ export function AdminSpecialistsTab() {
           avatar_url: p.avatar_url,
           specialty: rawSpecialty,
           council: council,
-          council_number: p.document_number || "Pendente",
-          city: "Natal",
-          state: "RN",
+          council_number: p.council_number || "Pendente",
+          cpf: p.cpf || "Pendente",
+          birth_date: p.birth_date || null,
+          address: fullAddress,
+          city: p.address_city || "Não informada",
+          state: p.address_state || "RN",
           created_at: p.created_at,
           phone: p.phone || "Não informado",
-          email:
-            p.email ||
-            `${p.full_name?.split(" ")[0]?.toLowerCase() || "user"}@email.com`,
+          email: p.email || "E-mail protegido/Não sincronizado",
           ltv,
           bookingsCount,
+          canceledCount,
           lastBookingDate: lastBooking ? lastBooking.start_time : null,
           tier,
           status: "active",
@@ -185,10 +252,11 @@ export function AdminSpecialistsTab() {
       });
 
       setSpecialists(
-        processedData.filter((s) => s.specialty || s.bookingsCount > 0),
+        processedData.filter(
+          (s) => s.specialty || s.bookingsCount > 0 || s.tier !== "Iniciante",
+        ),
       );
     } catch (err: any) {
-      console.error("Erro ao buscar especialistas:", err);
       toast({
         variant: "destructive",
         title: "Erro de Conexão",
@@ -202,23 +270,28 @@ export function AdminSpecialistsTab() {
   const handleOpenProfile = async (specialist: Specialist) => {
     setSelectedProfile(specialist);
     setProfileLoading(true);
+    setDossierTab("bookings");
+    setBookingFilter("all");
+    setTxFilter("all");
 
     try {
-      const { data, error } = await supabase
+      const { data: bData } = await supabase
         .from("bookings")
         .select(
-          `
-          id, start_time, end_time, total_cost, status,
-          rooms (name, image_url)
-        `,
+          `id, start_time, end_time, total_cost, status, rooms (name, tier, image_url)`,
         )
         .eq("user_id", specialist.id)
-        .order("start_time", { ascending: false })
-        .limit(5);
+        .order("start_time", { ascending: false });
 
-      if (!error && data) {
-        setProfileBookings(data);
-      }
+      if (bData) setProfileBookings(bData);
+
+      const { data: tData } = await supabase
+        .from("wallet_transactions")
+        .select("*")
+        .eq("user_id", specialist.id)
+        .order("created_at", { ascending: false });
+
+      if (tData) setProfileTransactions(tData);
     } catch (err) {}
 
     setProfileLoading(false);
@@ -233,11 +306,9 @@ export function AdminSpecialistsTab() {
       if (hours <= 0)
         throw new Error("A quantidade de horas deve ser maior que zero.");
 
-      // Validade de 30 dias para os créditos injetados
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 30);
 
-      // Insere a transação real de Créditos no Banco
       const { error: txError } = await supabase
         .from("wallet_transactions")
         .insert({
@@ -251,14 +322,12 @@ export function AdminSpecialistsTab() {
 
       if (txError) throw txError;
 
-      // Atualiza o banco do perfil para compatibilidade legada
       const novoSaldoTotal = selectedProfile.walletBalance + hours;
       await supabase
         .from("profiles")
         .update({ wallet_balance: novoSaldoTotal })
         .eq("id", selectedProfile.id);
 
-      // Atualiza a interface localmente (Total + Detalhado)
       const novoWalletBalances = { ...selectedProfile.walletBalances };
       if (creditTier === "start") novoWalletBalances.start += hours;
       else if (creditTier === "vip") novoWalletBalances.vip += hours;
@@ -270,38 +339,87 @@ export function AdminSpecialistsTab() {
         walletBalances: novoWalletBalances,
       });
 
-      setSpecialists((prev) =>
-        prev.map((s) =>
-          s.id === selectedProfile.id
-            ? {
-                ...s,
-                walletBalance: novoSaldoTotal,
-                walletBalances: novoWalletBalances,
-              }
-            : s,
-        ),
-      );
+      const { data: tData } = await supabase
+        .from("wallet_transactions")
+        .select("*")
+        .eq("user_id", selectedProfile.id)
+        .order("created_at", { ascending: false });
+      if (tData) setProfileTransactions(tData);
 
       toast({
         title: "Créditos Injetados com Sucesso!",
-        description: `${hours} Horas (${creditTier.toUpperCase()}) foram adicionadas à carteira de ${selectedProfile.full_name}.`,
+        description: `${hours} Horas (${creditTier.toUpperCase()}) adicionadas.`,
       });
 
       setCreditModalOpen(false);
       setCreditAmount("");
       setCreditTier("start");
     } catch (error: any) {
-      console.error(error);
       toast({
         variant: "destructive",
         title: "Erro ao Injetar Créditos",
-        description:
-          error.message ||
-          "Verifique se a tabela wallet_transactions está acessível.",
+        description: error.message,
       });
     } finally {
       setActionLoading(false);
     }
+  };
+
+  const exportBookings = (dataToExport: any[]) => {
+    const headers = [
+      "ID Reserva",
+      "Sala",
+      "Categoria",
+      "Data/Período",
+      "Status",
+      "Custo (CR)",
+      "Equivalente (R$)",
+    ];
+    const rows = dataToExport.map((b) => [
+      b.id,
+      b.rooms?.name || "Desconhecida",
+      b.rooms?.tier || "Basic",
+      `${format(parseISO(b.start_time), "dd/MM/yyyy")} (${format(parseISO(b.start_time), "HH:mm")} às ${format(parseISO(b.end_time), "HH:mm")})`,
+      b.status,
+      b.total_cost,
+      (b.total_cost * 45).toFixed(2).replace(".", ","),
+    ]);
+    exportToCSV(
+      headers,
+      rows,
+      `Reservas_${selectedProfile?.full_name.replace(/\s+/g, "_")}`,
+    );
+  };
+
+  const exportTransactions = (dataToExport: any[]) => {
+    const headers = [
+      "ID Transação",
+      "Data",
+      "Descrição",
+      "Tipo (Fluxo)",
+      "Categoria",
+      "Valor (CR)",
+    ];
+    const rows = dataToExport.map((tx) => {
+      const isCredit =
+        tx.amount > 0 ||
+        ["credit", "deposit", "recharge", "admin_bonus", "refund"].includes(
+          tx.type,
+        );
+      return [
+        tx.id,
+        format(parseISO(tx.created_at), "dd/MM/yyyy HH:mm"),
+        tx.description || (isCredit ? "Entrada de Créditos" : "Uso em Reserva"),
+        isCredit ? "Entrada" : "Saída",
+        tx.tier || "Basic",
+        tx.amount,
+      ];
+    });
+    exportToCSV(
+      headers,
+      rows,
+      `Extrato_${selectedProfile?.full_name.replace(/\s+/g, "_")}`,
+    );
   };
 
   const totalLTV = specialists.reduce((acc, curr) => acc + curr.ltv, 0);
@@ -315,7 +433,7 @@ export function AdminSpecialistsTab() {
     const matchesSearch =
       s.full_name.toLowerCase().includes(search.toLowerCase()) ||
       s.council_number.includes(search) ||
-      s.email.toLowerCase().includes(search.toLowerCase());
+      s.cpf.includes(search);
     const matchesCouncil =
       councilFilter === "all" ? true : s.council === councilFilter;
     return matchesSearch && matchesCouncil;
@@ -323,27 +441,35 @@ export function AdminSpecialistsTab() {
 
   const getTierBadge = (tier: string) => {
     switch (tier) {
-      case "Black":
+      case "Diamante":
         return (
           <Badge className="bg-slate-900 text-white border-0">
-            <Award className="w-3 h-3 mr-1 text-yellow-500" /> Black
+            <Award className="w-3 h-3 mr-1 text-cyan-400" /> Diamante
           </Badge>
         );
-      case "Gold":
+      case "Ouro":
         return (
           <Badge className="bg-amber-100 text-amber-700 border-0">
-            <Award className="w-3 h-3 mr-1" /> Gold
+            <Award className="w-3 h-3 mr-1" /> Ouro
           </Badge>
         );
-      case "Silver":
+      case "Prata":
         return (
           <Badge className="bg-slate-200 text-slate-700 border-0">
-            <Award className="w-3 h-3 mr-1" /> Silver
+            <Award className="w-3 h-3 mr-1" /> Prata
+          </Badge>
+        );
+      case "Bronze":
+        return (
+          <Badge className="bg-orange-100 text-orange-700 border-0">
+            <ShieldCheck className="w-3 h-3 mr-1" /> Bronze
           </Badge>
         );
       default:
         return (
-          <Badge className="bg-blue-50 text-blue-700 border-0">Start</Badge>
+          <Badge className="bg-slate-100 text-slate-500 border-0">
+            Iniciante
+          </Badge>
         );
     }
   };
@@ -355,13 +481,55 @@ export function AdminSpecialistsTab() {
       </div>
     );
 
-  // ========================================================
-  // RENDERIZAÇÃO: DOSSIÊ DO PERFIL (TELA CHEIA)
-  // ========================================================
   if (selectedProfile) {
+    const isCredit = (type: string, amount: number) => {
+      return (
+        amount > 0 ||
+        ["credit", "deposit", "recharge", "admin_bonus", "refund"].includes(
+          type,
+        )
+      );
+    };
+
+    const filteredBookings = profileBookings.filter((b) => {
+      const bDate = new Date(b.start_time);
+      if (bookingFilter === "30")
+        return differenceInDays(new Date(), bDate) <= 30;
+      if (bookingFilter === "90")
+        return differenceInDays(new Date(), bDate) <= 90;
+      if (bookingFilter === "custom") {
+        const start = customStartDate
+          ? new Date(`${customStartDate}T00:00:00`)
+          : new Date(0);
+        const end = customEndDate
+          ? new Date(`${customEndDate}T23:59:59`)
+          : new Date();
+        return bDate >= start && bDate <= end;
+      }
+      return true;
+    });
+
+    const filteredTransactions = profileTransactions.filter((tx) => {
+      const credit = isCredit(tx.type, Number(tx.amount));
+      if (txFilter === "in") return credit;
+      if (txFilter === "out") return !credit;
+      return true;
+    });
+
+    const averageTicket =
+      selectedProfile.bookingsCount > 0
+        ? selectedProfile.ltv / selectedProfile.bookingsCount
+        : 0;
+    const cancelRate =
+      selectedProfile.bookingsCount > 0
+        ? (selectedProfile.canceledCount /
+            (selectedProfile.bookingsCount + selectedProfile.canceledCount)) *
+          100
+        : 0;
+
     return (
       <div className="absolute inset-0 bg-slate-50 z-20 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-y-auto">
-        <div className="bg-white border-b border-slate-200 px-8 py-5 flex items-center justify-between sticky top-0 z-10 shadow-sm">
+        <div className="bg-white border-b border-slate-200 px-8 py-5 flex items-center justify-between sticky top-0 z-20 shadow-sm">
           <div className="flex items-center gap-6">
             <button
               onClick={() => setSelectedProfile(null)}
@@ -400,10 +568,10 @@ export function AdminSpecialistsTab() {
         </div>
 
         <div className="p-8 max-w-6xl mx-auto w-full space-y-6">
-          <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm flex flex-col md:flex-row items-center md:items-start gap-8 relative overflow-hidden">
+          <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm flex flex-col md:flex-row gap-8 relative overflow-hidden">
             <div className="absolute top-0 right-0 w-64 h-64 bg-[#f05e23]/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
 
-            <div className="w-32 h-32 rounded-full bg-slate-100 border-4 border-white shadow-lg overflow-hidden shrink-0">
+            <div className="w-32 h-32 rounded-full bg-slate-100 border-4 border-white shadow-lg overflow-hidden shrink-0 mx-auto md:mx-0">
               <img
                 src={selectedProfile.avatar_url || "/placeholder.jpg"}
                 alt={selectedProfile.full_name}
@@ -411,167 +579,389 @@ export function AdminSpecialistsTab() {
               />
             </div>
 
-            <div className="flex-1 text-center md:text-left z-10">
+            <div className="flex-1 z-10">
               <div className="flex flex-col md:flex-row md:items-center gap-4 mb-2">
-                <h1 className="text-3xl font-black text-slate-900">
+                <h1 className="text-3xl font-black text-slate-900 text-center md:text-left">
                   {selectedProfile.full_name}
                 </h1>
                 <div className="flex items-center justify-center md:justify-start gap-2">
                   {getTierBadge(selectedProfile.tier)}
                   <Badge
                     variant="outline"
-                    className="text-slate-600 border-slate-200"
+                    className="text-slate-600 border-slate-200 bg-slate-50"
                   >
                     {selectedProfile.council} {selectedProfile.council_number}
                   </Badge>
                 </div>
               </div>
-              <p className="text-lg font-bold text-slate-500 mb-6">
+              <p className="text-lg font-bold text-slate-500 mb-6 text-center md:text-left">
                 {selectedProfile.specialty}
               </p>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="flex items-center justify-center md:justify-start gap-3 text-sm font-medium text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                  <Mail className="w-4 h-4 text-[#f05e23]" />{" "}
-                  {selectedProfile.email}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="flex flex-col p-3 rounded-xl bg-slate-50 border border-slate-100">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
+                    <IdCard className="w-3 h-3" /> CPF
+                  </span>
+                  <span className="text-sm font-bold text-slate-700">
+                    {selectedProfile.cpf}
+                  </span>
                 </div>
-                <div className="flex items-center justify-center md:justify-start gap-3 text-sm font-medium text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                  <Phone className="w-4 h-4 text-[#f05e23]" />{" "}
-                  {selectedProfile.phone}
+                <div className="flex flex-col p-3 rounded-xl bg-slate-50 border border-slate-100">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
+                    <Phone className="w-3 h-3" /> Telefone
+                  </span>
+                  <span className="text-sm font-bold text-slate-700">
+                    {selectedProfile.phone}
+                  </span>
                 </div>
-                <div className="flex items-center justify-center md:justify-start gap-3 text-sm font-medium text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                  <MapPin className="w-4 h-4 text-[#f05e23]" />{" "}
-                  {selectedProfile.city} - {selectedProfile.state}
+                <div className="flex flex-col p-3 rounded-xl bg-slate-50 border border-slate-100">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
+                    <Cake className="w-3 h-3" /> Nascimento
+                  </span>
+                  <span className="text-sm font-bold text-slate-700">
+                    {selectedProfile.birth_date
+                      ? format(
+                          parseISO(selectedProfile.birth_date),
+                          "dd/MM/yyyy",
+                        )
+                      : "Não informado"}
+                  </span>
+                </div>
+                <div className="flex flex-col p-3 rounded-xl bg-slate-50 border border-slate-100">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
+                    <CalendarClock className="w-3 h-3" /> Cadastro
+                  </span>
+                  <span className="text-sm font-bold text-slate-700">
+                    {format(
+                      parseISO(selectedProfile.created_at),
+                      "dd/MM/yyyy",
+                      { locale: ptBR },
+                    )}
+                  </span>
+                </div>
+                <div className="flex flex-col p-3 rounded-xl bg-slate-50 border border-slate-100 sm:col-span-2">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
+                    <Mail className="w-3 h-3" /> E-mail de Contato
+                  </span>
+                  <span className="text-sm font-bold text-slate-700">
+                    {selectedProfile.email}
+                  </span>
+                </div>
+                <div className="flex flex-col p-3 rounded-xl bg-slate-50 border border-slate-100 sm:col-span-2">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
+                    <MapPin className="w-3 h-3" /> Endereço Residencial
+                  </span>
+                  <span
+                    className="text-sm font-bold text-slate-700 line-clamp-1"
+                    title={selectedProfile.address}
+                  >
+                    {selectedProfile.address}
+                  </span>
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* CARTEIRA DO USUÁRIO */}
-            <div className="bg-[#f05e23] rounded-3xl p-6 text-white shadow-lg relative overflow-hidden group col-span-1 md:col-span-2">
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+            <div className="bg-[#f05e23] rounded-3xl p-6 text-white shadow-lg relative overflow-hidden group md:col-span-6 lg:col-span-5">
               <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl transition-transform group-hover:scale-150"></div>
-              <div className="relative z-10 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6">
-                <div className="flex-1">
-                  <p className="text-xs font-bold text-white/70 uppercase tracking-wider mb-2 flex items-center gap-2">
-                    <CreditCard className="w-4 h-4" /> Banco de Horas Total
-                  </p>
-                  <h3 className="text-4xl font-black mb-4">
-                    {selectedProfile.walletBalance}
-                    <span className="text-xl font-bold ml-2">CR</span>
+              <div className="relative z-10 flex flex-col justify-between h-full gap-6">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs font-bold text-white/70 uppercase tracking-wider flex items-center gap-2">
+                      <CreditCard className="w-4 h-4" /> Banco de Horas Total
+                    </p>
+                    <Badge className="bg-white/10 text-white border-0 text-[10px]">
+                      {selectedProfile.plan}
+                    </Badge>
+                  </div>
+                  <h3 className="text-5xl font-black mb-4">
+                    {selectedProfile.walletBalance}{" "}
+                    <span className="text-xl font-bold">CR</span>
                   </h3>
 
-                  {/* Composição do Saldo */}
-                  <div className="flex flex-wrap items-center gap-3">
-                    <Badge className="bg-white/20 hover:bg-white/30 text-white border-0 flex items-center gap-1.5 px-3 py-1 text-xs">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge className="bg-white/20 text-white border-0 flex items-center gap-1 px-2.5 py-1 text-[10px] shadow-sm">
                       <Shield className="w-3 h-3" /> Basic:{" "}
                       {selectedProfile.walletBalances.start}
                     </Badge>
-                    <Badge className="bg-white/20 hover:bg-white/30 text-white border-0 flex items-center gap-1.5 px-3 py-1 text-xs">
+                    <Badge className="bg-white/20 text-white border-0 flex items-center gap-1 px-2.5 py-1 text-[10px] shadow-sm">
                       <Star className="w-3 h-3 text-purple-200" /> VIP:{" "}
                       {selectedProfile.walletBalances.vip}
                     </Badge>
-                    <Badge className="bg-white/20 hover:bg-white/30 text-white border-0 flex items-center gap-1.5 px-3 py-1 text-xs">
+                    <Badge className="bg-white/20 text-white border-0 flex items-center gap-1 px-2.5 py-1 text-[10px] shadow-sm">
                       <Crown className="w-3 h-3 text-amber-200" /> Master:{" "}
                       {selectedProfile.walletBalances.master}
                     </Badge>
                   </div>
-
-                  <div className="flex items-center gap-2 mt-5">
-                    <Badge className="bg-white/10 text-white border-0">
-                      {selectedProfile.plan}
-                    </Badge>
-                    <span className="text-xs font-medium text-white/80">
-                      Plano Atual
-                    </span>
-                  </div>
                 </div>
 
-                <div className="w-full sm:w-auto self-start sm:self-center">
-                  <Button
-                    onClick={() => setCreditModalOpen(true)}
-                    className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white font-bold h-12 px-6 rounded-xl shadow-md border border-slate-700"
-                  >
-                    <PlusCircle className="w-4 h-4 mr-2" /> Injetar Créditos
-                  </Button>
-                </div>
+                <Button
+                  onClick={() => setCreditModalOpen(true)}
+                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold h-12 rounded-xl shadow-md border border-slate-700"
+                >
+                  <PlusCircle className="w-4 h-4 mr-2" /> Injetar Créditos
+                </Button>
               </div>
             </div>
 
-            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-                <Wallet className="w-4 h-4" /> LTV (Gasto Total)
-              </p>
-              <h3 className="text-3xl font-black text-slate-900 mb-1">
-                <span className="text-base text-emerald-500 font-bold mr-1">
-                  R$
-                </span>
-                {selectedProfile.ltv.toLocaleString("pt-BR", {
-                  minimumFractionDigits: 2,
-                })}
-              </h3>
-              <p className="text-sm font-medium text-slate-500 mt-2">
-                {selectedProfile.bookingsCount} locações concluídas
-              </p>
+            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm md:col-span-6 lg:col-span-7 grid grid-cols-2 gap-4">
+              <div className="col-span-2 flex flex-col justify-center bg-slate-50 rounded-2xl p-5 border border-slate-100">
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                  <Wallet className="w-4 h-4" /> LTV (Receita Gerada)
+                </p>
+                <h3 className="text-3xl font-black text-slate-900 mb-1">
+                  <span className="text-base text-emerald-500 font-bold mr-1">
+                    R$
+                  </span>
+                  {selectedProfile.ltv.toLocaleString("pt-BR", {
+                    minimumFractionDigits: 2,
+                  })}
+                </h3>
+              </div>
+
+              <div className="flex flex-col justify-center bg-slate-50 rounded-2xl p-5 border border-slate-100">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                  Locações Concluídas
+                </p>
+                <h3 className="text-2xl font-black text-slate-900">
+                  {selectedProfile.bookingsCount}
+                </h3>
+                <p className="text-xs font-medium text-slate-500 mt-1">
+                  Ticket Médio: R$ {averageTicket.toFixed(2)}
+                </p>
+              </div>
+
+              <div className="flex flex-col justify-center bg-slate-50 rounded-2xl p-5 border border-slate-100">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                  Taxa de Cancelamento
+                </p>
+                <h3 className="text-2xl font-black text-slate-900">
+                  {cancelRate.toFixed(1)}%
+                </h3>
+                <p className="text-xs font-medium text-slate-500 mt-1">
+                  {selectedProfile.canceledCount} reservas canceladas
+                </p>
+              </div>
             </div>
           </div>
 
-          <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm">
-            <h3 className="text-xl font-black text-slate-900 mb-6 flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-[#f05e23]" /> Últimas Locações
-            </h3>
+          <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
+            <div className="flex border-b border-slate-100">
+              <button
+                onClick={() => setDossierTab("bookings")}
+                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "bookings" ? "border-[#f05e23] text-[#f05e23] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
+              >
+                Histórico de Reservas
+              </button>
+              <button
+                onClick={() => setDossierTab("transactions")}
+                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "transactions" ? "border-[#f05e23] text-[#f05e23] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
+              >
+                Extrato Financeiro (CR)
+              </button>
+            </div>
 
             {profileLoading ? (
-              <div className="flex justify-center py-10">
-                <Loader2 className="w-6 h-6 animate-spin text-[#f05e23]" />
+              <div className="flex justify-center py-20">
+                <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
               </div>
-            ) : profileBookings.length === 0 ? (
-              <div className="text-center py-10 bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
-                <CalendarIcon className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                <p className="text-slate-500 font-medium">
-                  Nenhum histórico de reservas encontrado.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {profileBookings.map((b) => (
-                  <div
-                    key={b.id}
-                    className="flex items-center justify-between p-4 rounded-2xl border border-slate-100 hover:border-slate-200 hover:bg-slate-50 transition-colors"
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-xl bg-slate-200 overflow-hidden shrink-0">
-                        <img
-                          src={b.rooms?.image_url || "/placeholder.jpg"}
-                          className="w-full h-full object-cover"
+            ) : dossierTab === "bookings" ? (
+              <div className="p-6">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-6 gap-4 border-b border-slate-100 pb-6">
+                  <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-[#f05e23]" /> Reservas
+                    do Profissional
+                  </h3>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <select
+                      value={bookingFilter}
+                      onChange={(e) => setBookingFilter(e.target.value as any)}
+                      className="h-10 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-700 outline-none"
+                    >
+                      <option value="all">Todo o Período</option>
+                      <option value="30">Últimos 30 Dias</option>
+                      <option value="90">Últimos 90 Dias</option>
+                      <option value="custom">Personalizado</option>
+                    </select>
+
+                    {bookingFilter === "custom" && (
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="date"
+                          value={customStartDate}
+                          onChange={(e) => setCustomStartDate(e.target.value)}
+                          className="h-10 w-36 rounded-xl border-slate-200 bg-slate-50 text-sm"
+                        />
+                        <span className="text-slate-400 font-medium">até</span>
+                        <Input
+                          type="date"
+                          value={customEndDate}
+                          onChange={(e) => setCustomEndDate(e.target.value)}
+                          className="h-10 w-36 rounded-xl border-slate-200 bg-slate-50 text-sm"
                         />
                       </div>
-                      <div>
-                        <p className="font-bold text-slate-900">
-                          {b.rooms?.name || "Sala Removida"}
-                        </p>
-                        <p className="text-xs font-bold text-slate-500 mt-0.5">
-                          {format(
-                            parseISO(b.start_time),
-                            "dd 'de' MMM, HH:mm",
-                            { locale: ptBR },
-                          )}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-black text-emerald-600 mb-1">
-                        R${" "}
-                        {(b.total_cost * 45).toLocaleString("pt-BR", {
-                          minimumFractionDigits: 2,
-                        })}
-                      </p>
-                      <Badge variant="outline" className="text-[10px]">
-                        {b.status}
-                      </Badge>
-                    </div>
+                    )}
+
+                    <Button
+                      onClick={() => exportBookings(filteredBookings)}
+                      variant="outline"
+                      className="h-10 border-slate-200 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 font-bold"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 mr-2" /> Exportar
+                      (CSV)
+                    </Button>
                   </div>
-                ))}
+                </div>
+
+                {filteredBookings.length === 0 ? (
+                  <div className="text-center py-10 bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
+                    <CalendarIcon className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                    <p className="text-slate-500 font-medium">
+                      Nenhuma reserva encontrada para este filtro.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
+                    {filteredBookings.map((b) => (
+                      <div
+                        key={b.id}
+                        className="flex items-center justify-between p-4 rounded-2xl border border-slate-100 hover:border-slate-200 hover:bg-slate-50 transition-colors"
+                      >
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 rounded-xl bg-slate-200 overflow-hidden shrink-0">
+                            <img
+                              src={b.rooms?.image_url || "/placeholder.jpg"}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                          <div>
+                            <p className="font-bold text-slate-900">
+                              {b.rooms?.name || "Sala Removida"}
+                            </p>
+                            <p className="text-xs font-bold text-slate-500 mt-0.5">
+                              {format(parseISO(b.start_time), "dd/MM/yyyy", {
+                                locale: ptBR,
+                              })}{" "}
+                              • {format(parseISO(b.start_time), "HH:mm")} às{" "}
+                              {format(parseISO(b.end_time), "HH:mm")}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-black text-emerald-600 mb-1">
+                            {b.total_cost} CR{" "}
+                            <span className="text-xs text-slate-400 font-medium">
+                              / R${" "}
+                              {(b.total_cost * 45).toFixed(2).replace(".", ",")}
+                            </span>
+                          </p>
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] uppercase tracking-widest ${b.status === "cancelled" ? "bg-red-50 text-red-600 border-red-200" : ""}`}
+                          >
+                            {b.status}
+                          </Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="p-6">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-6 gap-4 border-b border-slate-100 pb-6">
+                  <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                    <Receipt className="w-5 h-5 text-[#f05e23]" /> Movimentações
+                    Financeiras
+                  </h3>
+
+                  <div className="flex items-center gap-3">
+                    <select
+                      value={txFilter}
+                      onChange={(e) => setTxFilter(e.target.value as any)}
+                      className="h-10 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-700 outline-none"
+                    >
+                      <option value="all">Todas as Transações</option>
+                      <option value="in">
+                        Apenas Entradas (Injeções/Recargas)
+                      </option>
+                      <option value="out">Apenas Saídas (Usos)</option>
+                    </select>
+
+                    <Button
+                      onClick={() => exportTransactions(filteredTransactions)}
+                      variant="outline"
+                      className="h-10 border-slate-200 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 font-bold"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 mr-2" /> Exportar
+                      (CSV)
+                    </Button>
+                  </div>
+                </div>
+
+                {filteredTransactions.length === 0 ? (
+                  <div className="text-center py-10 bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
+                    <Wallet className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                    <p className="text-slate-500 font-medium">
+                      Nenhuma transação encontrada.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100 max-h-[500px] overflow-y-auto pr-2">
+                    {filteredTransactions.map((tx) => {
+                      const credit = isCredit(tx.type, Number(tx.amount));
+                      return (
+                        <div
+                          key={tx.id}
+                          className="py-4 flex items-center justify-between group"
+                        >
+                          <div className="flex items-center gap-4">
+                            <div
+                              className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${credit ? "bg-emerald-50 border-emerald-100 text-emerald-600" : "bg-slate-50 border-slate-200 text-slate-600"}`}
+                            >
+                              {credit ? (
+                                <ArrowDownRight className="w-5 h-5" />
+                              ) : (
+                                <ArrowUpRight className="w-5 h-5" />
+                              )}
+                            </div>
+                            <div>
+                              <p className="font-bold text-slate-900 text-sm">
+                                {tx.description ||
+                                  (credit
+                                    ? "Entrada de Créditos"
+                                    : "Uso em Reserva")}
+                              </p>
+                              <p className="text-xs font-semibold text-slate-400 mt-1">
+                                {format(
+                                  parseISO(tx.created_at),
+                                  "dd/MM/yyyy • HH:mm",
+                                  { locale: ptBR },
+                                )}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p
+                              className={`font-black text-sm ${credit ? "text-emerald-600" : "text-slate-900"}`}
+                            >
+                              {credit ? "+" : "-"}
+                              {Math.abs(Number(tx.amount))} CR
+                            </p>
+                            <Badge className="mt-1 border-0 bg-slate-100 text-slate-500 text-[9px] uppercase tracking-widest">
+                              {tx.tier === "start"
+                                ? "Basic"
+                                : tx.tier || "Basic"}
+                            </Badge>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -604,7 +994,6 @@ export function AdminSpecialistsTab() {
                     {selectedProfile.full_name}
                   </p>
                 </div>
-
                 <div>
                   <label className="text-sm font-bold text-slate-700 mb-2 block">
                     Categoria do Crédito (Tier)
@@ -619,7 +1008,6 @@ export function AdminSpecialistsTab() {
                     <option value="master">Master</option>
                   </select>
                 </div>
-
                 <div>
                   <label className="text-sm font-bold text-slate-700 mb-2 block">
                     Quantidade de Horas (CR)
