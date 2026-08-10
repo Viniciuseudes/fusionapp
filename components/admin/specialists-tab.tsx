@@ -72,7 +72,7 @@ export function AdminSpecialistsTab() {
   const [profileBookings, setProfileBookings] = useState<any[]>([]);
   const [profileLoading, setProfileLoading] = useState(false);
 
-  // Controle do Modal de Adicionar Créditos (Nova Arquitetura)
+  // Controle do Modal de Adicionar Créditos
   const [creditModalOpen, setCreditModalOpen] = useState(false);
   const [creditAmount, setCreditAmount] = useState("");
   const [creditTier, setCreditTier] = useState<"start" | "vip" | "master">(
@@ -101,11 +101,10 @@ export function AdminSpecialistsTab() {
 
       if (bErr) throw bErr;
 
-      // Busca as transações ativas para calcular o saldo real de créditos em horas
+      // ATUALIZAÇÃO SÊNIOR: Removemos o filtro gt("amount", 0) para trazer TAMBÉM os gastos (valores negativos)
       const { data: transactions, error: tErr } = await supabase
         .from("wallet_transactions")
-        .select("user_id, amount, expires_at, tier")
-        .gt("amount", 0);
+        .select("user_id, amount, expires_at, tier");
 
       if (tErr) throw tErr;
 
@@ -136,7 +135,7 @@ export function AdminSpecialistsTab() {
         if (rawSpecialty.toLowerCase().includes("nutri")) council = "CRN";
 
         // ==========================================
-        // CÁLCULO DINÂMICO DO BANCO DE HORAS (AGORA SEPARADO POR TIER)
+        // CÁLCULO DINÂMICO REAL DO BANCO DE HORAS
         // ==========================================
         const userTransactions =
           transactions?.filter((t) => t.user_id === p.id) || [];
@@ -145,13 +144,18 @@ export function AdminSpecialistsTab() {
           masterBal = 0;
 
         userTransactions.forEach((tx) => {
-          if (tx.expires_at && new Date(tx.expires_at) < now) return; // Ignora expirados
           const amt = Number(tx.amount);
+
+          // Se for uma entrada de crédito (positiva) que já passou da validade, a gente ignora da soma
+          if (amt > 0 && tx.expires_at && new Date(tx.expires_at) < now) return;
+
+          // Adiciona o valor (seja entrada positiva ou gasto negativo) à prateleira correta
           if (tx.tier === "master") masterBal += amt;
           else if (tx.tier === "vip") vipBal += amt;
           else startBal += amt;
         });
 
+        // O saldo total é a soma exata de tudo o que restou utilizável
         const validCredits = startBal + vipBal + masterBal;
         const plan = p.subscription_plan || "Básico (Start)";
 
@@ -220,9 +224,6 @@ export function AdminSpecialistsTab() {
     setProfileLoading(false);
   };
 
-  // ========================================================
-  // INJEÇÃO DE CRÉDITOS NA NOVA ARQUITETURA (WALLET TRANSACTIONS)
-  // ========================================================
   const handleAddCredits = async () => {
     if (!selectedProfile || !creditAmount || !creditTier) return;
 
@@ -250,7 +251,7 @@ export function AdminSpecialistsTab() {
 
       if (txError) throw txError;
 
-      // Opcional: Atualiza o banco do perfil para compatibilidade legada
+      // Atualiza o banco do perfil para compatibilidade legada
       const novoSaldoTotal = selectedProfile.walletBalance + hours;
       await supabase
         .from("profiles")
@@ -447,7 +448,7 @@ export function AdminSpecialistsTab() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* CARTEIRA E PLANO DO USUÁRIO (ATUALIZADA PARA CR E COM COMPOSIÇÃO DE SALDO) */}
+            {/* CARTEIRA DO USUÁRIO */}
             <div className="bg-[#f05e23] rounded-3xl p-6 text-white shadow-lg relative overflow-hidden group col-span-1 md:col-span-2">
               <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl transition-transform group-hover:scale-150"></div>
               <div className="relative z-10 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6">
@@ -576,7 +577,7 @@ export function AdminSpecialistsTab() {
           </div>
         </div>
 
-        {/* MODAL DE ADICIONAR CRÉDITOS (NOVA ARQUITETURA) */}
+        {/* MODAL DE ADICIONAR CRÉDITOS */}
         {creditModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm px-4">
             <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 w-full max-w-md animate-in zoom-in-95">
