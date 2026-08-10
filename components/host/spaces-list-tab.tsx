@@ -25,6 +25,7 @@ import {
   Edit3,
   Star,
   AlertTriangle,
+  QrCode,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { HostSpaceForm } from "@/components/host/space-form";
@@ -66,7 +67,6 @@ export function HostSpaceList() {
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuário não autenticado");
 
-      // Trazendo tudo, inclusive o is_partner recém criado
       const { data, error: roomsError } = await supabase
         .from("rooms")
         .select("*")
@@ -133,6 +133,11 @@ export function HostSpaceList() {
       description:
         "Nossa equipe entrará em contato em breve para ativar os recursos do plano Fusion Host Partner na sua sala.",
     });
+  };
+
+  // Função para abrir a rota de impressão em uma nova aba
+  const handlePrintQR = (roomId: string) => {
+    window.open(`/host/rooms/${roomId}/print`, "_blank");
   };
 
   if (isCreating || editingRoom) {
@@ -288,7 +293,6 @@ export function HostSpaceList() {
                           </div>
                         </div>
 
-                        {/* EXIBIÇÃO DE VALORES ATUAIS */}
                         {hasPricing && (
                           <div className="flex flex-wrap gap-2 my-3">
                             {pricing.hourly && (
@@ -337,17 +341,16 @@ export function HostSpaceList() {
                         </p>
                       </div>
 
-                      <div className="flex flex-wrap items-center justify-between gap-4 mt-auto pt-4 border-t border-slate-100">
-                        {/* BOTÃO FUSION PARTNER UPSELL */}
-                        <div className="flex-1">
+                      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 mt-auto pt-4 border-t border-slate-100">
+                        <div className="w-full xl:w-auto">
                           {!isPartner ? (
                             <Button
                               variant="outline"
                               onClick={() => handleRequestPartner(room.id)}
-                              className="w-full sm:w-auto font-black text-amber-600 border-amber-200 bg-amber-50 hover:bg-amber-100 hover:text-amber-700 shadow-sm"
+                              className="w-full font-black text-amber-600 border-amber-200 bg-amber-50 hover:bg-amber-100 hover:text-amber-700 shadow-sm"
                             >
                               <Star className="w-4 h-4 mr-2 fill-amber-500" />
-                              Tornar Fusion Partner (Liberar por Hora)
+                              Tornar Fusion Partner
                             </Button>
                           ) : (
                             <div className="flex items-center gap-1.5 text-xs font-bold text-amber-600 uppercase tracking-wider">
@@ -357,18 +360,26 @@ export function HostSpaceList() {
                           )}
                         </div>
 
-                        <div className="flex items-center gap-2 w-full sm:w-auto">
+                        {/* BOTÕES DE AÇÃO: QR Code, Editar, Pausar */}
+                        <div className="flex flex-wrap items-center gap-2 w-full xl:w-auto">
+                          <Button
+                            variant="outline"
+                            onClick={() => handlePrintQR(room.id)}
+                            className="flex-1 xl:flex-none border-[#f05e23]/20 text-[#f05e23] hover:bg-[#f05e23] hover:text-white font-bold bg-orange-50/50"
+                          >
+                            <QrCode className="w-4 h-4 mr-2" /> QR Code
+                          </Button>
                           <Button
                             variant="outline"
                             onClick={() => setEditingRoom(room)}
-                            className="flex-1 sm:flex-none border-slate-200 text-slate-700 hover:text-[#f05e23] hover:bg-orange-50 font-bold"
+                            className="flex-1 xl:flex-none border-slate-200 text-slate-700 hover:text-[#f05e23] hover:bg-orange-50 font-bold"
                           >
                             <Edit3 className="w-4 h-4 mr-2" /> Editar
                           </Button>
                           <Button
                             variant="outline"
                             onClick={() => setRoomToPause(room)}
-                            className={`flex-1 sm:flex-none font-bold ${room.is_paused ? "bg-slate-900 text-white hover:bg-slate-800" : "border-slate-200 text-slate-700 hover:bg-slate-100"}`}
+                            className={`flex-1 xl:flex-none font-bold ${room.is_paused ? "bg-slate-900 text-white hover:bg-slate-800" : "border-slate-200 text-slate-700 hover:bg-slate-100"}`}
                           >
                             {room.is_paused ? (
                               <>
@@ -391,7 +402,6 @@ export function HostSpaceList() {
         </div>
       )}
 
-      {/* Modal de Confirmação Completo para Pausar/Reativar */}
       <Dialog
         open={!!roomToPause}
         onOpenChange={(open) => !open && setRoomToPause(null)}

@@ -14,6 +14,9 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { createClient } from "@/utils/supabase/client";
 
+// Importamos a nossa câmera blindada
+import { RoomQRScanner } from "@/components/qr-scanner";
+
 interface ActiveSessionProps {
   booking: any;
   onSessionEnd: () => void;
@@ -24,17 +27,22 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
   const { toast } = useToast();
 
   const [loading, setLoading] = useState(false);
-  const [secondsElapsed, setSecondsSecondsElapsed] = useState(0);
+  const [secondsElapsed, setSecondsElapsed] = useState(0);
 
-  // Calcula o tempo a cada segundo
+  // Controle da Câmera de Check-out
+  const [showScanner, setShowScanner] = useState(false);
+
+  // Calcula o tempo a cada segundo baseado na hora do CHECK-IN real, e não no start_time teórico
   useEffect(() => {
-    if (!booking?.start_time) return;
+    // Usamos o checkin_time se existir, senão o start_time
+    const referenceTime = booking.checkin_time || booking.start_time;
+    if (!referenceTime) return;
 
     const interval = setInterval(() => {
-      const start = parseISO(booking.start_time);
+      const start = parseISO(referenceTime);
       const now = new Date();
       const diff = differenceInSeconds(now, start);
-      setSecondsSecondsElapsed(diff > 0 ? diff : 0);
+      setSecondsElapsed(diff > 0 ? diff : 0);
     }, 1000);
 
     return () => clearInterval(interval);
@@ -43,7 +51,6 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
   const minutesElapsed = Math.floor(secondsElapsed / 60);
   const secondsReminder = secondsElapsed % 60;
 
-  // LÓGICA DE CORES E STATUS (As nossas regras de negócio)
   let statusColor = "bg-emerald-500";
   let bgGlow = "bg-emerald-50";
   let statusText = "Sessão em andamento";
@@ -61,9 +68,10 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
     statusIcon = <AlertOctagon className="w-5 h-5 text-red-500" />;
   }
 
-  // O Check-out (Simulando a leitura do QR Code por agora)
-  const handleCheckout = async () => {
+  // Essa função agora só é chamada DEPOIS que ele lê o QR Code com sucesso na saída
+  const processCheckout = async () => {
     setLoading(true);
+    setShowScanner(false);
     try {
       let penalty = "none";
       let amount = 0;
@@ -72,7 +80,7 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
         penalty = "warning";
       } else if (minutesElapsed >= 55) {
         penalty = "fined";
-        amount = booking.total_cost > 0 ? booking.total_cost : 45; // Exemplo: cobra 1 hora extra
+        amount = booking.total_cost > 0 ? booking.total_cost : 45;
       }
 
       const { error } = await supabase
@@ -115,78 +123,87 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
         title: "Erro no Check-out",
         description: error.message,
       });
-    } finally {
       setLoading(false);
     }
   };
 
-  const formatTime = (val: number) => val.toString().padStart(2, "0");
-
   return (
-    <div className="max-w-2xl mx-auto w-full p-4 mt-6 animate-in zoom-in-95 duration-500">
-      <div
-        className={`rounded-[2rem] border-2 shadow-2xl overflow-hidden ${minutesElapsed >= 55 ? "border-red-200" : minutesElapsed >= 50 ? "border-amber-200" : "border-emerald-200"}`}
-      >
+    <>
+      <div className="max-w-2xl mx-auto w-full p-4 mt-6 animate-in zoom-in-95 duration-500">
         <div
-          className={`p-8 text-center ${bgGlow} transition-colors duration-500`}
+          className={`rounded-[2rem] border-2 shadow-2xl overflow-hidden ${minutesElapsed >= 55 ? "border-red-200" : minutesElapsed >= 50 ? "border-amber-200" : "border-emerald-200"}`}
         >
-          <div className="inline-flex items-center justify-center p-3 bg-white rounded-2xl shadow-sm mb-6">
-            <QrCode className="w-8 h-8 text-slate-800" />
-          </div>
-
-          <h2 className="text-xl font-bold text-slate-800 mb-1">
-            {booking.rooms?.name || "Sua Sala"}
-          </h2>
-
-          <div className="flex items-center justify-center gap-2 mb-8 bg-white/50 w-fit mx-auto px-4 py-2 rounded-full border border-slate-200/50 backdrop-blur-sm">
-            {statusIcon}
-            <span className="text-sm font-black uppercase tracking-wider text-slate-700">
-              {statusText}
-            </span>
-          </div>
-
-          <div className="font-mono text-7xl md:text-8xl font-black text-slate-900 tracking-tighter tabular-nums mb-2">
-            {formatTime(minutesElapsed)}:{formatTime(secondsReminder)}
-          </div>
-          <p className="text-slate-500 font-medium uppercase tracking-widest text-xs">
-            Tempo de uso
-          </p>
-        </div>
-
-        <div className="bg-white p-6 md:p-8 flex flex-col gap-4">
-          <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 mb-2">
-            <h4 className="text-xs font-bold uppercase text-slate-400 mb-2 tracking-wider">
-              Regras de Saída
-            </h4>
-            <ul className="text-sm text-slate-600 font-medium space-y-2">
-              <li className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>{" "}
-                Até 50 min: Saída ideal.
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-amber-500"></span> 50 a
-                55 min: Tolerância (Advertência).
-              </li>
-              <li className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-red-500"></span> +55
-                min: Multa de 1 hora.
-              </li>
-            </ul>
-          </div>
-
-          <Button
-            onClick={handleCheckout}
-            disabled={loading}
-            className={`w-full h-16 rounded-2xl font-black text-lg text-white shadow-xl transition-all hover:scale-[1.02] ${statusColor}`}
+          <div
+            className={`p-8 text-center ${bgGlow} transition-colors duration-500`}
           >
-            {loading ? (
-              <Loader2 className="w-6 h-6 animate-spin" />
-            ) : (
-              "Ler QR Code de Check-out"
-            )}
-          </Button>
+            <div className="inline-flex items-center justify-center p-3 bg-white rounded-2xl shadow-sm mb-6">
+              <QrCode className="w-8 h-8 text-slate-800" />
+            </div>
+
+            <h2 className="text-xl font-bold text-slate-800 mb-1">
+              {booking.rooms?.name || "Sua Sala"}
+            </h2>
+
+            <div className="flex items-center justify-center gap-2 mb-8 bg-white/50 w-fit mx-auto px-4 py-2 rounded-full border border-slate-200/50 backdrop-blur-sm">
+              {statusIcon}
+              <span className="text-sm font-black uppercase tracking-wider text-slate-700">
+                {statusText}
+              </span>
+            </div>
+
+            <div className="font-mono text-7xl md:text-8xl font-black text-slate-900 tracking-tighter tabular-nums mb-2">
+              {minutesElapsed.toString().padStart(2, "0")}:
+              {secondsReminder.toString().padStart(2, "0")}
+            </div>
+            <p className="text-slate-500 font-medium uppercase tracking-widest text-xs">
+              Tempo de uso
+            </p>
+          </div>
+
+          <div className="bg-white p-6 md:p-8 flex flex-col gap-4">
+            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 mb-2">
+              <h4 className="text-xs font-bold uppercase text-slate-400 mb-2 tracking-wider">
+                Regras de Saída
+              </h4>
+              <ul className="text-sm text-slate-600 font-medium space-y-2">
+                <li className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>{" "}
+                  Até 50 min: Saída ideal.
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-amber-500"></span> 50
+                  a 55 min: Tolerância (Advertência).
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-red-500"></span> +55
+                  min: Multa de 1 hora.
+                </li>
+              </ul>
+            </div>
+
+            <Button
+              onClick={() => setShowScanner(true)}
+              disabled={loading}
+              className={`w-full h-16 rounded-2xl font-black text-lg text-white shadow-xl transition-all hover:scale-[1.02] ${statusColor}`}
+            >
+              {loading ? (
+                <Loader2 className="w-6 h-6 animate-spin" />
+              ) : (
+                "Ler QR Code de Saída"
+              )}
+            </Button>
+          </div>
         </div>
       </div>
-    </div>
+
+      {showScanner && (
+        <RoomQRScanner
+          expectedRoomId={booking.room_id}
+          type="checkout"
+          onSuccess={processCheckout}
+          onCancel={() => setShowScanner(false)}
+        />
+      )}
+    </>
   );
 }

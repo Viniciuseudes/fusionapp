@@ -237,7 +237,7 @@ export function RoomDetail(props: RoomDetailProps) {
       : "Novo";
 
   // ==========================================
-  // GERAÇÃO DE SLOTS COM HORA CLÍNICA (50 MIN)
+  // GERAÇÃO DE SLOTS COM HORA CLÍNICA (50 MIN) BLINDADA
   // ==========================================
   const availableSlots = useMemo(() => {
     if (!roomData || activeTab !== "hora") return [];
@@ -278,9 +278,15 @@ export function RoomDetail(props: RoomDetailProps) {
           if (!h || typeof h !== "string") return "";
           const parts = h.split("-");
           if (parts.length < 2) return h;
-          // Adapta para os 50 min
-          const startH = parts[0].trim().padStart(2, "0");
-          return `${startH}:00 - ${startH}:50`;
+
+          // BUGFIX: Limpa a sujeira do banco e extrai SÓ o número da hora (Ex: "18h00" vira 18)
+          const rawStart = parts[0].trim().replace("h", ":");
+          const hourNumber = parseInt(rawStart.split(":")[0], 10);
+
+          if (isNaN(hourNumber)) return "";
+
+          const formattedHour = hourNumber.toString().padStart(2, "0");
+          return `${formattedHour}:00 - ${formattedHour}:50`; // Garante sempre "18:00 - 18:50"
         })
         .filter(Boolean);
     }
@@ -290,7 +296,6 @@ export function RoomDetail(props: RoomDetailProps) {
       ? configForDay.selectedShifts
       : [];
 
-    // BLOCOS DE HORA CLÍNICA (50 minutos de uso + 10 min de limpeza)
     if (shifts.includes("morning"))
       shiftHours.push(
         "08:00 - 08:50",
@@ -401,11 +406,6 @@ export function RoomDetail(props: RoomDetailProps) {
     );
   };
 
-  // ==========================================
-  // FUNÇÃO BLINDADA PARA CONVERSÃO DE DATAS
-  // Resolve o problema de "Invalid Date" em browsers
-  // usando a classe Date numérica segura.
-  // ==========================================
   const parseSlotDate = (dateStr: string, timeStr: string): Date => {
     try {
       const cleanTime = timeStr.trim().replace("h", ":");
@@ -415,7 +415,6 @@ export function RoomDetail(props: RoomDetailProps) {
 
       const [year, month, day] = dateStr.split("-").map(Number);
 
-      // Construtor numérico é 100% à prova de falhas de Timezone em Safari/Mobile
       const dateObj = new Date(year, month - 1, day, hh, mm, 0);
 
       if (isNaN(dateObj.getTime())) {
@@ -525,8 +524,6 @@ export function RoomDetail(props: RoomDetailProps) {
 
         const startDate = parseSlotDate(startDateStr, startSlotStr);
 
-        // MÁGICA DE PREÇO: A API de cálculo multiplica a (Diferença de Horas) X (Valor/Hora).
-        // Se passarmos 50 minutos pra ela, ela quebra. Enviamos o bloco cheio para o cálculo:
         const totalHours = selectedSlots.length;
         const endDateForApi = new Date(
           startDate.getTime() + totalHours * 60 * 60 * 1000,
@@ -674,7 +671,6 @@ export function RoomDetail(props: RoomDetailProps) {
           const startSlotStr = slotTime.split(" - ")[0];
           const endSlotStr = slotTime.split(" - ")[1];
 
-          // AQUI SALVAMOS A HORA CLÍNICA REAL NO BANCO (08:00 - 08:50)
           const startTime = parseSlotDate(dateStr, startSlotStr);
           const endTime = parseSlotDate(dateStr, endSlotStr);
 

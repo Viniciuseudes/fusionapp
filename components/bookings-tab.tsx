@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { format, isPast, isToday, parseISO, differenceInHours } from "date-fns";
+import { format, isSameDay, addDays } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import {
   CalendarDays,
@@ -17,33 +17,37 @@ import {
   Key,
   Wifi,
   Loader2,
-  CalendarPlus,
   XCircle,
   AlertTriangle,
   RefreshCcw,
+  QrCode,
+  Timer,
+  ArrowLeft,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-  DialogDescription,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+
+// Componentes da Sessão e Scanner
+import { ActiveSession } from "@/components/active-session";
+import { RoomQRScanner } from "@/components/qr-scanner";
 
 interface Booking {
   id: string;
   room_id: string;
   start_time: string;
   end_time: string;
-  status: "pending_payment" | "confirmed" | "cancelled" | "completed";
+  status:
+    | "pending_payment"
+    | "confirmed"
+    | "cancelled"
+    | "completed"
+    | "in_progress";
   total_cost: number;
   rooms: {
     id: string;
     name: string;
-    tier?: string; // <-- ADICIONADO PARA O ESTORNO INTELIGENTE
+    tier?: string;
     image_url: string;
     address_details: any;
     host_id: string;
@@ -67,6 +71,9 @@ export function BookingsTab({
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<"upcoming" | "past">("upcoming");
+  const [dateFilter, setDateFilter] = useState<"all" | "today" | "tomorrow">(
+    "all",
+  );
   const [bookings, setBookings] = useState<Booking[]>([]);
 
   const [cancelModal, setCancelModal] = useState<{
@@ -74,6 +81,18 @@ export function BookingsTab({
     booking: Booking | null;
   }>({
     isOpen: false,
+    booking: null,
+  });
+
+  const [activeSessionBooking, setActiveSessionBooking] =
+    useState<Booking | null>(null);
+  const [scannerConfig, setScannerConfig] = useState<{
+    isOpen: boolean;
+    type: "checkin" | "checkout";
+    booking: Booking | null;
+  }>({
+    isOpen: false,
+    type: "checkin",
     booking: null,
   });
 
@@ -91,7 +110,7 @@ export function BookingsTab({
           `
           id, room_id, start_time, end_time, status, total_cost,
           rooms ( id, name, tier, image_url, address_details, host_id, profiles (full_name, phone) )
-        `, // <-- ADICIONADO O 'tier' NA BUSCA
+        `,
         )
         .eq("user_id", user.id)
         .order("start_time", { ascending: true });
@@ -100,11 +119,6 @@ export function BookingsTab({
       setBookings((data as unknown as Booking[]) || []);
     } catch (err) {
       console.error("Erro ao buscar reservas:", err);
-      toast({
-        variant: "destructive",
-        title: "Erro",
-        description: "Não foi possível carregar as reservas.",
-      });
     } finally {
       setLoading(false);
     }
@@ -114,25 +128,35 @@ export function BookingsTab({
     fetchBookings();
   }, [supabase]);
 
-  const upcomingBookings = bookings.filter(
-    (b) =>
-      (b.status === "confirmed" || b.status === "pending_payment") &&
-      !isPast(parseISO(b.end_time)),
-  );
+  const handleCheckinSuccess = async () => {
+    if (!scannerConfig.booking) return;
+    setScannerConfig({ ...scannerConfig, isOpen: false });
 
-  const pastBookings = bookings.filter(
-    (b) =>
-      b.status === "completed" ||
-      b.status === "cancelled" ||
-      isPast(parseISO(b.end_time)),
-  );
+    try {
+      const checkinTime = new Date().toISOString();
+      const { error } = await supabase
+        .from("bookings")
+        .update({ status: "in_progress", checkin_time: checkinTime })
+        .eq("id", scannerConfig.booking.id);
 
-  const displayBookings =
-    activeTab === "upcoming" ? upcomingBookings : pastBookings;
+      if (error) throw error;
 
-  // ==========================================
-  // FUNÇÃO: ABRIR O CHAT DA RESERVA
-  // ==========================================
+      toast({
+        title: "Check-in Realizado! 🔓",
+        description: "Sala liberada com sucesso.",
+      });
+
+      setActiveSessionBooking(scannerConfig.booking);
+      fetchBookings();
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro no Check-in",
+        description: error.message,
+      });
+    }
+  };
+
   const handleOpenChat = async (booking: Booking) => {
     setActionLoading(true);
     try {
@@ -158,20 +182,11 @@ export function BookingsTab({
           host_id: booking.rooms.host_id,
           booking_id: booking.id,
         });
-
         if (insertError) throw insertError;
       }
 
-      if (onNavigateToChat) {
-        onNavigateToChat();
-      } else {
-        toast({
-          title: "Chat aberto!",
-          description: "Acesse a aba 'Mensagens' para conversar.",
-        });
-      }
+      if (onNavigateToChat) onNavigateToChat();
     } catch (err: any) {
-      console.error("Erro ao criar chat:", err);
       toast({
         variant: "destructive",
         title: "Erro ao abrir chat",
@@ -182,9 +197,6 @@ export function BookingsTab({
     }
   };
 
-  // ==========================================
-  // ESTORNO INTELIGENTE (30 DIAS + TIER CORRETO)
-  // ==========================================
   const handleConfirmCancel = async () => {
     const booking = cancelModal.booking;
     if (!booking) return;
@@ -196,21 +208,18 @@ export function BookingsTab({
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuário não autenticado.");
 
-      const hoursUntilBooking = differenceInHours(
-        parseISO(booking.start_time),
-        new Date(),
-      );
+      const nowTime = new Date().getTime();
+      const startTime = new Date(booking.start_time).getTime();
+      const hoursUntilBooking = (startTime - nowTime) / (1000 * 60 * 60);
       const isRefundable = hoursUntilBooking >= 24;
 
       const { error: updateError } = await supabase
         .from("bookings")
         .update({ status: "cancelled" })
         .eq("id", booking.id);
-
       if (updateError) throw updateError;
 
       if (isRefundable) {
-        // Calcula a data de expiração para daqui a 30 dias
         const expiresAt = new Date();
         expiresAt.setDate(expiresAt.getDate() + 30);
 
@@ -220,9 +229,9 @@ export function BookingsTab({
             user_id: user.id,
             amount: booking.total_cost,
             type: "refund",
-            tier: booking.rooms.tier || "start", // <-- ESTORNA NA CATEGORIA EXATA DA SALA
+            tier: booking.rooms.tier || "start",
             description: `Estorno (Cancelamento antecipado): ${booking.rooms.name}`,
-            expires_at: expiresAt.toISOString(), // <-- VALIDADE DE 30 DIAS
+            expires_at: expiresAt.toISOString(),
           });
         if (refundError) throw refundError;
       }
@@ -232,8 +241,8 @@ export function BookingsTab({
           ? "Reserva Cancelada e Reembolsada"
           : "Reserva Cancelada",
         description: isRefundable
-          ? `O valor de ${booking.total_cost}h foi devolvido à sua carteira com validade de 30 dias.`
-          : "Como faltavam menos de 24h, não houve estorno de saldo conforme a política.",
+          ? `O valor de ${booking.total_cost}h foi devolvido à sua carteira.`
+          : "Como faltavam menos de 24h, não houve estorno.",
       });
 
       setCancelModal({ isOpen: false, booking: null });
@@ -249,20 +258,61 @@ export function BookingsTab({
     }
   };
 
-  const handleRescheduleClick = () => {
-    toast({
-      title: "Como reagendar?",
-      description:
-        "Cancele esta reserva (verifique a regra de estorno de 24h) e realize um novo agendamento na sala desejada.",
-    });
-  };
+  // ==========================================
+  // LÓGICA BLINDADA DE TEMPO E FILTROS
+  // ==========================================
+  const now = new Date();
+  const nowTime = now.getTime();
 
-  const handleOpenMaps = (addressString: string) => {
-    window.open(
-      `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addressString)}`,
-      "_blank",
+  const upcomingBookings = bookings
+    .filter((b) => {
+      const endTime = new Date(b.end_time).getTime();
+      const isValidStatus = [
+        "confirmed",
+        "pending_payment",
+        "in_progress",
+      ].includes(b.status);
+      return isValidStatus && endTime > nowTime;
+    })
+    .filter((b) => {
+      const startObj = new Date(b.start_time);
+      if (dateFilter === "today") return isSameDay(startObj, now);
+      if (dateFilter === "tomorrow")
+        return isSameDay(startObj, addDays(now, 1));
+      return true;
+    });
+
+  const pastBookings = bookings.filter((b) => {
+    const endTime = new Date(b.end_time).getTime();
+    return (
+      ["completed", "cancelled", "no_show"].includes(b.status) ||
+      endTime <= nowTime
     );
-  };
+  });
+
+  const displayBookings =
+    activeTab === "upcoming" ? upcomingBookings : pastBookings;
+
+  if (activeSessionBooking) {
+    return (
+      <div className="pt-6 px-4 md:pt-10 md:px-8 max-w-2xl mx-auto pb-32 animate-in fade-in">
+        <Button
+          variant="ghost"
+          onClick={() => setActiveSessionBooking(null)}
+          className="mb-4 text-zinc-500 hover:text-zinc-900 font-bold"
+        >
+          <ArrowLeft className="w-4 h-4 mr-2" /> Voltar para as Reservas
+        </Button>
+        <ActiveSession
+          booking={activeSessionBooking}
+          onSessionEnd={() => {
+            setActiveSessionBooking(null);
+            fetchBookings();
+          }}
+        />
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -273,358 +323,325 @@ export function BookingsTab({
   }
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto animate-in fade-in pb-24 pt-6 px-4">
-      {/* HEADER E TABS */}
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
-        <div>
-          <h2 className="text-2xl font-black text-zinc-950 tracking-tight flex items-center gap-2">
-            <CalendarDays className="w-6 h-6 text-[#f05e23]" /> Minhas Reservas
-          </h2>
-          <p className="text-sm font-medium text-zinc-500 mt-1">
-            Gerencie seus atendimentos e acesse as instruções das salas.
-          </p>
-        </div>
-
-        <div className="bg-zinc-100 p-1.5 rounded-xl flex items-center shrink-0 w-full md:w-auto">
-          <button
-            onClick={() => setActiveTab("upcoming")}
-            className={`flex-1 md:px-8 py-2 text-sm font-bold rounded-lg transition-all ${activeTab === "upcoming" ? "bg-white text-zinc-950 shadow-sm border border-zinc-200" : "text-zinc-500 hover:text-zinc-800"}`}
-          >
-            Próximas ({upcomingBookings.length})
-          </button>
-          <button
-            onClick={() => setActiveTab("past")}
-            className={`flex-1 md:px-8 py-2 text-sm font-bold rounded-lg transition-all ${activeTab === "past" ? "bg-white text-zinc-950 shadow-sm border border-zinc-200" : "text-zinc-500 hover:text-zinc-800"}`}
-          >
-            Histórico
-          </button>
-        </div>
-      </div>
-
-      {/* LISTAGEM DE RESERVAS */}
-      {displayBookings.length === 0 ? (
-        <div className="text-center py-20 bg-white rounded-[2rem] border border-zinc-200 shadow-sm flex flex-col items-center">
-          <div className="w-20 h-20 bg-zinc-50 rounded-full flex items-center justify-center mb-4">
-            <CalendarDays className="w-10 h-10 text-zinc-300" />
+    <>
+      {" "}
+      {/* FRAGMENTO RAIZ NECESSÁRIO PARA O SCANNER FICAR LIVRE DO CSS */}
+      <div className="space-y-6 max-w-4xl mx-auto animate-in fade-in pb-24 pt-6 px-4">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-2">
+          <div>
+            <h2 className="text-2xl font-black text-zinc-950 tracking-tight flex items-center gap-2">
+              <CalendarDays className="w-6 h-6 text-[#f05e23]" /> Minhas
+              Reservas
+            </h2>
+            <p className="text-sm font-medium text-zinc-500 mt-1">
+              Gerencie seus atendimentos e faça o check-in das salas.
+            </p>
           </div>
-          <h3 className="text-xl font-black text-zinc-900 mb-2">
-            Nenhuma reserva por aqui
-          </h3>
-          <p className="text-zinc-500 font-medium max-w-sm mb-8">
-            Você ainda não tem agendamentos{" "}
-            {activeTab === "upcoming" ? "futuros" : "no histórico"}. Explore as
-            salas disponíveis e agende seu primeiro paciente!
-          </p>
-          <Button
-            onClick={() =>
-              onNavigateToSearch ? onNavigateToSearch() : router.push("/")
-            }
-            className="h-14 px-8 rounded-xl font-black bg-zinc-950 hover:bg-zinc-800 text-white shadow-lg"
-          >
-            Explorar Salas Premium
-          </Button>
+
+          <div className="bg-zinc-100 p-1.5 rounded-xl flex items-center shrink-0 w-full md:w-auto">
+            <button
+              onClick={() => setActiveTab("upcoming")}
+              className={`flex-1 md:px-8 py-2 text-sm font-bold rounded-lg transition-all ${activeTab === "upcoming" ? "bg-white text-zinc-950 shadow-sm border border-zinc-200" : "text-zinc-500 hover:text-zinc-800"}`}
+            >
+              Próximas
+            </button>
+            <button
+              onClick={() => setActiveTab("past")}
+              className={`flex-1 md:px-8 py-2 text-sm font-bold rounded-lg transition-all ${activeTab === "past" ? "bg-white text-zinc-950 shadow-sm border border-zinc-200" : "text-zinc-500 hover:text-zinc-800"}`}
+            >
+              Histórico
+            </button>
+          </div>
         </div>
-      ) : (
-        <div className="space-y-6">
-          {displayBookings.map((booking) => {
-            const startDate = parseISO(booking.start_time);
-            const endDate = parseISO(booking.end_time);
 
-            let address: any = {};
-            try {
-              address =
-                typeof booking.rooms.address_details === "string"
-                  ? JSON.parse(booking.rooms.address_details)
-                  : booking.rooms.address_details;
-            } catch (e) {}
-            const fullAddress = `${address.street || ""}, ${address.number || ""} ${address.complement ? `- ${address.complement}` : ""}`;
-            const searchAddress = `${address.street}, ${address.number}, ${address.neighborhood}, ${address.city}`;
-            const isOngoing = isToday(startDate) && activeTab === "upcoming";
+        {activeTab === "upcoming" && (
+          <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+            <button
+              onClick={() => setDateFilter("all")}
+              className={`px-4 py-1.5 rounded-full text-xs font-bold border transition-colors whitespace-nowrap ${dateFilter === "all" ? "bg-zinc-900 text-white border-zinc-900" : "bg-white text-zinc-500 border-zinc-200 hover:bg-zinc-50"}`}
+            >
+              Todas as datas
+            </button>
+            <button
+              onClick={() => setDateFilter("today")}
+              className={`px-4 py-1.5 rounded-full text-xs font-bold border transition-colors whitespace-nowrap ${dateFilter === "today" ? "bg-[#f05e23] text-white border-[#f05e23]" : "bg-white text-zinc-500 border-zinc-200 hover:bg-zinc-50"}`}
+            >
+              Apenas Hoje
+            </button>
+            <button
+              onClick={() => setDateFilter("tomorrow")}
+              className={`px-4 py-1.5 rounded-full text-xs font-bold border transition-colors whitespace-nowrap ${dateFilter === "tomorrow" ? "bg-zinc-900 text-white border-zinc-900" : "bg-white text-zinc-500 border-zinc-200 hover:bg-zinc-50"}`}
+            >
+              Amanhã
+            </button>
+          </div>
+        )}
 
-            return (
-              <div
-                key={booking.id}
-                className="bg-white rounded-[2rem] border border-zinc-200 shadow-sm overflow-hidden flex flex-col md:flex-row group hover:shadow-md transition-shadow"
+        {displayBookings.length === 0 ? (
+          <div className="text-center py-20 bg-white rounded-[2rem] border border-zinc-200 shadow-sm flex flex-col items-center">
+            <div className="w-20 h-20 bg-zinc-50 rounded-full flex items-center justify-center mb-4">
+              <CalendarDays className="w-10 h-10 text-zinc-300" />
+            </div>
+            <h3 className="text-xl font-black text-zinc-900 mb-2">
+              Nenhuma reserva encontrada
+            </h3>
+            <p className="text-zinc-500 font-medium max-w-sm mb-8">
+              {activeTab === "upcoming"
+                ? "Você não tem agendamentos para o filtro selecionado."
+                : "Nenhum histórico disponível."}
+            </p>
+            {activeTab === "upcoming" && (
+              <Button
+                onClick={() => onNavigateToSearch && onNavigateToSearch()}
+                className="h-14 px-8 rounded-xl font-black bg-zinc-950 hover:bg-zinc-800 text-white shadow-lg"
               >
-                {/* BLOCO ESQUERDO: Data e Hora */}
-                <div
-                  className={`md:w-48 p-6 flex flex-col justify-center border-b md:border-b-0 md:border-r border-zinc-100 border-dashed relative ${isOngoing ? "bg-orange-50/50" : "bg-zinc-50/50"}`}
-                >
-                  <div className="hidden md:block absolute -right-3 top-[-12px] w-6 h-6 bg-zinc-50 rounded-full border-b border-zinc-200"></div>
-                  <div className="hidden md:block absolute -right-3 bottom-[-12px] w-6 h-6 bg-zinc-50 rounded-full border-t border-zinc-200"></div>
-                  <p className="text-xs font-black text-zinc-400 uppercase tracking-widest mb-1 text-center md:text-left">
-                    {format(startDate, "MMMM", { locale: ptBR })}
-                  </p>
-                  <p className="text-4xl font-black text-zinc-950 tracking-tighter text-center md:text-left">
-                    {format(startDate, "dd")}
-                  </p>
-                  <p className="text-sm font-bold text-zinc-500 capitalize text-center md:text-left mb-4">
-                    {format(startDate, "EEEE", { locale: ptBR })}
-                  </p>
-                  <div className="flex items-center justify-center md:justify-start gap-2 bg-white border border-zinc-200 py-2 px-3 rounded-lg shadow-sm">
-                    <Clock className="w-4 h-4 text-[#f05e23]" />
-                    <span className="text-xs font-black text-zinc-800">
-                      {format(startDate, "HH:mm")} - {format(endDate, "HH:mm")}
-                    </span>
-                  </div>
-                </div>
+                Explorar Salas
+              </Button>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {displayBookings.map((booking) => {
+              const startObj = new Date(booking.start_time);
+              const endObj = new Date(booking.end_time);
+              const startTimeMs = startObj.getTime();
+              const endTimeMs = endObj.getTime();
 
-                {/* BLOCO CENTRAL: Detalhes e Reveal de Endereço */}
-                <div className="flex-1 p-6 flex flex-col">
-                  <div className="flex items-start justify-between gap-4 mb-4">
-                    <div>
-                      {isOngoing && (
-                        <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100 border-0 mb-2 font-bold px-2 py-0.5 animate-pulse">
-                          Acontecendo Hoje
-                        </Badge>
-                      )}
-                      {activeTab === "past" &&
-                        booking.status === "completed" && (
-                          <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 border-0 mb-2 font-bold">
-                            Concluída
+              let address: any = {};
+              try {
+                address =
+                  typeof booking.rooms.address_details === "string"
+                    ? JSON.parse(booking.rooms.address_details)
+                    : booking.rooms.address_details;
+              } catch (e) {}
+              const fullAddress = `${address.street || ""}, ${address.number || ""} ${address.complement ? `- ${address.complement}` : ""}`;
+
+              // O Botão de Check-in aparece 15 minutos antes da consulta e dura até o fim dela.
+              const fifteenMinutesMs = 15 * 60 * 1000;
+              const isReadyForCheckin =
+                booking.status === "confirmed" &&
+                startTimeMs - nowTime <= fifteenMinutesMs &&
+                nowTime < endTimeMs;
+
+              const isInProgress = booking.status === "in_progress";
+
+              return (
+                <div
+                  key={booking.id}
+                  className={`bg-white rounded-[2rem] border shadow-sm overflow-hidden flex flex-col md:flex-row group transition-all ${isInProgress ? "border-amber-400 ring-2 ring-amber-400/20" : isReadyForCheckin ? "border-[#f05e23]/50 hover:border-[#f05e23]" : "border-zinc-200 hover:shadow-md"}`}
+                >
+                  <div
+                    className={`md:w-48 p-6 flex flex-col justify-center border-b md:border-b-0 md:border-r border-zinc-100 border-dashed relative ${isSameDay(startObj, now) ? "bg-orange-50/50" : "bg-zinc-50/50"}`}
+                  >
+                    <p className="text-xs font-black text-zinc-400 uppercase tracking-widest mb-1 text-center md:text-left">
+                      {format(startObj, "MMMM", { locale: ptBR })}
+                    </p>
+                    <p className="text-4xl font-black text-zinc-950 tracking-tighter text-center md:text-left">
+                      {format(startObj, "dd")}
+                    </p>
+                    <p className="text-sm font-bold text-zinc-500 capitalize text-center md:text-left mb-4">
+                      {format(startObj, "EEEE", { locale: ptBR })}
+                    </p>
+                    <div
+                      className={`flex items-center justify-center md:justify-start gap-2 border py-2 px-3 rounded-lg shadow-sm ${isInProgress ? "bg-amber-50 border-amber-200" : "bg-white border-zinc-200"}`}
+                    >
+                      <Clock
+                        className={`w-4 h-4 ${isInProgress ? "text-amber-500" : "text-[#f05e23]"}`}
+                      />
+                      <span
+                        className={`text-xs font-black ${isInProgress ? "text-amber-800" : "text-zinc-800"}`}
+                      >
+                        {format(startObj, "HH:mm")} - {format(endObj, "HH:mm")}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex-1 p-6 flex flex-col">
+                    <div className="flex items-start justify-between gap-4 mb-4">
+                      <div>
+                        {isInProgress && (
+                          <Badge className="bg-amber-100 text-amber-800 border-0 mb-2 font-black px-2 py-0.5 animate-pulse uppercase tracking-widest">
+                            Sessão em Andamento
                           </Badge>
                         )}
-                      {booking.status === "cancelled" && (
-                        <Badge className="bg-red-100 text-red-700 hover:bg-red-100 border-0 mb-2 font-bold">
-                          Cancelada
-                        </Badge>
-                      )}
+                        {isReadyForCheckin && !isInProgress && (
+                          <Badge className="bg-[#f05e23] text-white border-0 mb-2 font-bold px-2 py-0.5 animate-pulse">
+                            Liberada para Check-in
+                          </Badge>
+                        )}
 
-                      <h3 className="text-xl font-black text-zinc-950 leading-tight">
-                        {booking.rooms.name}
-                      </h3>
-                      <p className="text-sm font-semibold text-zinc-500 flex items-center gap-1 mt-1">
-                        Anfitrião:{" "}
-                        {booking.rooms.profiles?.full_name || "Fusion Partner"}
-                      </p>
+                        <h3 className="text-xl font-black text-zinc-950 leading-tight">
+                          {booking.rooms.name}
+                        </h3>
+                        <p className="text-sm font-semibold text-zinc-500 mt-1">
+                          Anfitrião: {booking.rooms.profiles?.full_name}
+                        </p>
+                      </div>
                     </div>
-                    <div className="w-16 h-16 rounded-xl overflow-hidden shrink-0 border border-zinc-200">
-                      <Image
-                        src={booking.rooms.image_url || "/placeholder.jpg"}
-                        alt="Sala"
-                        width={64}
-                        height={64}
-                        className="object-cover w-full h-full"
-                      />
-                    </div>
+
+                    {activeTab === "upcoming" &&
+                      booking.status !== "cancelled" && (
+                        <div className="mt-auto bg-zinc-950 rounded-2xl p-5 text-white shadow-xl">
+                          <div className="flex items-start justify-between gap-4 mb-4">
+                            <div className="flex items-start gap-3">
+                              <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center shrink-0">
+                                <MapPin className="w-4 h-4 text-emerald-400" />
+                              </div>
+                              <div>
+                                <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-0.5">
+                                  Endereço Exato Liberado
+                                </p>
+                                <p className="font-bold text-sm leading-tight">
+                                  {fullAddress}
+                                </p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() =>
+                                window.open(
+                                  `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${address.street}, ${address.number}, ${address.city}`)}`,
+                                )
+                              }
+                              className="w-10 h-10 rounded-full bg-[#f05e23] hover:bg-[#d6521e] flex items-center justify-center shrink-0 transition-colors shadow-lg"
+                            >
+                              <Navigation className="w-4 h-4 fill-white" />
+                            </button>
+                          </div>
+                        </div>
+                      )}
                   </div>
 
                   {activeTab === "upcoming" &&
                     booking.status !== "cancelled" && (
-                      <div className="mt-auto bg-zinc-950 rounded-2xl p-5 text-white shadow-xl">
-                        <div className="flex items-start justify-between gap-4 mb-4">
-                          <div className="flex items-start gap-3">
-                            <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center shrink-0">
-                              <MapPin className="w-4 h-4 text-emerald-400" />
-                            </div>
-                            <div>
-                              <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-0.5">
-                                Endereço Exato Liberado
-                              </p>
-                              <p className="font-bold text-sm leading-tight">
-                                {fullAddress}
-                              </p>
-                              <p className="text-xs text-zinc-400">
-                                {address.neighborhood} - {address.city}
-                              </p>
-                            </div>
-                          </div>
-                          <button
-                            onClick={() => handleOpenMaps(searchAddress)}
-                            className="w-10 h-10 rounded-full bg-[#f05e23] hover:bg-[#d6521e] flex items-center justify-center shrink-0 transition-colors shadow-lg"
+                      <div className="p-4 md:p-6 bg-zinc-50 md:bg-transparent border-t md:border-t-0 md:border-l border-zinc-100 flex flex-col justify-center gap-2 md:w-56 shrink-0">
+                        {isInProgress ? (
+                          <Button
+                            onClick={() => setActiveSessionBooking(booking)}
+                            className="w-full h-12 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl shadow-lg shadow-amber-500/20"
                           >
-                            <Navigation className="w-4 h-4 fill-white" />
-                          </button>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3 pt-4 border-t border-white/10">
-                          <div className="flex items-center gap-2">
-                            <Key className="w-4 h-4 text-amber-400" />
-                            <div>
-                              <p className="text-[9px] font-bold text-zinc-400 uppercase">
-                                Acesso / Recepção
-                              </p>
-                              <p className="text-xs font-bold text-white">
-                                Consulte anfitrião
-                              </p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Wifi className="w-4 h-4 text-blue-400" />
-                            <div>
-                              <p className="text-[9px] font-bold text-zinc-400 uppercase">
-                                Wi-Fi
-                              </p>
-                              <p className="text-xs font-bold text-white">
-                                Na recepção
-                              </p>
-                            </div>
-                          </div>
-                        </div>
+                            <Timer className="w-4 h-4 mr-2" /> Sessão Ativa
+                          </Button>
+                        ) : isReadyForCheckin ? (
+                          <Button
+                            onClick={() =>
+                              setScannerConfig({
+                                isOpen: true,
+                                type: "checkin",
+                                booking,
+                              })
+                            }
+                            className="w-full h-12 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
+                          >
+                            <QrCode className="w-4 h-4 mr-2" /> Fazer Check-in
+                          </Button>
+                        ) : (
+                          <>
+                            <Button
+                              onClick={() => handleOpenChat(booking)}
+                              disabled={actionLoading}
+                              variant="outline"
+                              className="w-full h-10 rounded-lg text-xs font-bold border-zinc-200 text-zinc-700 hover:bg-zinc-100"
+                            >
+                              <MessageCircle className="w-3.5 h-3.5 mr-1.5" />{" "}
+                              Falar com Anfitrião
+                            </Button>
+                            <Button
+                              onClick={() =>
+                                toast({
+                                  description:
+                                    "Cancele esta reserva e realize um novo agendamento.",
+                                })
+                              }
+                              variant="outline"
+                              className="w-full h-10 rounded-lg text-xs font-bold border-zinc-200 text-zinc-700 hover:bg-zinc-100"
+                            >
+                              <RefreshCcw className="w-3.5 h-3.5 mr-1.5" />{" "}
+                              Reagendar
+                            </Button>
+                            <Button
+                              onClick={() =>
+                                setCancelModal({ isOpen: true, booking })
+                              }
+                              variant="ghost"
+                              className="w-full h-10 rounded-lg text-xs font-bold text-red-600 hover:bg-red-50 hover:text-red-700"
+                            >
+                              <XCircle className="w-3.5 h-3.5 mr-1.5" />{" "}
+                              Cancelar
+                            </Button>
+                          </>
+                        )}
                       </div>
                     )}
-
-                  {activeTab === "past" && (
-                    <div className="mt-auto bg-zinc-50 rounded-xl p-4 border border-zinc-100 flex items-center gap-3">
-                      {booking.status === "cancelled" ? (
-                        <XCircle className="w-5 h-5 text-red-500 shrink-0" />
-                      ) : (
-                        <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
-                      )}
-                      <div>
-                        <p className="text-xs font-bold text-zinc-900">
-                          {booking.status === "cancelled"
-                            ? "Agendamento Cancelado"
-                            : "Reserva finalizada com sucesso"}
-                        </p>
-                        <p className="text-[10px] font-semibold text-zinc-500">
-                          {booking.status === "cancelled"
-                            ? "Os estornos obedecem à política de 24h."
-                            : `Custo de ${booking.total_cost}h da sua carteira.`}
-                        </p>
-                      </div>
-                    </div>
-                  )}
                 </div>
-
-                {/* BLOCO DIREITO: Ações Reais */}
-                {activeTab === "upcoming" && booking.status !== "cancelled" && (
-                  <div className="p-4 md:p-6 bg-zinc-50 md:bg-transparent border-t md:border-t-0 md:border-l border-zinc-100 flex flex-row md:flex-col items-center justify-center md:justify-start gap-2 md:w-44 shrink-0">
-                    <Button
-                      onClick={() => handleOpenChat(booking)}
-                      disabled={actionLoading}
-                      variant="outline"
-                      className="flex-1 md:w-full h-10 rounded-lg text-xs font-bold border-zinc-200 text-zinc-700 hover:bg-zinc-100"
-                    >
-                      <MessageCircle className="w-3.5 h-3.5 mr-1.5" /> Falar
-                    </Button>
-                    <Button
-                      onClick={handleRescheduleClick}
-                      variant="outline"
-                      className="flex-1 md:w-full h-10 rounded-lg text-xs font-bold border-zinc-200 text-zinc-700 hover:bg-zinc-100"
-                    >
-                      <RefreshCcw className="w-3.5 h-3.5 mr-1.5" /> Reagendar
-                    </Button>
-                    <Button
-                      onClick={() => setCancelModal({ isOpen: true, booking })}
-                      variant="ghost"
-                      className="md:w-full h-10 rounded-lg text-xs font-bold text-red-600 hover:bg-red-50 hover:text-red-700 md:mt-auto"
-                    >
-                      <XCircle className="w-3.5 h-3.5 mr-1.5 md:hidden" />
-                      <span className="hidden md:inline">Cancelar</span>
-                    </Button>
-                  </div>
-                )}
-
-                {activeTab === "past" && (
-                  <div className="p-4 md:p-6 bg-zinc-50 md:bg-transparent border-t md:border-t-0 md:border-l border-zinc-100 flex flex-col justify-center gap-2 md:w-44 shrink-0">
-                    <Button
-                      onClick={() => router.push(`/sala/${booking.rooms.id}`)}
-                      className="w-full h-12 rounded-xl bg-zinc-950 text-white font-bold shadow-md hover:bg-zinc-800"
-                    >
-                      Alugar Novamente
-                    </Button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* MODAL DE CONFIRMAÇÃO DE CANCELAMENTO */}
-      <Dialog
-        open={cancelModal.isOpen}
-        onOpenChange={(open) =>
-          !open && setCancelModal({ isOpen: false, booking: null })
-        }
-      >
-        <DialogContent className="sm:max-w-md rounded-[2rem] p-0 overflow-hidden border-0">
-          {cancelModal.booking &&
-            (() => {
-              const hoursUntil = differenceInHours(
-                parseISO(cancelModal.booking.start_time),
-                new Date(),
               );
-              const isRefundable = hoursUntil >= 24;
+            })}
+          </div>
+        )}
 
-              return (
-                <>
-                  <div
-                    className={`p-6 pb-8 text-center text-white ${isRefundable ? "bg-emerald-600" : "bg-red-600"}`}
-                  >
-                    <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4 backdrop-blur-md">
-                      <AlertTriangle className="w-8 h-8 text-white" />
-                    </div>
-                    <DialogTitle className="text-2xl font-black mb-1">
-                      Deseja cancelar a reserva?
-                    </DialogTitle>
-                    <p className="font-semibold text-white/90">
-                      Sala: {cancelModal.booking.rooms.name}
-                    </p>
-                  </div>
+        <Dialog
+          open={cancelModal.isOpen}
+          onOpenChange={(open) =>
+            !open && setCancelModal({ isOpen: false, booking: null })
+          }
+        >
+          <DialogContent className="sm:max-w-md rounded-[2rem] p-0 overflow-hidden border-0">
+            {cancelModal.booking &&
+              (() => {
+                const startMs = new Date(
+                  cancelModal.booking.start_time,
+                ).getTime();
+                const isRefundable =
+                  (startMs - new Date().getTime()) / (1000 * 60 * 60) >= 24;
 
-                  <div className="p-6 bg-white space-y-6">
-                    <div className="bg-zinc-50 p-4 rounded-xl border border-zinc-200">
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-xs font-bold text-zinc-500 uppercase">
-                          Política de Cancelamento
-                        </span>
-                        <Badge
-                          variant="outline"
-                          className={
-                            isRefundable
-                              ? "border-emerald-500 text-emerald-600"
-                              : "border-red-500 text-red-600"
-                          }
-                        >
-                          {isRefundable ? "+24 Horas" : "Menos de 24h"}
-                        </Badge>
+                return (
+                  <>
+                    <div
+                      className={`p-6 pb-8 text-center text-white ${isRefundable ? "bg-emerald-600" : "bg-red-600"}`}
+                    >
+                      <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4 backdrop-blur-md">
+                        <AlertTriangle className="w-8 h-8 text-white" />
                       </div>
-                      {isRefundable ? (
-                        <p className="text-sm font-semibold text-zinc-700">
-                          Como você está cancelando com mais de 24h de
-                          antecedência,{" "}
-                          <strong className="text-emerald-600">
-                            você receberá o estorno integral
-                          </strong>{" "}
-                          de {cancelModal.booking.total_cost}h na sua carteira.
-                        </p>
-                      ) : (
-                        <p className="text-sm font-semibold text-zinc-700">
-                          O horário do agendamento é em menos de 24 horas. Para
-                          proteger o anfitrião,{" "}
-                          <strong className="text-red-600">
-                            esta reserva não é elegível para estorno de
-                            créditos.
-                          </strong>
-                        </p>
-                      )}
+                      <DialogTitle className="text-2xl font-black mb-1">
+                        Deseja cancelar a reserva?
+                      </DialogTitle>
                     </div>
-
-                    <div className="flex gap-3 pt-2">
-                      <Button
-                        onClick={() =>
-                          setCancelModal({ isOpen: false, booking: null })
-                        }
-                        variant="outline"
-                        className="flex-1 h-12 rounded-xl font-bold text-zinc-700 border-zinc-200"
-                      >
-                        Manter Reserva
-                      </Button>
-                      <Button
-                        onClick={handleConfirmCancel}
-                        disabled={actionLoading}
-                        className={`flex-1 h-12 rounded-xl font-black text-white ${isRefundable ? "bg-emerald-600 hover:bg-emerald-700" : "bg-red-600 hover:bg-red-700"}`}
-                      >
-                        {actionLoading ? "Cancelando..." : "Confirmar"}
-                      </Button>
+                    <div className="p-6 bg-white space-y-6">
+                      <div className="flex gap-3 pt-2">
+                        <Button
+                          onClick={() =>
+                            setCancelModal({ isOpen: false, booking: null })
+                          }
+                          variant="outline"
+                          className="flex-1 h-12 rounded-xl font-bold text-zinc-700 border-zinc-200"
+                        >
+                          Manter Reserva
+                        </Button>
+                        <Button
+                          onClick={handleConfirmCancel}
+                          disabled={actionLoading}
+                          className={`flex-1 h-12 rounded-xl font-black text-white ${isRefundable ? "bg-emerald-600" : "bg-red-600"}`}
+                        >
+                          {actionLoading ? "Cancelando..." : "Confirmar"}
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                </>
-              );
-            })()}
-        </DialogContent>
-      </Dialog>
-    </div>
+                  </>
+                );
+              })()}
+          </DialogContent>
+        </Dialog>
+      </div>
+      {/* A CÂMERA FICA AQUI FORA, LIVRE DO CSS E DA ROLAGEM! */}
+      {scannerConfig.isOpen && scannerConfig.booking && (
+        <RoomQRScanner
+          expectedRoomId={scannerConfig.booking.room_id}
+          type={scannerConfig.type}
+          onSuccess={handleCheckinSuccess}
+          onCancel={() =>
+            setScannerConfig({ isOpen: false, type: "checkin", booking: null })
+          }
+        />
+      )}
+    </>
   );
 }
