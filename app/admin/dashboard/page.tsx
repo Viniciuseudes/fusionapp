@@ -6,7 +6,7 @@ import { PackagesAdminTab } from "@/components/admin/packages-admin-tab";
 import { AdminOverviewTab } from "@/components/admin/overview-tab";
 import { AdminSpecialistsTab } from "@/components/admin/specialists-tab";
 import { AdminPartnersTab } from "@/components/admin/partners-tab";
-import { AdminBookingsTab } from "@/components/admin/bookings-tab"; // <-- NOVO COMPONENTE DE AGENDAMENTOS IMPORTADO
+import { AdminBookingsTab } from "@/components/admin/bookings-tab";
 import {
   Users,
   Building2,
@@ -35,6 +35,12 @@ import {
   ChevronRight,
   ArrowLeft,
   Tags,
+  CalendarPlus,
+  Wallet,
+  QrCode,
+  CreditCard,
+  Banknote,
+  UserCheck,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -131,7 +137,6 @@ export default function AdminDashboardPage() {
           </div>
         </header>
         <div className="flex-1 overflow-y-auto relative bg-slate-50">
-          {/* RENDERIZAÇÃO CONDICIONAL DAS ABAS DO ADMIN */}
           {activeTab === "dashboard" && <AdminOverviewTab />}
           {activeTab === "especialistas" && <AdminSpecialistsTab />}
           {activeTab === "parceiros" && <AdminPartnersTab />}
@@ -157,7 +162,7 @@ export default function AdminDashboardPage() {
 }
 
 // ==========================================
-// MÓDULO: GESTÃO DE SALAS
+// MÓDULO: GESTÃO DE SALAS E RESERVA MANUAL
 // ==========================================
 function AdminRoomsTab() {
   const supabase = createClient();
@@ -174,9 +179,10 @@ function AdminRoomsTab() {
   const [isPartner, setIsPartner] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
-  const [auditTab, setAuditTab] = useState<"auditoria" | "editar" | "agenda">(
-    "auditoria",
-  );
+  const [auditTab, setAuditTab] = useState<
+    "auditoria" | "editar" | "agenda" | "reservar"
+  >("auditoria");
+
   const [editForm, setEditForm] = useState({
     name: "",
     description: "",
@@ -186,6 +192,147 @@ function AdminRoomsTab() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [blockedDates, setBlockedDates] = useState<string[]>([]);
 
+  // ==========================================
+  // ESTADOS PARA RESERVA MANUAL (MULTI-SLOT CARRINHO)
+  // ==========================================
+  const [manualDate, setManualDate] = useState<Date>(new Date());
+
+  // ARQUITETURA SÊNIOR: Em vez de um slot (string), temos um carrinho de sessões
+  const [selectedSlots, setSelectedSlots] = useState<
+    { date: Date; slot: string }[]
+  >([]);
+
+  const [takenSlots, setTakenSlots] = useState<string[]>([]);
+  const [professionals, setProfessionals] = useState<any[]>([]);
+  const [profSearch, setProfSearch] = useState("");
+  const [selectedProf, setSelectedProf] = useState<any | null>(null);
+  const [manualPaymentMethod, setManualPaymentMethod] = useState<
+    "wallet" | "pix" | "card" | "cash"
+  >("wallet");
+
+  // Toggle do Carrinho de Sessões
+  const toggleSlot = (date: Date, slot: string) => {
+    const dateStr = format(date, "yyyy-MM-dd");
+    const existingIndex = selectedSlots.findIndex(
+      (s) => format(s.date, "yyyy-MM-dd") === dateStr && s.slot === slot,
+    );
+
+    if (existingIndex >= 0) {
+      // Remove se já existe
+      setSelectedSlots((prev) => prev.filter((_, i) => i !== existingIndex));
+    } else {
+      // Adiciona se não existe
+      setSelectedSlots((prev) => [...prev, { date, slot }]);
+    }
+  };
+
+  const checkIsHoliday = (date: Date) => {
+    const d = date.getDate();
+    const m = date.getMonth() + 1;
+    const holidays = [
+      "1/1",
+      "21/4",
+      "1/5",
+      "7/9",
+      "12/10",
+      "2/11",
+      "15/11",
+      "25/12",
+    ];
+    return holidays.includes(`${d}/${m}`);
+  };
+
+  const getAvailableSlotsForDate = (room: any, date: Date) => {
+    if (!room?.availability) return [];
+
+    const config = room.availability;
+    const weekConfig = config.weekConfig || [];
+    const exceptions = config.exceptions || [];
+
+    const dayOfWeek = date.getDay();
+    const dateString = date.toDateString();
+
+    const exception = exceptions.find(
+      (e: any) => new Date(e.date).toDateString() === dateString,
+    );
+
+    let baseSlots: string[] = [];
+
+    if (!checkIsHoliday(date)) {
+      const dayConfig = weekConfig.find((c: any) => c.day === dayOfWeek);
+      if (dayConfig && dayConfig.enabled) {
+        if (dayConfig.rentalType === "hourly") {
+          baseSlots = dayConfig.availableHours || [];
+        } else if (dayConfig.rentalType === "shift") {
+          const shifts = dayConfig.selectedShifts || [];
+          if (shifts.includes("morning"))
+            baseSlots.push("08h-09h", "09h-10h", "10h-11h", "11h-12h");
+          if (shifts.includes("afternoon"))
+            baseSlots.push(
+              "13h-14h",
+              "14h-15h",
+              "15h-16h",
+              "16h-17h",
+              "17h-18h",
+            );
+          if (shifts.includes("night"))
+            baseSlots.push("18h-19h", "19h-20h", "20h-21h", "21h-22h");
+        }
+      }
+    }
+
+    if (exception) {
+      if (exception.type === "block") {
+        if (exception.isFullDay) return [];
+
+        if (
+          checkIsHoliday(date) ||
+          !weekConfig.find((c: any) => c.day === dayOfWeek)?.enabled
+        ) {
+          baseSlots = [];
+        } else {
+          const dayConfig = weekConfig.find((c: any) => c.day === dayOfWeek);
+          if (dayConfig?.rentalType === "hourly")
+            baseSlots = dayConfig.availableHours || [];
+          else if (dayConfig?.rentalType === "shift") {
+            const shifts = dayConfig.selectedShifts || [];
+            if (shifts.includes("morning"))
+              baseSlots.push("08h-09h", "09h-10h", "10h-11h", "11h-12h");
+            if (shifts.includes("afternoon"))
+              baseSlots.push(
+                "13h-14h",
+                "14h-15h",
+                "15h-16h",
+                "16h-17h",
+                "17h-18h",
+              );
+            if (shifts.includes("night"))
+              baseSlots.push("18h-19h", "19h-20h", "20h-21h", "21h-22h");
+          }
+        }
+        baseSlots = baseSlots.filter(
+          (slot: string) => !(exception.hours || []).includes(slot),
+        );
+      } else if (exception.type === "extra") {
+        const extraHours = exception.hours || [];
+        baseSlots = Array.from(new Set([...baseSlots, ...extraHours]));
+      }
+    }
+
+    const now = new Date();
+    const isToday = date.toDateString() === now.toDateString();
+
+    if (isToday) {
+      const currentHour = now.getHours();
+      baseSlots = baseSlots.filter((slot) => {
+        const slotHour = parseInt(slot.split("h")[0], 10);
+        return slotHour > currentHour;
+      });
+    }
+
+    return baseSlots.sort();
+  };
+
   const fetchRooms = async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -193,27 +340,170 @@ function AdminRoomsTab() {
       .select(
         `
         id, name, is_active, is_paused, created_at, description,
-        address_details, image_url, tier, is_partner, blocked_dates,
+        address_details, image_url, tier, is_partner, blocked_dates, availability,
         profiles:host_id (full_name)
       `,
       )
       .order("created_at", { ascending: false });
 
-    if (error) {
-      toast({
-        variant: "destructive",
-        title: "Erro",
-        description: "Falha ao carregar as salas.",
-      });
-    } else {
-      setRooms(data || []);
-    }
+    if (!error) setRooms(data || []);
     setLoading(false);
   };
 
   useEffect(() => {
     fetchRooms();
   }, []);
+
+  useEffect(() => {
+    if (auditTab === "reservar" && evaluatingRoom) {
+      loadProfessionals();
+      loadTakenSlots(manualDate);
+    }
+  }, [auditTab, manualDate, evaluatingRoom]);
+
+  const loadProfessionals = async () => {
+    try {
+      const { data: profData, error: pErr } = await supabase
+        .from("profiles")
+        .select("id, full_name, cpf")
+        .order("full_name");
+
+      if (pErr) throw pErr;
+
+      const { data: txData, error: tErr } = await supabase
+        .from("wallet_transactions")
+        .select("user_id, amount, expires_at");
+
+      if (tErr) throw tErr;
+
+      const now = new Date();
+      const mappedProfs = (profData || []).map((p: any) => {
+        const userTx = txData?.filter((t: any) => t.user_id === p.id) || [];
+        let bal = 0;
+        userTx.forEach((tx: any) => {
+          const amt = Number(tx.amount);
+          if (amt > 0 && tx.expires_at && new Date(tx.expires_at) < now) return;
+          bal += amt;
+        });
+        return { ...p, wallet_balance: bal };
+      });
+
+      setProfessionals(mappedProfs);
+    } catch (error) {
+      console.error("Erro ao carregar lista de profissionais:", error);
+    }
+  };
+
+  const loadTakenSlots = async (date: Date) => {
+    if (!evaluatingRoom) return;
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const { data } = await supabase
+      .from("bookings")
+      .select("start_time, status")
+      .eq("room_id", evaluatingRoom.id)
+      .in("status", [
+        "confirmed",
+        "completed",
+        "in_progress",
+        "pending_payment",
+      ])
+      .gte("start_time", startOfDay.toISOString())
+      .lte("start_time", endOfDay.toISOString());
+
+    if (data) {
+      const taken = data.map((b) => {
+        const d = new Date(b.start_time);
+        const h = d.getHours();
+        return `${h.toString().padStart(2, "0")}h-${(h + 1).toString().padStart(2, "0")}h`;
+      });
+      setTakenSlots(taken);
+    } else {
+      setTakenSlots([]);
+    }
+  };
+
+  const handleManualBookingSubmit = async () => {
+    if (!selectedProf || selectedSlots.length === 0 || !evaluatingRoom) return;
+
+    setActionLoading(true);
+    try {
+      const totalCost = selectedSlots.length; // 1 CR por slot
+
+      if (manualPaymentMethod === "wallet") {
+        const currentBalance = selectedProf.wallet_balance || 0;
+        if (currentBalance < totalCost) {
+          throw new Error(
+            `Saldo insuficiente. O profissional tem ${currentBalance} CR, mas você selecionou ${totalCost} horários.`,
+          );
+        }
+
+        const { error: txError } = await supabase
+          .from("wallet_transactions")
+          .insert({
+            user_id: selectedProf.id,
+            amount: -totalCost,
+            type: "booking",
+            tier: evaluatingRoom.tier || "start",
+            description: `Reserva Manual Admin (Múltipla): ${evaluatingRoom.name} (${totalCost}h)`,
+          });
+        if (txError) throw txError;
+
+        setSelectedProf({
+          ...selectedProf,
+          wallet_balance: currentBalance - totalCost,
+        });
+      }
+
+      // Preparando o Bulk Insert (Inserção em Lote)
+      const bookingsToInsert = selectedSlots.map((s) => {
+        const [startStr, endStr] = s.slot.split("-");
+        const startH = parseInt(startStr.replace("h", ""), 10);
+        const endH = parseInt(endStr.replace("h", ""), 10);
+
+        const startTime = new Date(s.date);
+        startTime.setHours(startH, 0, 0, 0);
+
+        const endTime = new Date(s.date);
+        endTime.setHours(endH, 0, 0, 0);
+
+        return {
+          user_id: selectedProf.id,
+          room_id: evaluatingRoom.id,
+          start_time: startTime.toISOString(),
+          end_time: endTime.toISOString(),
+          status: "confirmed",
+          total_cost: 1,
+        };
+      });
+
+      // Bulk Insert no Supabase
+      const { error: bError } = await supabase
+        .from("bookings")
+        .insert(bookingsToInsert);
+
+      if (bError) throw bError;
+
+      toast({
+        title: "Sucesso!",
+        description: `${totalCost} reserva(s) criada(s) e confirmada(s).`,
+      });
+      setSelectedSlots([]);
+      loadTakenSlots(manualDate);
+    } catch (error: any) {
+      console.error("Erro na reserva manual múltipla:", error);
+      toast({
+        variant: "destructive",
+        title: "Falha na Reserva",
+        description: error.message,
+      });
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   const openAuditPanel = (room: any) => {
     setSelectedTier(room.tier || "start");
@@ -222,6 +512,7 @@ function AdminRoomsTab() {
     setEvaluatingRoom(room);
     setAuditTab("auditoria");
     setCurrentMonth(new Date());
+    setSelectedSlots([]); // Limpa carrinho
 
     let parsedPrice = "";
     try {
@@ -240,6 +531,7 @@ function AdminRoomsTab() {
 
   const closeAuditPanel = () => {
     setEvaluatingRoom(null);
+    setSelectedSlots([]);
   };
 
   const handleSaveAudit = async () => {
@@ -349,6 +641,26 @@ function AdminRoomsTab() {
     }
   };
 
+  const handleStatusChange = async (roomId: string, newStatus: boolean) => {
+    const { error } = await supabase
+      .from("rooms")
+      .update({ is_active: newStatus })
+      .eq("id", roomId);
+    if (!error) {
+      toast({ title: "Sucesso" });
+      fetchRooms();
+    }
+  };
+
+  const handleDelete = async (roomId: string) => {
+    if (!confirm("Tem certeza que deseja excluir?")) return;
+    const { error } = await supabase.from("rooms").delete().eq("id", roomId);
+    if (!error) {
+      toast({ title: "Excluída" });
+      fetchRooms();
+    }
+  };
+
   const renderCalendar = () => {
     const monthStart = startOfMonth(currentMonth);
     const monthEnd = endOfMonth(monthStart);
@@ -414,25 +726,6 @@ function AdminRoomsTab() {
     );
   };
 
-  const handleStatusChange = async (roomId: string, newStatus: boolean) => {
-    const { error } = await supabase
-      .from("rooms")
-      .update({ is_active: newStatus })
-      .eq("id", roomId);
-    if (!error) {
-      toast({ title: "Sucesso" });
-      fetchRooms();
-    }
-  };
-  const handleDelete = async (roomId: string) => {
-    if (!confirm("Tem certeza que deseja excluir?")) return;
-    const { error } = await supabase.from("rooms").delete().eq("id", roomId);
-    if (!error) {
-      toast({ title: "Excluída" });
-      fetchRooms();
-    }
-  };
-
   const pendingRooms = rooms.filter((r) => !r.is_active);
   const filteredRooms = rooms.filter((r) => {
     const matchesSearch =
@@ -472,6 +765,20 @@ function AdminRoomsTab() {
       }
     } catch (e) {}
 
+    const availableSlots = getAvailableSlotsForDate(evaluatingRoom, manualDate);
+    const currentDateStr = format(manualDate, "yyyy-MM-dd");
+
+    const filteredProfessionals =
+      profSearch.length > 0
+        ? professionals.filter((p) => {
+            const s = profSearch.toLowerCase();
+            return (
+              (p.full_name || "").toLowerCase().includes(s) ||
+              (p.cpf || "").includes(s)
+            );
+          })
+        : [];
+
     return (
       <div className="absolute inset-0 bg-slate-50 z-20 flex flex-col animate-in fade-in zoom-in-95 duration-200">
         <div className="bg-white border-b border-slate-200 px-8 py-5 flex items-center justify-between shrink-0">
@@ -488,11 +795,11 @@ function AdminRoomsTab() {
                   {evaluatingRoom.name}
                 </h2>
                 {evaluatingRoom.is_active ? (
-                  <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100 border-0 font-bold uppercase tracking-wider text-[10px]">
+                  <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold uppercase tracking-wider text-[10px]">
                     Ativa
                   </Badge>
                 ) : (
-                  <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100 border-0 font-bold uppercase tracking-wider text-[10px]">
+                  <Badge className="bg-amber-100 text-amber-800 border-0 font-bold uppercase tracking-wider text-[10px]">
                     Pendente
                   </Badge>
                 )}
@@ -502,15 +809,6 @@ function AdminRoomsTab() {
                 {evaluatingRoom.profiles?.full_name}
               </p>
             </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              onClick={closeAuditPanel}
-              className="font-bold border-slate-200 text-slate-600"
-            >
-              Voltar à Lista
-            </Button>
           </div>
         </div>
 
@@ -537,10 +835,17 @@ function AdminRoomsTab() {
             >
               <CalendarIcon className="w-5 h-5" /> Gerenciar Agenda
             </button>
+            <button
+              onClick={() => setAuditTab("reservar")}
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "reservar" ? "bg-indigo-50 text-indigo-600 border border-indigo-100" : "text-slate-500 hover:bg-slate-50"}`}
+            >
+              <CalendarPlus className="w-5 h-5" /> Reserva Manual
+            </button>
           </div>
 
           <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
             <div className="max-w-4xl">
+              {/* ABA: AUDITORIA */}
               {auditTab === "auditoria" && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
                   <div className="grid grid-cols-2 gap-6">
@@ -743,6 +1048,7 @@ function AdminRoomsTab() {
                 </div>
               )}
 
+              {/* ABA: EDITAR INFORMAÇÕES */}
               {auditTab === "editar" && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
                   <div className="bg-orange-50 border border-orange-200 p-5 rounded-xl flex gap-4">
@@ -818,6 +1124,7 @@ function AdminRoomsTab() {
                 </div>
               )}
 
+              {/* ABA: GERENCIAR AGENDA (BLOQUEIOS MANUAIS DO ADMIN) */}
               {auditTab === "agenda" && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
                   <div className="flex items-start justify-between bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
@@ -885,6 +1192,272 @@ function AdminRoomsTab() {
                   </div>
                 </div>
               )}
+
+              {/* ==========================================
+                  NOVA INTERFACE SÊNIOR DE RESERVA MANUAL
+                  CARRINHO DE SESSÕES (MULTI-SLOT)
+                  ========================================== */}
+              {auditTab === "reservar" && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                  <div className="bg-white border border-slate-200 p-8 rounded-3xl shadow-sm">
+                    <div className="mb-6 border-b border-slate-100 pb-6">
+                      <h3 className="text-xl font-black text-slate-900 flex items-center gap-2">
+                        <CalendarPlus className="w-6 h-6 text-indigo-600" />{" "}
+                        Nova Reserva Avulsa
+                      </h3>
+                      <p className="text-sm font-medium text-slate-500 mt-1 max-w-2xl">
+                        Abaixo você visualiza os horários originais da sala.
+                        Navegue pelos dias e selecione quantos horários desejar
+                        para adicionar ao carrinho do profissional.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                      {/* PASSO 1: Selecionar Data e Slot */}
+                      <div className="space-y-6">
+                        <div>
+                          <label className="text-sm font-bold text-slate-700 mb-2 block">
+                            1. Data da Sessão
+                          </label>
+                          <Input
+                            type="date"
+                            value={format(manualDate, "yyyy-MM-dd")}
+                            onChange={(e) => {
+                              const d = new Date(`${e.target.value}T12:00:00`);
+                              setManualDate(d);
+                            }}
+                            className="h-12 bg-slate-50 border-slate-200 rounded-xl font-bold"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-sm font-bold text-slate-700 mb-2 flex items-center justify-between">
+                            <span>2. Escolha os Horários</span>
+                            <span className="text-[10px] text-indigo-500 font-medium bg-indigo-50 border border-indigo-100 px-2 py-1 rounded-md">
+                              Multi-Seleção Ativa
+                            </span>
+                          </label>
+
+                          <div className="grid grid-cols-3 gap-2 bg-slate-50 p-4 rounded-2xl border border-slate-100 max-h-[300px] overflow-y-auto shadow-inner">
+                            {availableSlots.length === 0 ? (
+                              <div className="col-span-3 text-center py-6">
+                                <AlertTriangle className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                                <p className="text-slate-500 font-medium text-sm">
+                                  Nenhum horário disponível para esta data.
+                                </p>
+                              </div>
+                            ) : (
+                              availableSlots.map((slot) => {
+                                const isTaken = takenSlots.includes(slot);
+                                // Verifica se este slot nesta exata data já está no carrinho
+                                const isSelected = selectedSlots.some(
+                                  (s) =>
+                                    format(s.date, "yyyy-MM-dd") ===
+                                      currentDateStr && s.slot === slot,
+                                );
+
+                                return (
+                                  <button
+                                    key={slot}
+                                    type="button"
+                                    disabled={isTaken && !isSelected}
+                                    onClick={() => toggleSlot(manualDate, slot)}
+                                    className={`py-2 text-xs font-bold rounded-lg transition-all border ${
+                                      isTaken && !isSelected
+                                        ? "bg-slate-200 text-slate-400 border-slate-200 cursor-not-allowed opacity-50"
+                                        : isSelected
+                                          ? "bg-indigo-600 text-white border-indigo-600 shadow-md transform scale-105"
+                                          : "bg-white text-slate-700 hover:border-indigo-300 border-slate-200 shadow-sm"
+                                    }`}
+                                  >
+                                    {slot}
+                                  </button>
+                                );
+                              })
+                            )}
+                          </div>
+                        </div>
+
+                        {/* RESUMO DO CARRINHO */}
+                        {selectedSlots.length > 0 && (
+                          <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-2xl">
+                            <p className="text-xs font-black text-indigo-900 uppercase tracking-widest mb-3">
+                              Carrinho: {selectedSlots.length} Sessão(ões)
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              {selectedSlots.map((s, idx) => (
+                                <Badge
+                                  key={idx}
+                                  className="bg-indigo-600 text-white border-0 py-1 px-2"
+                                >
+                                  {format(s.date, "dd/MM")} • {s.slot}
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleSlot(s.date, s.slot)}
+                                    className="ml-2 hover:text-red-300 transition-colors"
+                                  >
+                                    <XCircle className="w-3 h-3" />
+                                  </button>
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* PASSO 2: Especialista e Pagamento */}
+                      <div className="space-y-6">
+                        <div>
+                          <label className="text-sm font-bold text-slate-700 mb-2 block">
+                            3. Selecionar Especialista
+                          </label>
+
+                          {!selectedProf ? (
+                            <div className="relative">
+                              <Search className="absolute left-3 top-3.5 w-4 h-4 text-slate-400" />
+                              <Input
+                                placeholder="Digite o nome do profissional..."
+                                value={profSearch}
+                                onChange={(e) => setProfSearch(e.target.value)}
+                                className="h-12 pl-10 bg-slate-50 border-slate-200 rounded-xl z-10 relative"
+                              />
+
+                              {profSearch.length > 0 && (
+                                <div className="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-60 overflow-y-auto">
+                                  {filteredProfessionals.length === 0 ? (
+                                    <div className="p-4 text-center text-sm text-slate-500 font-medium">
+                                      Nenhum profissional encontrado.
+                                    </div>
+                                  ) : (
+                                    filteredProfessionals.map((p) => (
+                                      <div
+                                        key={p.id}
+                                        onClick={() => setSelectedProf(p)}
+                                        className="p-3 hover:bg-slate-50 cursor-pointer border-b border-slate-100 last:border-0 flex justify-between items-center transition-colors"
+                                      >
+                                        <div>
+                                          <p className="text-sm font-bold text-slate-900">
+                                            {p.full_name ||
+                                              "Sem Nome Cadastrado"}
+                                          </p>
+                                          <p className="text-[10px] text-slate-500">
+                                            CPF: {p.cpf || "Não informado"}
+                                          </p>
+                                        </div>
+                                        <Badge className="bg-slate-100 text-slate-600 border-0">
+                                          {p.wallet_balance || 0} CR
+                                        </Badge>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between bg-indigo-50 border border-indigo-100 p-3 rounded-xl">
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center border border-indigo-100">
+                                  <UserCheck className="w-5 h-5 text-indigo-600" />
+                                </div>
+                                <div>
+                                  <p className="font-bold text-indigo-900 text-sm">
+                                    {selectedProf.full_name}
+                                  </p>
+                                  <p className="text-xs font-medium text-indigo-700">
+                                    Saldo atual:{" "}
+                                    {selectedProf.wallet_balance || 0} CR
+                                  </p>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedProf(null);
+                                  setProfSearch("");
+                                }}
+                                className="text-xs font-bold text-indigo-500 hover:text-indigo-700 hover:underline"
+                              >
+                                Trocar
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        <div
+                          className={`transition-opacity duration-300 ${!selectedProf || selectedSlots.length === 0 ? "opacity-30 pointer-events-none" : "opacity-100"}`}
+                        >
+                          <label className="text-sm font-bold text-slate-700 mb-2 block">
+                            4. Forma de Pagamento
+                          </label>
+                          <div className="grid grid-cols-2 gap-3">
+                            <button
+                              type="button"
+                              onClick={() => setManualPaymentMethod("wallet")}
+                              className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "wallet" ? "border-indigo-600 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                            >
+                              <Wallet className="w-5 h-5" />
+                              <span className="text-xs font-bold text-center">
+                                Abater da Carteira (-{selectedSlots.length || 1}{" "}
+                                CR)
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setManualPaymentMethod("pix")}
+                              className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "pix" ? "border-emerald-600 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                            >
+                              <QrCode className="w-5 h-5" />
+                              <span className="text-xs font-bold text-center">
+                                Pix Recebido Externo
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setManualPaymentMethod("card")}
+                              className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "card" ? "border-blue-600 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                            >
+                              <CreditCard className="w-5 h-5" />
+                              <span className="text-xs font-bold text-center">
+                                Maquininha (Cartão)
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setManualPaymentMethod("cash")}
+                              className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "cash" ? "border-amber-600 bg-amber-50 text-amber-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                            >
+                              <Banknote className="w-5 h-5" />
+                              <span className="text-xs font-bold text-center">
+                                Dinheiro em Espécie
+                              </span>
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="pt-4 border-t border-slate-100">
+                          <Button
+                            type="button"
+                            onClick={handleManualBookingSubmit}
+                            disabled={
+                              !selectedProf ||
+                              selectedSlots.length === 0 ||
+                              actionLoading
+                            }
+                            className="w-full h-14 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-base shadow-lg"
+                          >
+                            {actionLoading ? (
+                              <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                            ) : (
+                              <CheckCircle2 className="w-5 h-5 mr-2" />
+                            )}
+                            Confirmar {selectedSlots.length} Reserva(s)
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -892,67 +1465,11 @@ function AdminRoomsTab() {
     );
   }
 
+  // ==========================================
+  // LISTAGEM PADRÃO DAS SALAS
+  // ==========================================
   return (
     <div className="space-y-8 max-w-7xl mx-auto pb-12 p-8 animate-in fade-in">
-      {pendingRooms.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl overflow-hidden shadow-sm">
-          <div className="bg-amber-500/10 px-6 py-4 border-b border-amber-200/50 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Clock className="w-5 h-5 text-amber-600" />
-              <div>
-                <h3 className="text-lg font-black text-amber-900">
-                  Aguardando Aprovação
-                </h3>
-                <p className="text-xs font-medium text-amber-700/70">
-                  Estas salas precisam da sua análise antes de irem para o ar.
-                </p>
-              </div>
-            </div>
-            <Badge className="bg-amber-500 text-white font-black">
-              {pendingRooms.length} Pendentes
-            </Badge>
-          </div>
-          <table className="w-full text-left text-sm whitespace-nowrap">
-            <thead className="bg-amber-500/5 text-amber-800/60 font-bold text-xs uppercase tracking-wider">
-              <tr>
-                <th className="px-6 py-3">Sala</th>
-                <th className="px-6 py-3">Anfitrião</th>
-                <th className="px-6 py-3 text-right">Ação Rápida</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-amber-200/30">
-              {pendingRooms.map((room) => (
-                <tr key={room.id} className="hover:bg-white/50">
-                  <td className="px-6 py-4 font-bold text-slate-800">
-                    {room.name}
-                  </td>
-                  <td className="px-6 py-4 font-medium text-slate-600">
-                    {room.profiles?.full_name}
-                  </td>
-                  <td className="px-6 py-4 flex items-center justify-end gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => openAuditPanel(room)}
-                      className="h-8 text-slate-600 bg-white hover:bg-slate-100 border-slate-300"
-                    >
-                      <Eye className="w-4 h-4 mr-2" /> Analisar Sala
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={() => handleStatusChange(room.id, true)}
-                      className="h-8 bg-emerald-500 hover:bg-emerald-600 text-white"
-                    >
-                      <CheckCircle2 className="w-4 h-4 mr-1" /> Aprovar Direto
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
         <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
