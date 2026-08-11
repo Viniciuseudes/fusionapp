@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   AlertOctagon,
   Loader2,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -28,25 +29,45 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
 
   const [loading, setLoading] = useState(false);
   const [secondsElapsed, setSecondsElapsed] = useState(0);
+  const [sessionPhase, setSessionPhase] = useState<
+    "early" | "running" | "overtime"
+  >("early");
 
   // Controle da Câmera de Check-out
   const [showScanner, setShowScanner] = useState(false);
 
-  // Calcula o tempo a cada segundo baseado na hora do CHECK-IN real, e não no start_time teórico
+  // ==========================================
+  // MOTOR SÊNIOR DE CÁLCULO DE TEMPO & HARDWARE LOCK
+  // Resolve o problema de Check-in Adiantado, resiste ao F5 e PROÍBE re-renderização se a câmera abrir
+  // ==========================================
   useEffect(() => {
-    // Usamos o checkin_time se existir, senão o start_time
-    const referenceTime = booking.checkin_time || booking.start_time;
-    if (!referenceTime) return;
+    // A MÁGICA: Se o Scanner abriu, trava o relógio! Isso impede que o React interrompa a câmera no celular
+    if (!booking || showScanner) return;
 
     const interval = setInterval(() => {
-      const start = parseISO(referenceTime);
       const now = new Date();
-      const diff = differenceInSeconds(now, start);
-      setSecondsElapsed(diff > 0 ? diff : 0);
+      const startTime = parseISO(booking.start_time);
+      const endTime = parseISO(booking.end_time);
+
+      if (now < startTime) {
+        // FASE 1: Check-in antecipado (ex: Chegou 11:45 para sessão de 12:00)
+        // O tempo DEVE ficar cravado em 0. O médico não perde minutos por ter chegado cedo.
+        setSessionPhase("early");
+        setSecondsElapsed(0);
+      } else if (now >= startTime && now <= endTime) {
+        // FASE 2: Sessão rolando oficialmente.
+        // Calculamos a diferença entre AGORA e a HORA DE INÍCIO OFICIAL (start_time), ignorando o clique.
+        setSessionPhase("running");
+        setSecondsElapsed(differenceInSeconds(now, startTime));
+      } else {
+        // FASE 3: Estourou o tempo.
+        setSessionPhase("overtime");
+        setSecondsElapsed(differenceInSeconds(now, startTime));
+      }
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [booking]);
+  }, [booking, showScanner]); // O showScanner é a dependência que trava o relógio
 
   const minutesElapsed = Math.floor(secondsElapsed / 60);
   const secondsReminder = secondsElapsed % 60;
@@ -56,7 +77,13 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
   let statusText = "Sessão em andamento";
   let statusIcon = <CheckCircle2 className="w-5 h-5 text-emerald-500" />;
 
-  if (minutesElapsed >= 50 && minutesElapsed < 55) {
+  // Se for Check-in antecipado, sobrescreve o visual
+  if (sessionPhase === "early") {
+    statusColor = "bg-blue-500";
+    bgGlow = "bg-blue-50";
+    statusText = "Aguardando Início Oficial";
+    statusIcon = <Clock className="w-5 h-5 text-blue-500" />;
+  } else if (minutesElapsed >= 50 && minutesElapsed < 55) {
     statusColor = "bg-amber-500";
     bgGlow = "bg-amber-50";
     statusText = "Tolerância de Limpeza. Faça o Check-out.";
@@ -131,7 +158,7 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
     <>
       <div className="max-w-2xl mx-auto w-full p-4 mt-6 animate-in zoom-in-95 duration-500">
         <div
-          className={`rounded-[2rem] border-2 shadow-2xl overflow-hidden ${minutesElapsed >= 55 ? "border-red-200" : minutesElapsed >= 50 ? "border-amber-200" : "border-emerald-200"}`}
+          className={`rounded-[2rem] border-2 shadow-2xl overflow-hidden transition-all duration-300 ${showScanner ? "scale-95 opacity-50 blur-sm" : ""} ${minutesElapsed >= 55 ? "border-red-200" : minutesElapsed >= 50 ? "border-amber-200" : sessionPhase === "early" ? "border-blue-200" : "border-emerald-200"}`}
         >
           <div
             className={`p-8 text-center ${bgGlow} transition-colors duration-500`}
@@ -155,9 +182,17 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
               {minutesElapsed.toString().padStart(2, "0")}:
               {secondsReminder.toString().padStart(2, "0")}
             </div>
-            <p className="text-slate-500 font-medium uppercase tracking-widest text-xs">
-              Tempo de uso
-            </p>
+
+            {sessionPhase === "early" ? (
+              <p className="text-blue-600 font-bold uppercase tracking-widest text-xs animate-pulse">
+                O tempo iniciará às{" "}
+                {format(parseISO(booking.start_time), "HH:mm")}
+              </p>
+            ) : (
+              <p className="text-slate-500 font-medium uppercase tracking-widest text-xs">
+                Tempo de uso
+              </p>
+            )}
           </div>
 
           <div className="bg-white p-6 md:p-8 flex flex-col gap-4">
@@ -183,11 +218,13 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
 
             <Button
               onClick={() => setShowScanner(true)}
-              disabled={loading}
+              disabled={loading || sessionPhase === "early"}
               className={`w-full h-16 rounded-2xl font-black text-lg text-white shadow-xl transition-all hover:scale-[1.02] ${statusColor}`}
             >
               {loading ? (
                 <Loader2 className="w-6 h-6 animate-spin" />
+              ) : sessionPhase === "early" ? (
+                "Aguarde o início da sessão..."
               ) : (
                 "Ler QR Code de Saída"
               )}
@@ -198,6 +235,7 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
 
       {showScanner && (
         <RoomQRScanner
+          key="checkout-scanner"
           expectedRoomId={booking.room_id}
           type="checkout"
           onSuccess={processCheckout}

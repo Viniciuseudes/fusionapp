@@ -81,6 +81,9 @@ export function BookingsTab({
   );
   const [bookings, setBookings] = useState<Booking[]>([]);
 
+  // MAPA SÊNIOR: Guarda quais reservas têm uma colisão de horário (gente saindo colado)
+  const [adjacentMap, setAdjacentMap] = useState<Record<string, boolean>>({});
+
   const [cancelModal, setCancelModal] = useState<{
     isOpen: boolean;
     booking: Booking | null;
@@ -121,7 +124,40 @@ export function BookingsTab({
         .order("start_time", { ascending: true });
 
       if (error) throw error;
-      setBookings((data as unknown as Booking[]) || []);
+
+      const fetchedBookings = (data as unknown as Booking[]) || [];
+
+      // ==========================================
+      // BULK FETCH DE ADJACÊNCIA (Proteção Sênior)
+      // Verifica se a sala está ocupada exatamente no minuto que o médico vai entrar
+      // ==========================================
+      const upcoming = fetchedBookings.filter((b) => b.status === "confirmed");
+      const newAdjacentMap: Record<string, boolean> = {};
+
+      if (upcoming.length > 0) {
+        const startTimes = upcoming.map((b) => b.start_time);
+        const roomIds = upcoming.map((b) => b.room_id);
+
+        const { data: adjData } = await supabase
+          .from("bookings")
+          .select("room_id, end_time")
+          .in("room_id", roomIds)
+          .in("end_time", startTimes)
+          .in("status", ["confirmed", "in_progress", "completed"]);
+
+        if (adjData) {
+          upcoming.forEach((b) => {
+            const hasAdjacent = adjData.some(
+              (adj) =>
+                adj.room_id === b.room_id && adj.end_time === b.start_time,
+            );
+            newAdjacentMap[b.id] = hasAdjacent;
+          });
+        }
+      }
+
+      setAdjacentMap(newAdjacentMap);
+      setBookings(fetchedBookings);
     } catch (err) {
       console.error("Erro ao buscar reservas:", err);
     } finally {
@@ -135,14 +171,17 @@ export function BookingsTab({
 
   const handleCheckinSuccess = async () => {
     if (!scannerConfig.booking) return;
-    setScannerConfig({ ...scannerConfig, isOpen: false });
+    const currentBooking = scannerConfig.booking;
+
+    // Fecha a câmera imediatamente antes de processar o banco, liberando o hardware
+    setScannerConfig({ isOpen: false, type: "checkin", booking: null });
 
     try {
       const checkinTime = new Date().toISOString();
       const { error } = await supabase
         .from("bookings")
         .update({ status: "in_progress", checkin_time: checkinTime })
-        .eq("id", scannerConfig.booking.id);
+        .eq("id", currentBooking.id);
 
       if (error) throw error;
 
@@ -151,7 +190,6 @@ export function BookingsTab({
         description: "Sala liberada com sucesso.",
       });
 
-      // DISPARO DA NOTIFICAÇÃO PUSH DE CHECK-IN
       const {
         data: { user },
       } = await supabase.auth.getUser();
@@ -162,13 +200,17 @@ export function BookingsTab({
           body: JSON.stringify({
             userId: user.id,
             title: "Check-in Confirmado! ✅",
-            body: `Sua sessão na ${scannerConfig.booking.rooms.name} começou. Excelente atendimento!`,
+            body: `Sua sessão na ${currentBooking.rooms.name} começou. Excelente atendimento!`,
             url: "/dashboard",
           }),
         }).catch((err) => console.error("Erro ao enviar push:", err));
       }
 
-      setActiveSessionBooking(scannerConfig.booking);
+      setActiveSessionBooking({
+        ...currentBooking,
+        status: "in_progress",
+        checkin_time: checkinTime,
+      });
       fetchBookings();
     } catch (error: any) {
       toast({
@@ -230,9 +272,10 @@ export function BookingsTab({
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuário não autenticado.");
 
-      const nowTime = new Date().getTime();
+      const nowTimeForCancel = new Date().getTime();
       const startTime = new Date(booking.start_time).getTime();
-      const hoursUntilBooking = (startTime - nowTime) / (1000 * 60 * 60);
+      const hoursUntilBooking =
+        (startTime - nowTimeForCancel) / (1000 * 60 * 60);
       const isRefundable = hoursUntilBooking >= 24;
 
       const { error: updateError } = await supabase
@@ -263,7 +306,7 @@ export function BookingsTab({
           ? "Reserva Cancelada e Reembolsada"
           : "Reserva Cancelada",
         description: isRefundable
-          ? `O valor de ${booking.total_cost}h foi devolvido à sua carteira.`
+          ? `O valor de ${booking.total_cost} CR foi devolvido à sua carteira.`
           : "Como faltavam menos de 24h, não houve estorno.",
       });
 
@@ -280,17 +323,12 @@ export function BookingsTab({
     }
   };
 
-  // ==========================================
-  // LÓGICA BLINDADA DE TEMPO E FILTROS
-  // ==========================================
   const now = new Date();
   const nowTime = now.getTime();
 
   const upcomingBookings = bookings
     .filter((b) => {
-      // REGRA DE OURO: Se estiver em andamento, NUNCA sai da aba "Próximas", mesmo que passe da hora
       if (b.status === "in_progress") return true;
-
       const endTime = new Date(b.end_time).getTime();
       const isValidStatus = ["confirmed", "pending_payment"].includes(b.status);
       return isValidStatus && endTime > nowTime;
@@ -304,9 +342,7 @@ export function BookingsTab({
     });
 
   const pastBookings = bookings.filter((b) => {
-    // REGRA DE OURO: Se estiver em andamento, NÃO pode estar no histórico
     if (b.status === "in_progress") return false;
-
     const endTime = new Date(b.end_time).getTime();
     return (
       ["completed", "cancelled", "no_show"].includes(b.status) ||
@@ -438,11 +474,15 @@ export function BookingsTab({
               } catch (e) {}
               const fullAddress = `${address.street || ""}, ${address.number || ""} ${address.complement ? `- ${address.complement}` : ""}`;
 
-              // Regra do Check-in: O botão aparece 15 minutos antes da consulta começar e continua visível enquanto não passar a hora final.
-              const fifteenMinutesMs = 15 * 60 * 1000;
+              // ==========================================
+              // REGRA DE OURO (COLISÃO): 0 min ou 15 min de tolerância
+              // ==========================================
+              const hasBackToBack = adjacentMap[booking.id] || false;
+              const checkInWindowMs = hasBackToBack ? 0 : 15 * 60 * 1000;
+
               const isReadyForCheckin =
                 booking.status === "confirmed" &&
-                startTimeMs - nowTime <= fifteenMinutesMs &&
+                startTimeMs - nowTime <= checkInWindowMs &&
                 nowTime < endTimeMs;
 
               const isInProgress = booking.status === "in_progress";
@@ -538,7 +578,6 @@ export function BookingsTab({
                         </div>
                       )}
 
-                    {/* MOSTRA O REGISTRO REAL NO HISTÓRICO */}
                     {activeTab === "past" &&
                       (booking.checkin_time || booking.checkout_time) && (
                         <div className="mt-4 pt-4 border-t border-zinc-100 flex flex-col gap-2">
@@ -578,13 +617,13 @@ export function BookingsTab({
 
                           {booking.penalty_status === "fined" && (
                             <div className="mt-2 bg-red-50 text-red-700 px-3 py-2 rounded-lg flex items-center gap-2 text-xs font-bold border border-red-100">
-                              <AlertTriangle className="w-4 h-4 shrink-0" />
+                              <AlertTriangle className="w-4 h-4 shrink-0" />{" "}
                               Multa aplicada por atraso no Check-out
                             </div>
                           )}
                           {booking.penalty_status === "warning" && (
                             <div className="mt-2 bg-amber-50 text-amber-700 px-3 py-2 rounded-lg flex items-center gap-2 text-xs font-bold border border-amber-100">
-                              <AlertTriangle className="w-4 h-4 shrink-0" />
+                              <AlertTriangle className="w-4 h-4 shrink-0" />{" "}
                               Atenção: Saída no tempo limite de tolerância
                             </div>
                           )}
@@ -617,6 +656,11 @@ export function BookingsTab({
                           </Button>
                         ) : (
                           <>
+                            {hasBackToBack && startTimeMs > nowTime && (
+                              <div className="w-full text-center bg-amber-50 text-amber-700 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest border border-amber-100 mb-1">
+                                Sala Ocupada (Aguarde ⏰)
+                              </div>
+                            )}
                             <Button
                               onClick={() => handleOpenChat(booking)}
                               disabled={actionLoading}
@@ -625,19 +669,6 @@ export function BookingsTab({
                             >
                               <MessageCircle className="w-3.5 h-3.5 mr-1.5" />{" "}
                               Falar com Anfitrião
-                            </Button>
-                            <Button
-                              onClick={() =>
-                                toast({
-                                  description:
-                                    "Cancele esta reserva e realize um novo agendamento.",
-                                })
-                              }
-                              variant="outline"
-                              className="w-full h-10 rounded-lg text-xs font-bold border-zinc-200 text-zinc-700 hover:bg-zinc-100"
-                            >
-                              <RefreshCcw className="w-3.5 h-3.5 mr-1.5" />{" "}
-                              Reagendar
                             </Button>
                             <Button
                               onClick={() =>
@@ -712,9 +743,11 @@ export function BookingsTab({
           </DialogContent>
         </Dialog>
       </div>
-      {/* A CÂMERA FICA AQUI FORA, LIVRE DO CSS E DA ROLAGEM! */}
+
+      {/* O SCANNER AGORA ESTÁ BLINDADO. SE ELE RENDERIZAR, A TELA INTEIRA PARA DE ATUALIZAR */}
       {scannerConfig.isOpen && scannerConfig.booking && (
         <RoomQRScanner
+          key={scannerConfig.booking.id}
           expectedRoomId={scannerConfig.booking.room_id}
           type={scannerConfig.type}
           onSuccess={handleCheckinSuccess}
