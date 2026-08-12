@@ -36,6 +36,7 @@ import { RoomQRScanner } from "@/components/qr-scanner";
 
 interface Booking {
   id: string;
+  original_ids?: string[]; // Array Sênior para Mesclagem de Sessões
   room_id: string;
   start_time: string;
   end_time: string;
@@ -81,7 +82,6 @@ export function BookingsTab({
   );
   const [bookings, setBookings] = useState<Booking[]>([]);
 
-  // MAPA SÊNIOR: Guarda quais reservas têm uma colisão de horário (gente saindo colado)
   const [adjacentMap, setAdjacentMap] = useState<Record<string, boolean>>({});
 
   const [cancelModal, setCancelModal] = useState<{
@@ -128,10 +128,45 @@ export function BookingsTab({
       const fetchedBookings = (data as unknown as Booking[]) || [];
 
       // ==========================================
-      // BULK FETCH DE ADJACÊNCIA (Proteção Sênior)
-      // Verifica se a sala está ocupada exatamente no minuto que o médico vai entrar
+      // MOTOR SÊNIOR: SMART SESSION MERGING (Mesclagem de Horários)
+      // Funde reservas coladas (ou com até 15 min de gap) na mesma sala
       // ==========================================
-      const upcoming = fetchedBookings.filter((b) => b.status === "confirmed");
+      let mergedBookings: Booking[] = [];
+
+      fetchedBookings.forEach((b) => {
+        const last =
+          mergedBookings.length > 0
+            ? mergedBookings[mergedBookings.length - 1]
+            : null;
+
+        if (
+          last &&
+          last.room_id === b.room_id &&
+          last.status === b.status &&
+          ["confirmed", "in_progress"].includes(b.status)
+        ) {
+          const lastEnd = new Date(last.end_time).getTime();
+          const currStart = new Date(b.start_time).getTime();
+          const gapMs = currStart - lastEnd;
+
+          // Se for colado ou tiver até 15 minutos de diferença (intervalo de limpeza)
+          if (gapMs >= 0 && gapMs <= 15 * 60 * 1000) {
+            last.end_time = b.end_time;
+            last.total_cost += b.total_cost;
+            if (!last.original_ids) last.original_ids = [last.id];
+            last.original_ids.push(b.id);
+            return; // Pula para a próxima (pois fundiu com a anterior)
+          }
+        }
+
+        // Se não fundiu, adiciona como nova
+        mergedBookings.push({ ...b, original_ids: [b.id] });
+      });
+
+      // ==========================================
+      // BULK FETCH DE ADJACÊNCIA (Colisão com outros médicos)
+      // ==========================================
+      const upcoming = mergedBookings.filter((b) => b.status === "confirmed");
       const newAdjacentMap: Record<string, boolean> = {};
 
       if (upcoming.length > 0) {
@@ -157,7 +192,7 @@ export function BookingsTab({
       }
 
       setAdjacentMap(newAdjacentMap);
-      setBookings(fetchedBookings);
+      setBookings(mergedBookings);
     } catch (err) {
       console.error("Erro ao buscar reservas:", err);
     } finally {
@@ -173,21 +208,24 @@ export function BookingsTab({
     if (!scannerConfig.booking) return;
     const currentBooking = scannerConfig.booking;
 
-    // Fecha a câmera imediatamente antes de processar o banco, liberando o hardware
+    // Fecha a câmera imediatamente
     setScannerConfig({ isOpen: false, type: "checkin", booking: null });
 
     try {
       const checkinTime = new Date().toISOString();
+      const idsToUpdate = currentBooking.original_ids || [currentBooking.id];
+
+      // Atualização Sênior em Lote (Bulk Update)
       const { error } = await supabase
         .from("bookings")
         .update({ status: "in_progress", checkin_time: checkinTime })
-        .eq("id", currentBooking.id);
+        .in("id", idsToUpdate);
 
       if (error) throw error;
 
       toast({
         title: "Check-in Realizado! 🔓",
-        description: "Sala liberada com sucesso.",
+        description: "Sessão múltipla/única liberada com sucesso.",
       });
 
       const {
@@ -244,7 +282,7 @@ export function BookingsTab({
           room_id: booking.room_id,
           guest_id: user.id,
           host_id: booking.rooms.host_id,
-          booking_id: booking.id,
+          booking_id: booking.id, // Em caso de mescla, vincula ao primeiro ID
         });
         if (insertError) throw insertError;
       }
@@ -277,11 +315,12 @@ export function BookingsTab({
       const hoursUntilBooking =
         (startTime - nowTimeForCancel) / (1000 * 60 * 60);
       const isRefundable = hoursUntilBooking >= 24;
+      const idsToUpdate = booking.original_ids || [booking.id];
 
       const { error: updateError } = await supabase
         .from("bookings")
         .update({ status: "cancelled" })
-        .eq("id", booking.id);
+        .in("id", idsToUpdate);
       if (updateError) throw updateError;
 
       if (isRefundable) {
@@ -292,10 +331,10 @@ export function BookingsTab({
           .from("wallet_transactions")
           .insert({
             user_id: user.id,
-            amount: booking.total_cost,
+            amount: booking.total_cost, // Reembolsa o valor total da reserva (mesclada ou não)
             type: "refund",
             tier: booking.rooms.tier || "start",
-            description: `Estorno (Cancelamento antecipado): ${booking.rooms.name}`,
+            description: `Estorno (Cancelamento Múltiplo/Único): ${booking.rooms.name}`,
             expires_at: expiresAt.toISOString(),
           });
         if (refundError) throw refundError;
@@ -474,9 +513,6 @@ export function BookingsTab({
               } catch (e) {}
               const fullAddress = `${address.street || ""}, ${address.number || ""} ${address.complement ? `- ${address.complement}` : ""}`;
 
-              // ==========================================
-              // REGRA DE OURO (COLISÃO): 0 min ou 15 min de tolerância
-              // ==========================================
               const hasBackToBack = adjacentMap[booking.id] || false;
               const checkInWindowMs = hasBackToBack ? 0 : 15 * 60 * 1000;
 
@@ -486,6 +522,10 @@ export function BookingsTab({
                 nowTime < endTimeMs;
 
               const isInProgress = booking.status === "in_progress";
+
+              // Verifica se essa reserva foi mesclada
+              const isMerged =
+                booking.original_ids && booking.original_ids.length > 1;
 
               return (
                 <div
@@ -522,21 +562,26 @@ export function BookingsTab({
                     <div className="flex items-start justify-between gap-4 mb-4">
                       <div>
                         {isInProgress && (
-                          <Badge className="bg-amber-100 text-amber-800 border-0 mb-2 font-black px-2 py-0.5 animate-pulse uppercase tracking-widest">
+                          <Badge className="bg-amber-100 text-amber-800 border-0 mb-2 font-black px-2 py-0.5 animate-pulse uppercase tracking-widest mr-2">
                             Sessão em Andamento
                           </Badge>
                         )}
                         {isReadyForCheckin && !isInProgress && (
-                          <Badge className="bg-[#f05e23] text-white border-0 mb-2 font-bold px-2 py-0.5 animate-pulse">
+                          <Badge className="bg-[#f05e23] text-white border-0 mb-2 font-bold px-2 py-0.5 animate-pulse mr-2">
                             Liberada para Check-in
                           </Badge>
                         )}
                         {activeTab === "past" &&
                           booking.status === "completed" && (
-                            <Badge className="bg-emerald-100 text-emerald-800 border-0 mb-2 font-bold px-2 py-0.5">
+                            <Badge className="bg-emerald-100 text-emerald-800 border-0 mb-2 font-bold px-2 py-0.5 mr-2">
                               Concluída
                             </Badge>
                           )}
+                        {isMerged && (
+                          <Badge className="bg-indigo-100 text-indigo-800 border-0 mb-2 font-bold px-2 py-0.5 uppercase tracking-widest">
+                            {booking.original_ids?.length} Sessões Contíguas
+                          </Badge>
+                        )}
 
                         <h3 className="text-xl font-black text-zinc-950 leading-tight">
                           {booking.rooms.name}
@@ -614,19 +659,6 @@ export function BookingsTab({
                               </span>
                             </div>
                           </div>
-
-                          {booking.penalty_status === "fined" && (
-                            <div className="mt-2 bg-red-50 text-red-700 px-3 py-2 rounded-lg flex items-center gap-2 text-xs font-bold border border-red-100">
-                              <AlertTriangle className="w-4 h-4 shrink-0" />{" "}
-                              Multa aplicada por atraso no Check-out
-                            </div>
-                          )}
-                          {booking.penalty_status === "warning" && (
-                            <div className="mt-2 bg-amber-50 text-amber-700 px-3 py-2 rounded-lg flex items-center gap-2 text-xs font-bold border border-amber-100">
-                              <AlertTriangle className="w-4 h-4 shrink-0" />{" "}
-                              Atenção: Saída no tempo limite de tolerância
-                            </div>
-                          )}
                         </div>
                       )}
                   </div>
@@ -744,10 +776,10 @@ export function BookingsTab({
         </Dialog>
       </div>
 
-      {/* O SCANNER AGORA ESTÁ BLINDADO. SE ELE RENDERIZAR, A TELA INTEIRA PARA DE ATUALIZAR */}
+      {/* O SCANNER AGORA ESTÁ BLINDADO */}
       {scannerConfig.isOpen && scannerConfig.booking && (
         <RoomQRScanner
-          key={scannerConfig.booking.id}
+          key="checkin-scanner"
           expectedRoomId={scannerConfig.booking.room_id}
           type={scannerConfig.type}
           onSuccess={handleCheckinSuccess}

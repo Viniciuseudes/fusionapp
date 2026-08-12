@@ -72,6 +72,17 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
   const minutesElapsed = Math.floor(secondsElapsed / 60);
   const secondsReminder = secondsElapsed % 60;
 
+  // Como o booking pode ser uma "Mescla" de várias sessões, nós precisamos somar o tempo real.
+  // Uma sessão padrão tem 60 minutos de intervalo de agenda, então o "estouro" de tolerância
+  // acontece nos 5 min finais.
+  const totalSessionMinutes =
+    differenceInSeconds(
+      parseISO(booking.end_time),
+      parseISO(booking.start_time),
+    ) / 60;
+  const warningThreshold = totalSessionMinutes - 10; // 50 min em uma sessão de 1h
+  const fineThreshold = totalSessionMinutes - 5; // 55 min em uma sessão de 1h
+
   let statusColor = "bg-emerald-500";
   let bgGlow = "bg-emerald-50";
   let statusText = "Sessão em andamento";
@@ -83,19 +94,22 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
     bgGlow = "bg-blue-50";
     statusText = "Aguardando Início Oficial";
     statusIcon = <Clock className="w-5 h-5 text-blue-500" />;
-  } else if (minutesElapsed >= 50 && minutesElapsed < 55) {
+  } else if (
+    minutesElapsed >= warningThreshold &&
+    minutesElapsed < fineThreshold
+  ) {
     statusColor = "bg-amber-500";
     bgGlow = "bg-amber-50";
     statusText = "Tolerância de Limpeza. Faça o Check-out.";
     statusIcon = <AlertTriangle className="w-5 h-5 text-amber-500" />;
-  } else if (minutesElapsed >= 55) {
+  } else if (minutesElapsed >= fineThreshold) {
     statusColor = "bg-red-500";
     bgGlow = "bg-red-50";
     statusText = "Atraso! Sujeito a multa e bloqueio.";
     statusIcon = <AlertOctagon className="w-5 h-5 text-red-500" />;
   }
 
-  // Essa função agora só é chamada DEPOIS que ele lê o QR Code com sucesso na saída
+  // Check-out Multi-Sessões
   const processCheckout = async () => {
     setLoading(true);
     setShowScanner(false);
@@ -103,22 +117,30 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
       let penalty = "none";
       let amount = 0;
 
-      if (minutesElapsed >= 50 && minutesElapsed < 55) {
+      if (
+        minutesElapsed >= warningThreshold &&
+        minutesElapsed < fineThreshold
+      ) {
         penalty = "warning";
-      } else if (minutesElapsed >= 55) {
+      } else if (minutesElapsed >= fineThreshold) {
         penalty = "fined";
-        amount = booking.total_cost > 0 ? booking.total_cost : 45;
+        amount = booking.total_cost > 0 ? booking.total_cost : 45; // Mantivemos sua regra de negócios original
       }
 
+      const checkoutTime = new Date().toISOString();
+      const idsToUpdate = booking.original_ids || [booking.id];
+
+      // ATUALIZAÇÃO SÊNIOR EM LOTE
       const { error } = await supabase
         .from("bookings")
         .update({
-          checkout_time: new Date().toISOString(),
+          checkout_time: checkoutTime,
           status: "completed",
           penalty_status: penalty,
-          penalty_amount: amount,
+          // A penalidade (fined) é aplicada uniformemente ou fracionada, mas o supabase fará o update pra todas.
+          penalty_amount: amount / idsToUpdate.length,
         })
-        .eq("id", booking.id);
+        .in("id", idsToUpdate);
 
       if (error) throw error;
 
@@ -126,14 +148,12 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
         toast({
           variant: "destructive",
           title: "Check-out com Atraso",
-          description:
-            "O tempo limite foi excedido. Uma multa de 1 hora foi aplicada.",
+          description: "O tempo limite foi excedido. Uma multa será aplicada.",
         });
       } else if (penalty === "warning") {
         toast({
           title: "Atenção ao horário",
-          description:
-            "Você saiu no tempo de tolerância. Lembre-se de liberar aos 50min.",
+          description: "Você saiu no limite da tolerância de limpeza.",
         });
       } else {
         toast({
@@ -158,7 +178,7 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
     <>
       <div className="max-w-2xl mx-auto w-full p-4 mt-6 animate-in zoom-in-95 duration-500">
         <div
-          className={`rounded-[2rem] border-2 shadow-2xl overflow-hidden transition-all duration-300 ${showScanner ? "scale-95 opacity-50 blur-sm" : ""} ${minutesElapsed >= 55 ? "border-red-200" : minutesElapsed >= 50 ? "border-amber-200" : sessionPhase === "early" ? "border-blue-200" : "border-emerald-200"}`}
+          className={`rounded-[2rem] border-2 shadow-2xl overflow-hidden transition-all duration-300 ${showScanner ? "scale-95 opacity-50 blur-sm" : ""} ${minutesElapsed >= fineThreshold ? "border-red-200" : minutesElapsed >= warningThreshold ? "border-amber-200" : sessionPhase === "early" ? "border-blue-200" : "border-emerald-200"}`}
         >
           <div
             className={`p-8 text-center ${bgGlow} transition-colors duration-500`}
@@ -185,7 +205,7 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
 
             {sessionPhase === "early" ? (
               <p className="text-blue-600 font-bold uppercase tracking-widest text-xs animate-pulse">
-                O tempo iniciará às{" "}
+                O cronômetro iniciará às{" "}
                 {format(parseISO(booking.start_time), "HH:mm")}
               </p>
             ) : (
@@ -203,15 +223,15 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
               <ul className="text-sm text-slate-600 font-medium space-y-2">
                 <li className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-emerald-500"></span>{" "}
-                  Até 50 min: Saída ideal.
+                  Saia até os últimos 10 min: Limpeza ideal.
                 </li>
                 <li className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-amber-500"></span> 50
-                  a 55 min: Tolerância (Advertência).
+                  <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                  Últimos 10 min: Tolerância (Advertência).
                 </li>
                 <li className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-red-500"></span> +55
-                  min: Multa de 1 hora.
+                  <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                  Estouro do relógio: Multa no sistema.
                 </li>
               </ul>
             </div>
