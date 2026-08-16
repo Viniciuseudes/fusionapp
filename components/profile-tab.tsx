@@ -29,6 +29,8 @@ import {
   Shield,
   Star,
   Crown,
+  Trophy,
+  Gem,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -37,7 +39,9 @@ import { Badge } from "@/components/ui/badge";
 
 type ViewState = "overview" | "edit" | "wallet";
 
-// Função Sênior de Validação Matemática de CPF
+// ==========================================
+// FUNÇÕES SÊNIOR DE VALIDAÇÃO
+// ==========================================
 const isValidCPF = (cpf: string) => {
   cpf = cpf.replace(/[^\d]+/g, "");
   if (cpf.length !== 11 || !!cpf.match(/(\d)\1{10}/)) return false;
@@ -57,7 +61,88 @@ const isValidCPF = (cpf: string) => {
   return true;
 };
 
-// Componente para o Asterisco Vermelho
+// ==========================================
+// MOTOR DE GAMIFICAÇÃO OFICIAL (PROFISSIONAIS)
+// Iniciante -> Bronze -> Prata -> Ouro -> Diamante
+// ==========================================
+const getTierInfo = (bookingsCount: number, isProfileComplete: boolean) => {
+  // Se não preencheu os dados
+  if (!isProfileComplete) {
+    return {
+      name: "Iniciante",
+      current: bookingsCount,
+      next: 1,
+      percent: 0,
+      color: "text-slate-600",
+      bg: "bg-slate-100",
+      bar: "bg-slate-300",
+      icon: AlertCircle,
+      message: "Complete seu cadastro para habilitar a plataforma.",
+      isMax: false,
+    };
+  }
+
+  // Preencheu tudo = Pelo menos Bronze
+  if (bookingsCount < 10) {
+    return {
+      name: "Bronze",
+      current: bookingsCount,
+      next: 10,
+      percent: (bookingsCount / 10) * 100,
+      color: "text-orange-700",
+      bg: "bg-orange-100",
+      bar: "bg-orange-500",
+      icon: Shield,
+      message: `Faltam ${10 - bookingsCount} reservas para o Nível Prata`,
+      isMax: false,
+    };
+  }
+
+  if (bookingsCount < 30) {
+    return {
+      name: "Prata",
+      current: bookingsCount,
+      next: 30,
+      percent: (bookingsCount / 30) * 100,
+      color: "text-slate-700",
+      bg: "bg-slate-200",
+      bar: "bg-slate-400",
+      icon: Star,
+      message: `Faltam ${30 - bookingsCount} reservas para o Nível Ouro`,
+      isMax: false,
+    };
+  }
+
+  if (bookingsCount < 100) {
+    return {
+      name: "Ouro",
+      current: bookingsCount,
+      next: 100,
+      percent: (bookingsCount / 100) * 100,
+      color: "text-amber-700",
+      bg: "bg-amber-100",
+      bar: "bg-amber-500",
+      icon: Crown,
+      message: `Faltam ${100 - bookingsCount} reservas para o Nível Diamante`,
+      isMax: false,
+    };
+  }
+
+  // Nível Máximo
+  return {
+    name: "Diamante",
+    current: bookingsCount,
+    next: bookingsCount,
+    percent: 100,
+    color: "text-cyan-700",
+    bg: "bg-cyan-100",
+    bar: "bg-cyan-500",
+    icon: Gem,
+    message: "Você alcançou o nível máximo da plataforma!",
+    isMax: true,
+  };
+};
+
 const RequiredAsterisk = () => (
   <span className="text-red-500 ml-1 font-black">*</span>
 );
@@ -77,6 +162,9 @@ export function ProfileTab() {
   const [transactions, setTransactions] = useState<any[]>([]);
   const [loadingWallet, setLoadingWallet] = useState(false);
 
+  // Estado para Gamificação
+  const [bookingsCount, setBookingsCount] = useState(0);
+
   const [walletBalances, setWalletBalances] = useState({
     start: 0,
     vip: 0,
@@ -88,7 +176,7 @@ export function ProfileTab() {
     full_name: "",
     email: "",
     cpf: "",
-    birth_date: "", // Será manipulada no formato DD/MM/YYYY para a tela
+    birth_date: "",
     phone: "",
     specialty: "",
     council: "CRM",
@@ -114,16 +202,24 @@ export function ProfileTab() {
           return;
         }
 
+        // 1. Busca Perfil
         const { data, error } = await supabase
           .from("profiles")
           .select("*")
           .eq("id", user.id)
           .single();
-
         if (error) throw error;
 
+        // 2. REGRA SÊNIOR: APENAS COMPLETED (Para evitar fraudes no sistema de Níveis)
+        const { count } = await supabase
+          .from("bookings")
+          .select("*", { count: "exact", head: true })
+          .eq("user_id", user.id)
+          .eq("status", "completed");
+
+        setBookingsCount(count || 0);
+
         if (data) {
-          // Converte YYYY-MM-DD do banco para DD/MM/YYYY na tela
           let displayBirthDate = "";
           if (data.birth_date) {
             const [y, m, d] = data.birth_date.split("-");
@@ -148,10 +244,6 @@ export function ProfileTab() {
             address_city: data.address_city || "",
             address_state: data.address_state || "",
           });
-
-          if (!data.cpf || !data.address_street || !data.birth_date) {
-            setView("edit");
-          }
         }
       } catch (error) {
         console.error("Erro ao carregar perfil:", error);
@@ -194,7 +286,6 @@ export function ProfileTab() {
 
       data?.forEach((tx) => {
         const amt = Number(tx.amount);
-
         if (amt > 0 && tx.expires_at && new Date(tx.expires_at) < now) return;
 
         if (tx.tier === "master") master += amt;
@@ -203,9 +294,7 @@ export function ProfileTab() {
 
         if (amt > 0 && tx.expires_at) {
           const expDate = new Date(tx.expires_at);
-          if (!closestExp || expDate < closestExp) {
-            closestExp = expDate;
-          }
+          if (!closestExp || expDate < closestExp) closestExp = expDate;
         }
       });
 
@@ -230,26 +319,12 @@ export function ProfileTab() {
 
   const handleLogout = async () => {
     setLoading(true);
-
     try {
       await supabase.auth.signOut();
-
-      for (let key in localStorage) {
-        if (key.startsWith("sb-")) {
-          localStorage.removeItem(key);
-        }
-      }
       sessionStorage.clear();
-
-      document.cookie.split(";").forEach((c) => {
-        document.cookie = c
-          .replace(/^ +/, "")
-          .replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
-      });
-
+      localStorage.clear();
       window.location.href = "/login";
     } catch (error) {
-      console.error("Erro ao sair:", error);
       toast({
         variant: "destructive",
         title: "Erro ao sair",
@@ -271,11 +346,10 @@ export function ProfileTab() {
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     let value = e.target.value.replace(/\D/g, "");
     if (value.length > 8) value = value.slice(0, 8);
-    if (value.length > 4) {
+    if (value.length > 4)
       value = value.replace(/^(\d{2})(\d{2})(\d{1,4}).*/, "$1/$2/$3");
-    } else if (value.length > 2) {
+    else if (value.length > 2)
       value = value.replace(/^(\d{2})(\d{1,2}).*/, "$1/$2");
-    }
     setFormData({ ...formData, birth_date: value });
   };
 
@@ -288,13 +362,8 @@ export function ProfileTab() {
 
   const handleSearchCep = async () => {
     const cleanCep = formData.cep.replace(/\D/g, "");
-    if (cleanCep.length !== 8) {
-      return toast({
-        variant: "destructive",
-        title: "CEP Inválido",
-        description: "Digite um CEP com 8 dígitos.",
-      });
-    }
+    if (cleanCep.length !== 8)
+      return toast({ variant: "destructive", title: "CEP Inválido" });
 
     setCepLoading(true);
     try {
@@ -302,7 +371,6 @@ export function ProfileTab() {
         `https://viacep.com.br/ws/${cleanCep}/json/`,
       );
       const data = await response.json();
-
       if (data.erro) throw new Error("CEP não encontrado.");
 
       setFormData((prev) => ({
@@ -312,16 +380,12 @@ export function ProfileTab() {
         address_city: data.localidade || "",
         address_state: data.uf || "",
       }));
-
-      toast({
-        title: "Endereço encontrado!",
-        description: "Preencha apenas o número e o complemento.",
-      });
+      toast({ title: "Endereço encontrado!" });
     } catch (error: any) {
       toast({
         variant: "destructive",
         title: "Erro",
-        description: error.message || "Não foi possível buscar o CEP.",
+        description: error.message,
       });
     } finally {
       setCepLoading(false);
@@ -345,27 +409,22 @@ export function ProfileTab() {
 
       const { error: uploadError } = await supabase.storage
         .from("avatars")
-        .upload(fileName, file, {
-          upsert: true,
-          cacheControl: "3600",
-        });
-
+        .upload(fileName, file, { upsert: true, cacheControl: "3600" });
       if (uploadError) throw uploadError;
 
       const {
         data: { publicUrl },
       } = supabase.storage.from("avatars").getPublicUrl(fileName);
-      const finalUrl = `${publicUrl}?t=${new Date().getTime()}`;
-
-      setFormData({ ...formData, avatar_url: finalUrl });
+      setFormData({
+        ...formData,
+        avatar_url: `${publicUrl}?t=${new Date().getTime()}`,
+      });
       toast({ title: "Foto atualizada!" });
     } catch (error: any) {
-      console.error("Erro no upload:", error);
       toast({
         variant: "destructive",
         title: "Erro no upload",
-        description:
-          "Falha ao processar a imagem. Verifique o Bucket no Supabase.",
+        description: "Falha ao processar a imagem.",
       });
     } finally {
       setUploadingImage(false);
@@ -375,28 +434,25 @@ export function ProfileTab() {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // 1. Validação de CPF
     if (formData.cpf && !isValidCPF(formData.cpf)) {
       return toast({
         variant: "destructive",
         title: "CPF Inválido",
-        description: "Por favor, digite um CPF válido e real.",
+        description: "Digite um CPF real.",
       });
     }
 
-    // 2. Validação e Conversão da Data de Nascimento (DD/MM/YYYY -> YYYY-MM-DD)
     let dbBirthDate = null;
     if (formData.birth_date) {
       if (formData.birth_date.length !== 10) {
         return toast({
           variant: "destructive",
           title: "Data Inválida",
-          description: "Digite a data completa no formato DD/MM/AAAA.",
+          description: "Formato DD/MM/AAAA.",
         });
       }
       const [d, m, y] = formData.birth_date.split("/");
       dbBirthDate = `${y}-${m}-${d}`;
-
       const dateObj = new Date(`${y}-${m}-${d}T00:00:00`);
       if (
         isNaN(dateObj.getTime()) ||
@@ -406,13 +462,12 @@ export function ProfileTab() {
         return toast({
           variant: "destructive",
           title: "Data Inválida",
-          description: "A data de nascimento informada não é coerente.",
+          description: "A data não é coerente.",
         });
       }
     }
 
     setSaving(true);
-
     try {
       const {
         data: { user },
@@ -424,7 +479,7 @@ export function ProfileTab() {
         .update({
           full_name: formData.full_name,
           cpf: formData.cpf,
-          birth_date: dbBirthDate, // Envia para o DB no formato YYYY-MM-DD
+          birth_date: dbBirthDate,
           phone: formData.phone,
           specialty: formData.specialty,
           council: formData.council,
@@ -441,11 +496,7 @@ export function ProfileTab() {
         .eq("id", user.id);
 
       if (error) throw error;
-
-      toast({
-        title: "Perfil salvo! 🎉",
-        description: "Suas informações foram atualizadas.",
-      });
+      toast({ title: "Perfil salvo! 🎉" });
       setView("overview");
     } catch (error: any) {
       toast({
@@ -456,14 +507,6 @@ export function ProfileTab() {
     } finally {
       setSaving(false);
     }
-  };
-
-  const handleDepositRequest = () => {
-    toast({
-      title: "Integração Pix em breve!",
-      description:
-        "O módulo de compra direta de créditos estará disponível na próxima atualização.",
-    });
   };
 
   const isCredit = (type: string, amount: number) => {
@@ -511,10 +554,8 @@ export function ProfileTab() {
           </div>
         </div>
 
-        {/* CARD PRINCIPAL CARTEIRA (CRÉDITOS & TIERS) */}
         <div className="bg-slate-900 p-8 rounded-3xl text-white shadow-xl relative overflow-hidden mb-8">
           <div className="absolute top-0 right-0 w-40 h-40 bg-[#f05e23]/30 rounded-full blur-3xl -mr-10 -mt-10"></div>
-
           <div className="relative z-10 flex flex-col md:flex-row gap-8 justify-between">
             <div>
               <p className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
@@ -526,17 +567,13 @@ export function ProfileTab() {
                   CR
                 </span>
               </h3>
-
               <Button
-                onClick={handleDepositRequest}
+                onClick={() => toast({ title: "Em breve" })}
                 className="w-full sm:w-auto h-12 px-6 rounded-xl font-black bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg text-sm"
               >
-                <PlusCircle className="w-4 h-4 mr-2" />
-                Comprar Pass
+                <PlusCircle className="w-4 h-4 mr-2" /> Comprar Pass
               </Button>
             </div>
-
-            {/* Composição por Tier */}
             <div className="bg-white/10 backdrop-blur-md rounded-xl p-5 border border-white/10 min-w-[200px] h-fit">
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">
                 Saldos por Categoria
@@ -566,7 +603,6 @@ export function ProfileTab() {
             </div>
           </div>
 
-          {/* BARRA DE VENCIMENTO (30 DIAS) */}
           {nextExpiration && totalBalance > 0 && (
             <div className="relative z-10 mt-6 pt-6 border-t border-white/10">
               <div className="flex justify-between text-xs font-bold text-slate-400 mb-2 uppercase tracking-widest">
@@ -587,19 +623,14 @@ export function ProfileTab() {
                   style={{ width: `${expirationData.pct}%` }}
                 />
               </div>
-              <p className="text-[10px] text-slate-400 mt-2 font-medium">
-                Os créditos expirados são removidos automaticamente da carteira.
-              </p>
             </div>
           )}
         </div>
 
-        {/* EXTRATO */}
         <div>
           <h3 className="text-lg font-black text-slate-900 mb-4 flex items-center gap-2">
             <History className="w-5 h-5 text-[#f05e23]" /> Extrato de Créditos
           </h3>
-
           <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
             {loadingWallet ? (
               <div className="flex justify-center items-center py-16">
@@ -612,7 +643,7 @@ export function ProfileTab() {
                 </div>
                 <p className="font-bold text-slate-900">Nenhuma movimentação</p>
                 <p className="text-sm text-slate-500 font-medium mt-1">
-                  Seu histórico de compras e uso de salas aparecerá aqui.
+                  Seu histórico aparecerá aqui.
                 </p>
               </div>
             ) : (
@@ -673,83 +704,105 @@ export function ProfileTab() {
   }
 
   // ==========================================
-  // RENDER: VISÃO GERAL (CARD + MENU)
+  // RENDER: VISÃO GERAL (O NOVO DESIGN)
   // ==========================================
   if (view === "overview") {
+    // Calcula as métricas de evolução Sênior baseando-se APENAS no Completed
+    const tierInfo = getTierInfo(bookingsCount, !!isProfileComplete);
+
     return (
-      <div className="space-y-6 max-w-lg mx-auto w-full animate-in fade-in pb-24 pt-6 px-4">
+      <div className="space-y-6 max-w-md mx-auto w-full animate-in fade-in pb-24 pt-8 px-4">
+        {/* Título Centralizado */}
         <div className="text-center mb-6">
-          <h2 className="text-2xl font-black text-slate-900">Meu Perfil</h2>
+          <h2 className="text-2xl font-black text-slate-900 tracking-tight">
+            Meu Perfil
+          </h2>
         </div>
 
-        <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm flex items-center gap-4">
-          <div className="w-20 h-20 rounded-full overflow-hidden bg-slate-100 border-2 border-slate-200 shrink-0">
-            {formData.avatar_url ? (
-              <img
-                src={formData.avatar_url}
-                alt={formData.full_name}
-                className="w-full h-full object-cover"
+        {/* 1. CARTÃO PERFIL E GAMIFICAÇÃO */}
+        <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100 flex flex-col gap-6">
+          <div className="flex gap-4 items-center">
+            <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 border-2 border-slate-50 shadow-inner">
+              {formData.avatar_url ? (
+                <img
+                  src={formData.avatar_url}
+                  alt="Avatar"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <User className="w-8 h-8 text-slate-400" />
+              )}
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <h2 className="text-lg font-black text-slate-900 leading-tight truncate">
+                {formData.full_name || "Completar Cadastro"}
+              </h2>
+              <p className="text-sm text-slate-500 font-medium truncate mb-2">
+                {formData.email}
+              </p>
+
+              <Badge
+                className={`border-0 font-bold px-2 py-0.5 shadow-none ${tierInfo.bg} ${tierInfo.color}`}
+              >
+                <tierInfo.icon className="w-3.5 h-3.5 mr-1" /> Nível{" "}
+                {tierInfo.name}
+              </Badge>
+            </div>
+          </div>
+
+          {/* PROGRESS BAR SÊNIOR */}
+          <div className="pt-4 border-t border-slate-50">
+            <div className="flex justify-between items-end mb-2">
+              <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                {tierInfo.message}
+              </p>
+              <span className="text-xs font-black text-slate-900">
+                {!tierInfo.isMax && `${tierInfo.current} / ${tierInfo.next}`}
+              </span>
+            </div>
+            <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-1000 ${tierInfo.bar}`}
+                style={{ width: `${tierInfo.percent}%` }}
               />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-slate-400">
-                <User className="w-8 h-8" />
-              </div>
-            )}
-          </div>
-          <div>
-            <h3 className="text-xl font-black text-slate-900 leading-tight mb-1">
-              {formData.full_name || "Completar Cadastro"}
-            </h3>
-            <p className="text-sm font-medium text-slate-500 mb-2">
-              {formData.email}
-            </p>
-            {isProfileComplete ? (
-              <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold">
-                <ShieldCheck className="w-3 h-3 mr-1" /> Nível Bronze
-              </Badge>
-            ) : (
-              <Badge className="bg-orange-100 text-orange-800 border-0 font-bold">
-                <AlertCircle className="w-3 h-3 mr-1" /> Cadastro Incompleto
-              </Badge>
-            )}
+            </div>
           </div>
         </div>
 
-        {/* CARTEIRA COMPACTA */}
+        {/* 2. CARTÃO DA CARTEIRA DE CRÉDITOS */}
         <div
           onClick={() => setView("wallet")}
-          className="cursor-pointer bg-gradient-to-br from-[#f05e23] to-[#d6521e] p-6 sm:p-8 rounded-[2rem] text-white shadow-lg relative overflow-hidden group hover:shadow-xl hover:-translate-y-1 transition-all duration-300"
+          className="cursor-pointer bg-[#ea580c] rounded-[2rem] p-6 text-white shadow-lg flex items-center justify-between hover:scale-[1.02] transition-transform duration-300"
         >
-          <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl transition-transform duration-500 group-hover:scale-150"></div>
-          <div className="relative z-10 flex items-center justify-between">
-            <div>
-              <p className="text-xs font-bold text-white/80 uppercase tracking-wider mb-1 flex items-center gap-2">
-                <Wallet className="w-4 h-4" /> Créditos Totais
-              </p>
-              <h3 className="text-4xl font-black tracking-tight">
-                {totalBalance}{" "}
-                <span className="text-xl font-bold ml-1">CR</span>
-              </h3>
+          <div>
+            <p className="text-xs font-bold text-white/90 uppercase tracking-widest mb-1 flex items-center gap-2">
+              <Wallet className="w-4 h-4" /> Créditos Totais
+            </p>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-5xl font-black">{totalBalance}</span>
+              <span className="text-xl font-bold text-white/90">CR</span>
             </div>
-            <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center group-hover:bg-white/20 transition-colors backdrop-blur-sm border border-white/20">
-              <ChevronRight className="w-6 h-6 text-white" />
-            </div>
+          </div>
+
+          <div className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center backdrop-blur-md">
+            <ChevronRight className="w-6 h-6 text-white" />
           </div>
         </div>
 
+        {/* Alerta de Perfil Incompleto */}
         {!isProfileComplete && (
-          <div className="bg-red-50 border border-red-200 p-4 rounded-2xl flex items-start gap-3">
+          <div className="bg-red-50 border border-red-200 p-4 rounded-[2rem] flex items-start gap-3">
             <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
             <div>
               <p className="text-sm font-bold text-red-900">Ação Necessária</p>
               <p className="text-xs text-red-700 font-medium mt-1 mb-2">
-                Para conseguir realizar reservas, você precisa preencher seu
-                CPF, Endereço e Data de Nascimento.
+                Preencha seu CPF, Endereço e Data de Nascimento para reservar
+                salas.
               </p>
               <Button
                 onClick={() => setView("edit")}
                 size="sm"
-                className="bg-red-600 hover:bg-red-700 text-white font-bold h-8"
+                className="bg-red-600 hover:bg-red-700 text-white font-bold h-8 rounded-xl"
               >
                 Completar Agora
               </Button>
@@ -757,51 +810,60 @@ export function ProfileTab() {
           </div>
         )}
 
-        <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden divide-y divide-slate-100">
+        {/* 3. MENU DE AÇÕES */}
+        <div className="bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden divide-y divide-slate-100">
           <button
             onClick={() => setView("edit")}
             className="w-full flex items-center justify-between p-5 hover:bg-slate-50 transition-colors"
           >
             <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
+              <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center text-blue-500">
                 <FileText className="w-5 h-5" />
               </div>
               <div className="text-left">
                 <p className="font-bold text-slate-900">Meus Dados</p>
-                <p className="text-xs font-medium text-slate-500">
+                <p className="text-xs font-medium text-slate-500 mt-0.5">
                   Informações pessoais e endereço
                 </p>
               </div>
             </div>
-            <ChevronRight className="w-5 h-5 text-slate-400" />
+            <ChevronRight className="w-5 h-5 text-slate-300" />
           </button>
 
-          <button className="w-full flex items-center justify-between p-5 hover:bg-slate-50 transition-colors">
+          <button
+            onClick={() =>
+              toast({
+                title: "Central de Ajuda",
+                description: "Redirecionando para o suporte...",
+              })
+            }
+            className="w-full flex items-center justify-between p-5 hover:bg-slate-50 transition-colors"
+          >
             <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600">
+              <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
                 <HelpCircle className="w-5 h-5" />
               </div>
               <div className="text-left">
                 <p className="font-bold text-slate-900">Central de Ajuda</p>
-                <p className="text-xs font-medium text-slate-500">
+                <p className="text-xs font-medium text-slate-500 mt-0.5">
                   Dúvidas frequentes e suporte
                 </p>
               </div>
             </div>
-            <ChevronRight className="w-5 h-5 text-slate-400" />
+            <ChevronRight className="w-5 h-5 text-slate-300" />
           </button>
 
           <button
             onClick={handleLogout}
-            className="w-full flex items-center justify-between p-5 hover:bg-red-50 transition-colors group"
+            className="w-full flex items-center justify-between p-5 hover:bg-red-50/50 transition-colors group"
           >
             <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 group-hover:bg-red-200 transition-colors">
+              <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500 group-hover:bg-red-100 transition-colors">
                 <LogOut className="w-5 h-5" />
               </div>
               <div className="text-left">
                 <p className="font-bold text-red-600">Encerrar Sessão</p>
-                <p className="text-xs font-medium text-red-400">
+                <p className="text-xs font-medium text-red-500/70 mt-0.5">
                   Sair da sua conta
                 </p>
               </div>
@@ -835,7 +897,7 @@ export function ProfileTab() {
       </div>
 
       <form onSubmit={handleSave} className="space-y-6">
-        <div className="bg-white border border-slate-200 p-6 rounded-3xl shadow-sm flex flex-col sm:flex-row items-center gap-6">
+        <div className="bg-white border border-slate-200 p-6 rounded-[2rem] shadow-sm flex flex-col sm:flex-row items-center gap-6">
           <div className="relative group shrink-0">
             <div className="w-24 h-24 rounded-full overflow-hidden bg-slate-100 border-2 border-slate-200">
               {formData.avatar_url ? (
@@ -882,7 +944,7 @@ export function ProfileTab() {
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 p-6 md:p-8 rounded-3xl shadow-sm">
+        <div className="bg-white border border-slate-200 p-6 md:p-8 rounded-[2rem] shadow-sm">
           <h3 className="text-lg font-black text-slate-900 mb-6 flex items-center gap-2">
             <User className="w-5 h-5 text-[#f05e23]" /> Dados Pessoais
           </h3>
@@ -901,7 +963,6 @@ export function ProfileTab() {
                 className="h-12 bg-slate-50 border-slate-200 rounded-xl"
               />
             </div>
-
             <div className="space-y-2">
               <Label className="font-bold text-slate-700">
                 CPF <RequiredAsterisk />
@@ -914,7 +975,6 @@ export function ProfileTab() {
                 className="h-12 bg-slate-50 border-slate-200 rounded-xl"
               />
             </div>
-
             <div className="space-y-2">
               <Label className="font-bold text-slate-700">
                 Data de Nascimento <RequiredAsterisk />
@@ -928,7 +988,6 @@ export function ProfileTab() {
                 className="h-12 bg-slate-50 border-slate-200 rounded-xl"
               />
             </div>
-
             <div className="space-y-2">
               <Label className="font-bold text-slate-700">
                 Telefone / WhatsApp <RequiredAsterisk />
@@ -998,7 +1057,7 @@ export function ProfileTab() {
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 p-6 md:p-8 rounded-3xl shadow-sm">
+        <div className="bg-white border border-slate-200 p-6 md:p-8 rounded-[2rem] shadow-sm">
           <h3 className="text-lg font-black text-slate-900 mb-6 flex items-center gap-2">
             <MapPin className="w-5 h-5 text-[#f05e23]" /> Endereço Residencial
           </h3>
@@ -1030,7 +1089,6 @@ export function ProfileTab() {
                 </Button>
               </div>
             </div>
-
             <div className="space-y-2 md:col-span-8">
               <Label className="font-bold text-slate-700">
                 Rua / Logradouro <RequiredAsterisk />
@@ -1045,7 +1103,6 @@ export function ProfileTab() {
                 className="h-12 bg-slate-50 border-slate-200 rounded-xl"
               />
             </div>
-
             <div className="space-y-2 md:col-span-4">
               <Label className="font-bold text-slate-700">
                 Número <RequiredAsterisk />
@@ -1060,7 +1117,6 @@ export function ProfileTab() {
                 className="h-12 bg-slate-50 border-slate-200 rounded-xl"
               />
             </div>
-
             <div className="space-y-2 md:col-span-8">
               <Label className="font-bold text-slate-700">
                 Complemento{" "}
@@ -1080,7 +1136,6 @@ export function ProfileTab() {
                 className="h-12 bg-slate-50 border-slate-200 rounded-xl"
               />
             </div>
-
             <div className="space-y-2 md:col-span-4">
               <Label className="font-bold text-slate-700">
                 Bairro <RequiredAsterisk />
@@ -1097,7 +1152,6 @@ export function ProfileTab() {
                 className="h-12 bg-slate-50 border-slate-200 rounded-xl"
               />
             </div>
-
             <div className="space-y-2 md:col-span-5">
               <Label className="font-bold text-slate-700">
                 Cidade <RequiredAsterisk />
@@ -1111,7 +1165,6 @@ export function ProfileTab() {
                 className="h-12 bg-slate-50 border-slate-200 rounded-xl"
               />
             </div>
-
             <div className="space-y-2 md:col-span-3">
               <Label className="font-bold text-slate-700">
                 Estado (UF) <RequiredAsterisk />

@@ -35,6 +35,7 @@ import {
   Receipt,
   Download,
   FileSpreadsheet,
+  Gem,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -161,38 +162,46 @@ export function AdminSpecialistsTab() {
 
       const processedData: Specialist[] = profiles.map((p) => {
         const userBookings = bookings?.filter((b) => b.user_id === p.id) || [];
-        const validBookings = userBookings.filter((b) =>
-          ["confirmed", "completed"].includes(b.status),
+
+        // ==========================================
+        // REGRA DE NEGÓCIO SÊNIOR UNIFICADA
+        // Conta estritamente as reservas COMPLETED para não haver fraudes
+        // ==========================================
+        const completedBookings = userBookings.filter(
+          (b) => b.status === "completed",
         );
-        const ltv = validBookings.reduce(
+
+        const ltv = completedBookings.reduce(
           (acc, curr) => acc + (Number(curr.total_cost) || 0) * 45,
           0,
         );
-        const bookingsCount = validBookings.length;
+        const bookingsCount = completedBookings.length;
         const canceledCount = userBookings.filter(
           (b) => b.status === "cancelled",
         ).length;
 
-        const lastBooking = validBookings.sort(
+        const lastBooking = completedBookings.sort(
           (a, b) =>
             new Date(b.start_time).getTime() - new Date(a.start_time).getTime(),
         )[0];
 
-        // ==========================================
-        // SISTEMA DE NÍVEIS (GAMIFICAÇÃO BLINDADA)
-        // ==========================================
-        const hasBookings = bookingsCount > 0;
-        // Lógica: Ele é "Completo" se tiver todos os dados OU se já tiver conseguido fazer alguma reserva no passado
-        const isProfileComplete =
-          Boolean(p.cpf && p.address_street && p.birth_date) || hasBookings;
+        // Lógica de Cadastro Completo Idêntica ao App
+        const isProfileComplete = Boolean(
+          p.cpf && p.address_street && p.birth_date,
+        );
 
         let tier: Specialist["tier"] = "Iniciante";
 
-        if (isProfileComplete) {
-          if (bookingsCount >= 50) tier = "Diamante";
-          else if (bookingsCount >= 30) tier = "Ouro";
-          else if (bookingsCount >= 10) tier = "Prata";
-          else tier = "Bronze";
+        if (!isProfileComplete) {
+          tier = "Iniciante";
+        } else if (bookingsCount < 10) {
+          tier = "Bronze";
+        } else if (bookingsCount < 30) {
+          tier = "Prata";
+        } else if (bookingsCount < 100) {
+          tier = "Ouro";
+        } else {
+          tier = "Diamante";
         }
 
         const rawSpecialty = p.specialty || "Clínico Geral";
@@ -443,32 +452,32 @@ export function AdminSpecialistsTab() {
     switch (tier) {
       case "Diamante":
         return (
-          <Badge className="bg-slate-900 text-white border-0">
-            <Award className="w-3 h-3 mr-1 text-cyan-400" /> Diamante
+          <Badge className="bg-cyan-100 text-cyan-700 border-0 font-bold px-2 py-0.5">
+            <Gem className="w-3.5 h-3.5 mr-1" /> Diamante
           </Badge>
         );
       case "Ouro":
         return (
-          <Badge className="bg-amber-100 text-amber-700 border-0">
-            <Award className="w-3 h-3 mr-1" /> Ouro
+          <Badge className="bg-amber-100 text-amber-700 border-0 font-bold px-2 py-0.5">
+            <Crown className="w-3.5 h-3.5 mr-1" /> Ouro
           </Badge>
         );
       case "Prata":
         return (
-          <Badge className="bg-slate-200 text-slate-700 border-0">
-            <Award className="w-3 h-3 mr-1" /> Prata
+          <Badge className="bg-slate-200 text-slate-700 border-0 font-bold px-2 py-0.5">
+            <Star className="w-3.5 h-3.5 mr-1" /> Prata
           </Badge>
         );
       case "Bronze":
         return (
-          <Badge className="bg-orange-100 text-orange-700 border-0">
-            <ShieldCheck className="w-3 h-3 mr-1" /> Bronze
+          <Badge className="bg-orange-100 text-orange-700 border-0 font-bold px-2 py-0.5">
+            <Shield className="w-3.5 h-3.5 mr-1" /> Bronze
           </Badge>
         );
       default:
         return (
-          <Badge className="bg-slate-100 text-slate-500 border-0">
-            Iniciante
+          <Badge className="bg-slate-100 text-slate-500 border-0 font-bold px-2 py-0.5">
+            <AlertTriangle className="w-3.5 h-3.5 mr-1" /> Iniciante
           </Badge>
         );
     }
@@ -588,7 +597,7 @@ export function AdminSpecialistsTab() {
                   {getTierBadge(selectedProfile.tier)}
                   <Badge
                     variant="outline"
-                    className="text-slate-600 border-slate-200 bg-slate-50"
+                    className="text-slate-600 border-slate-200 bg-slate-50 font-bold"
                   >
                     {selectedProfile.council} {selectedProfile.council_number}
                   </Badge>
