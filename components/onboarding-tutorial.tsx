@@ -20,7 +20,9 @@ export function OnboardingTutorial() {
   const [currentStep, setCurrentStep] = useState(0);
   const [userId, setUserId] = useState<string | null>(null);
 
-  // Verifica se a CONTA ESPECÍFICA já viu o tutorial
+  // Controle de UX: Dá o poder ao usuário
+  const [dontShowAgain, setDontShowAgain] = useState(true);
+
   useEffect(() => {
     setIsMounted(true);
     async function checkUserOnboarding() {
@@ -29,12 +31,13 @@ export function OnboardingTutorial() {
       } = await supabase.auth.getUser();
       if (user) {
         setUserId(user.id);
-        // A chave agora é atrelada ao ID do usuário, garantindo que contas diferentes no mesmo celular vejam o tutorial.
         const hasSeenTutorial = localStorage.getItem(
           `fusion_onboarding_${user.id}`,
         );
+
+        // Só abre se não existir a marcação no LocalStorage
         if (!hasSeenTutorial) {
-          const timer = setTimeout(() => setIsOpen(true), 1000);
+          const timer = setTimeout(() => setIsOpen(true), 500);
           return () => clearTimeout(timer);
         }
       }
@@ -42,18 +45,18 @@ export function OnboardingTutorial() {
     checkUserOnboarding();
   }, [supabase]);
 
-  const handleClose = () => {
-    setIsOpen(false);
-    if (userId) {
+  const savePreferenceAndClose = () => {
+    if (dontShowAgain && userId) {
       localStorage.setItem(`fusion_onboarding_${userId}`, "true");
     }
+    setIsOpen(false);
   };
 
   const nextStep = () => {
     if (currentStep < steps.length - 1) {
       setCurrentStep((prev) => prev + 1);
     } else {
-      handleClose();
+      savePreferenceAndClose();
     }
   };
 
@@ -122,17 +125,14 @@ export function OnboardingTutorial() {
 
   return (
     <div className="fixed inset-0 z-[500] flex items-center justify-center p-4 sm:p-6 bg-slate-900/80 backdrop-blur-sm animate-in fade-in duration-300">
-      {/* Container Principal: Limitado a 85dvh para nunca passar do tamanho da tela no mobile */}
       <div className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col max-h-[85dvh] animate-in zoom-in-95 slide-in-from-bottom-8 duration-500">
-        {/* Botão Pular / Fechar */}
         <button
-          onClick={handleClose}
+          onClick={savePreferenceAndClose}
           className="absolute top-4 right-4 z-20 w-8 h-8 flex items-center justify-center rounded-full bg-slate-100/50 backdrop-blur-md text-slate-600 hover:bg-slate-200 transition-colors"
         >
           <X className="w-4 h-4" />
         </button>
 
-        {/* Header Visual: Tamanho fixo para não ser espremido */}
         <div
           className={`relative h-32 sm:h-40 flex items-center justify-center shrink-0 transition-colors duration-500 ${step.bgDecoration}`}
         >
@@ -142,7 +142,6 @@ export function OnboardingTutorial() {
           </div>
         </div>
 
-        {/* Conteúdo: Área rolável (Scroll) - Se a tela for pequena, o usuário rola apenas o texto */}
         <div className="flex-1 overflow-y-auto px-6 sm:px-8 py-4 sm:py-6">
           <div className="text-center mb-6">
             <h2 className="text-2xl font-black text-slate-900 mb-2 tracking-tight">
@@ -156,7 +155,6 @@ export function OnboardingTutorial() {
             </p>
           </div>
 
-          {/* Highlights */}
           <div className="space-y-3">
             {step.highlights.map((highlight, idx) => (
               <div
@@ -170,11 +168,28 @@ export function OnboardingTutorial() {
               </div>
             ))}
           </div>
+
+          {/* CHECKBOX SÊNIOR DE CONTROLE */}
+          {currentStep === steps.length - 1 && (
+            <div className="mt-6 flex items-start gap-2 bg-slate-50 p-3 rounded-xl">
+              <input
+                type="checkbox"
+                id="dontShowAgain"
+                checked={dontShowAgain}
+                onChange={(e) => setDontShowAgain(e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded text-[#f05e23] border-slate-300 focus:ring-[#f05e23]"
+              />
+              <label
+                htmlFor="dontShowAgain"
+                className="text-sm font-medium text-slate-600 cursor-pointer select-none leading-tight"
+              >
+                Não mostrar este tutorial na próxima vez que eu fizer login.
+              </label>
+            </div>
+          )}
         </div>
 
-        {/* Rodapé Fixo: Os botões de ação nunca saem da tela */}
         <div className="shrink-0 p-6 sm:px-8 bg-white border-t border-slate-50 flex items-center justify-between gap-4">
-          {/* Indicadores de Progresso (Dots) */}
           <div className="flex gap-1.5 shrink-0">
             {steps.map((_, idx) => (
               <div
@@ -184,7 +199,6 @@ export function OnboardingTutorial() {
             ))}
           </div>
 
-          {/* Botão de Ação */}
           <Button
             onClick={nextStep}
             className="h-12 px-4 sm:px-6 rounded-xl font-black bg-slate-900 hover:bg-slate-800 text-white shadow-lg shadow-slate-900/20 whitespace-nowrap shrink-0 flex items-center"

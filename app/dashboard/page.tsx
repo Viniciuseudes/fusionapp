@@ -1,8 +1,16 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
-import { Search, Heart, Calendar, MessageSquare, User } from "lucide-react";
+import {
+  Search,
+  Heart,
+  Calendar,
+  MessageSquare,
+  User,
+  Loader2,
+} from "lucide-react";
 
 // Importando os componentes
 import { SearchTab } from "@/components/search-tab";
@@ -19,7 +27,10 @@ import { PushRegistry } from "@/components/push-registry";
 type TabType = "search" | "favorites" | "bookings" | "chat" | "profile";
 
 export default function DashboardPage() {
+  const router = useRouter();
   const supabase = createClient();
+
+  const [isDashboardReady, setIsDashboardReady] = useState(false); // GUARDIÃO DE TELA
   const [activeTab, setActiveTab] = useState<TabType>("search");
   const [selectedRoom, setSelectedRoom] = useState<any | null>(null);
   const [pendingReviewBooking, setPendingReviewBooking] = useState<any | null>(
@@ -27,16 +38,34 @@ export default function DashboardPage() {
   );
 
   useEffect(() => {
-    async function checkForPendingReviews() {
+    async function initializeDashboard() {
       try {
         const {
           data: { user },
         } = await supabase.auth.getUser();
-        if (!user) return;
 
+        if (!user) {
+          router.push("/login");
+          return;
+        }
+
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", user.id)
+          .single();
+
+        // SE NÃO TIVER ROLE, VAI PRO ONBOARDING E A TELA DO DASHBOARD FICA "INVISÍVEL"
+        if (!profile?.role) {
+          router.push("/onboarding");
+          return;
+        }
+
+        // ==========================================
+        // VERIFICAÇÃO DE AVALIAÇÕES PENDENTES
+        // ==========================================
         const now = new Date().toISOString();
 
-        // ADICIONADO: start_time no select para podermos mostrar a data no modal de avaliação!
         const { data: bookings } = await supabase
           .from("bookings")
           .select(`id, room_id, start_time, end_time, status, rooms ( name )`)
@@ -48,16 +77,10 @@ export default function DashboardPage() {
 
         if (bookings && bookings.length > 0) {
           for (const booking of bookings) {
-            // ==========================================
-            // VERIFICAÇÃO SÊNIOR DE UX (CACHE)
-            // Se o usuário mandou pular, ignora e vai pra próxima reserva da fila
-            // ==========================================
             const isSkipped = localStorage.getItem(
               `fusion_review_skipped_${booking.id}`,
             );
-            if (isSkipped === "true") {
-              continue;
-            }
+            if (isSkipped === "true") continue;
 
             const { data: reviewData } = await supabase
               .from("reviews")
@@ -65,20 +88,22 @@ export default function DashboardPage() {
               .eq("booking_id", booking.id)
               .maybeSingle();
 
-            // Se chegou aqui e não tem review, ativa o modal!
             if (!reviewData) {
               setPendingReviewBooking(booking);
-              break; // Para o loop pra mostrar só um modal por vez
+              break;
             }
           }
         }
+
+        // Tudo certo! Libera a renderização do Dashboard e do Tutorial (se for o caso)
+        setIsDashboardReady(true);
       } catch (error) {
-        console.error("Erro ao checar avaliações pendentes:", error);
+        console.error("Erro ao inicializar o dashboard:", error);
       }
     }
 
-    checkForPendingReviews();
-  }, [supabase]);
+    initializeDashboard();
+  }, [supabase, router]);
 
   const renderTab = () => {
     switch (activeTab) {
@@ -101,6 +126,15 @@ export default function DashboardPage() {
         return <SearchTab onOpenRoom={setSelectedRoom} />;
     }
   };
+
+  // TELA DE CARREGAMENTO (Evita o "piscar" de componentes)
+  if (!isDashboardReady) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-slate-50">
+        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-svh flex-col bg-slate-50">
@@ -223,14 +257,13 @@ export default function DashboardPage() {
         />
       )}
 
-      {/* MODAL DE AVALIAÇÃO SÊNIOR COM AS PROPRIEDADES ATUALIZADAS */}
       <ReviewModal
         isOpen={!!pendingReviewBooking}
         onClose={() => setPendingReviewBooking(null)}
         bookingId={pendingReviewBooking?.id || ""}
         roomId={pendingReviewBooking?.room_id || ""}
         roomName={pendingReviewBooking?.rooms?.name || ""}
-        bookingDate={pendingReviewBooking?.start_time} // <-- Passando a data!
+        bookingDate={pendingReviewBooking?.start_time}
         onSuccess={() => setPendingReviewBooking(null)}
       />
     </div>

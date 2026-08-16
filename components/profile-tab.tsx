@@ -320,9 +320,21 @@ export function ProfileTab() {
   const handleLogout = async () => {
     setLoading(true);
     try {
+      // 1. Desloga da sessão ativa no servidor do Supabase
       await supabase.auth.signOut();
+
+      // 2. Limpa APENAS os tokens de autenticação locais,
+      // preservando as preferências do usuário (ex: Tutorial e Avaliações puladas)
+      for (let key in localStorage) {
+        if (key.startsWith("sb-")) {
+          localStorage.removeItem(key);
+        }
+      }
+
+      // 3. Limpa a memória de sessão volátil
       sessionStorage.clear();
-      localStorage.clear();
+
+      // 4. Redireciona com hard reload para a tela de login
       window.location.href = "/login";
     } catch (error) {
       toast({
