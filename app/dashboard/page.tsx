@@ -55,8 +55,23 @@ export default function DashboardPage() {
           .eq("id", user.id)
           .single();
 
+        // 1. Se a role for nula, vai pro Onboarding
         if (!profile?.role) {
           router.push("/onboarding");
+          return;
+        }
+
+        // ==========================================
+        // GUARDIÃO DE ROTA (Segurança de Porta)
+        // Redireciona imediatamente Anfitriões e Admins para seus painéis corretos
+        // ==========================================
+        if (profile.role === "host") {
+          router.push("/host");
+          return;
+        }
+
+        if (profile.role === "admin") {
+          router.push("/admin/dashboard");
           return;
         }
 
