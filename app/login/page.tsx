@@ -62,6 +62,7 @@ export default function LoginPage() {
   const [loadingGoogle, setLoadingGoogle] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Inicia o fluxo de autenticação OAuth com o Google
   const handleGoogleLogin = async () => {
     setLoadingGoogle(true);
     setError(null);
@@ -70,6 +71,10 @@ export default function LoginPage() {
         provider: "google",
         options: {
           redirectTo: `${window.location.origin}/auth/callback`,
+          // Força o Google a exibir a tela de seleção de contas em todos os logins
+          queryParams: {
+            prompt: "select_account",
+          },
         },
       });
       if (error) throw error;
@@ -110,6 +115,7 @@ export default function LoginPage() {
           description: "Login realizado com sucesso.",
         });
 
+        // Redirecionamento baseado no perfil de acesso
         const userRole = profile?.role;
         if (userRole === "admin") router.push("/admin/dashboard");
         else if (userRole === "host") router.push("/host");
@@ -207,7 +213,6 @@ export default function LoginPage() {
 
           {step === "gateway" && (
             <div className="space-y-4">
-              {/* BOTÃO GOOGLE */}
               <Button
                 type="button"
                 onClick={handleGoogleLogin}
@@ -235,7 +240,6 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              {/* BOTÃO JÁ TENHO UMA CONTA (AGORA LARANJA!) */}
               <Button
                 onClick={() => setStep("login")}
                 className="w-full h-14 justify-start text-left bg-[#f05e23] hover:bg-[#d6521e] text-white rounded-xl shadow-sm transition-colors"
