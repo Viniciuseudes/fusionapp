@@ -1,29 +1,30 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 
+// ==========================================
+// A MÁGICA DE INFRAESTRUTURA AQUI:
+// Impede o Next.js de fazer cache desta rota em produção (Vercel)
+// Isso resolve o bug de ter que logar 2x com o Google!
+// ==========================================
+export const dynamic = "force-dynamic";
+
 export async function GET(request: Request) {
-  // Pega a URL completa que o Google nos devolveu
-  const { searchParams, origin } = new URL(request.url);
-  
-  // Extrai o código de autorização do Google
-  const code = searchParams.get("code");
-  
-  // Define para onde o usuário vai depois do login (Padrão: Dashboard)
-  const next = searchParams.get("next") ?? "/dashboard";
+  const requestUrl = new URL(request.url);
+  const code = requestUrl.searchParams.get("code");
+  const next = requestUrl.searchParams.get("next") ?? "/dashboard";
 
   if (code) {
     const supabase = await createClient();
     
-    // A MÁGICA ACONTECE AQUI: Troca o código do Google por uma Sessão do Supabase
+    // Troca o código pela sessão e GARANTE que os cookies sejam gravados
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     
     if (!error) {
-      // Deu certo! Redireciona o usuário para o Dashboard.
-      // Chegando no Dashboard, nosso Guardião vai ver se ele precisa ir pro Onboarding!
-      return NextResponse.redirect(`${origin}${next}`);
+      // Deu certo! Redireciona o usuário para o destino
+      return NextResponse.redirect(`${requestUrl.origin}${next}`);
     }
   }
 
-  // Se o código for inválido ou expirar, manda de volta pro login com erro
-  return NextResponse.redirect(`${origin}/login?error=GoogleAuthFailed`);
+  // Se o código for inválido ou expirar, manda de volta pro login
+  return NextResponse.redirect(`${requestUrl.origin}/login?error=GoogleAuthFailed`);
 }
