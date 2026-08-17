@@ -30,7 +30,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const supabase = createClient();
 
-  const [isDashboardReady, setIsDashboardReady] = useState(false); // GUARDIÃO DE TELA
+  const [isDashboardReady, setIsDashboardReady] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>("search");
   const [selectedRoom, setSelectedRoom] = useState<any | null>(null);
   const [pendingReviewBooking, setPendingReviewBooking] = useState<any | null>(
@@ -55,47 +55,52 @@ export default function DashboardPage() {
           .eq("id", user.id)
           .single();
 
-        // SE NÃO TIVER ROLE, VAI PRO ONBOARDING E A TELA DO DASHBOARD FICA "INVISÍVEL"
         if (!profile?.role) {
           router.push("/onboarding");
           return;
         }
 
         // ==========================================
-        // VERIFICAÇÃO DE AVALIAÇÕES PENDENTES
+        // LÓGICA SÊNIOR: FILA DE PRIORIDADE DE MODAIS
+        // Só exibe a avaliação se o usuário já passou pelo Onboarding
         // ==========================================
-        const now = new Date().toISOString();
+        const hasSeenOnboarding = localStorage.getItem(
+          `fusion_onboarding_${user.id}`,
+        );
 
-        const { data: bookings } = await supabase
-          .from("bookings")
-          .select(`id, room_id, start_time, end_time, status, rooms ( name )`)
-          .eq("user_id", user.id)
-          .in("status", ["confirmed", "completed"])
-          .lt("end_time", now)
-          .order("end_time", { ascending: false })
-          .limit(5);
+        if (hasSeenOnboarding) {
+          const now = new Date().toISOString();
 
-        if (bookings && bookings.length > 0) {
-          for (const booking of bookings) {
-            const isSkipped = localStorage.getItem(
-              `fusion_review_skipped_${booking.id}`,
-            );
-            if (isSkipped === "true") continue;
+          const { data: bookings } = await supabase
+            .from("bookings")
+            .select(`id, room_id, start_time, end_time, status, rooms ( name )`)
+            .eq("user_id", user.id)
+            .in("status", ["confirmed", "completed"])
+            .lt("end_time", now)
+            .order("end_time", { ascending: false })
+            .limit(5);
 
-            const { data: reviewData } = await supabase
-              .from("reviews")
-              .select("id")
-              .eq("booking_id", booking.id)
-              .maybeSingle();
+          if (bookings && bookings.length > 0) {
+            for (const booking of bookings) {
+              const isSkipped = localStorage.getItem(
+                `fusion_review_skipped_${booking.id}`,
+              );
+              if (isSkipped === "true") continue;
 
-            if (!reviewData) {
-              setPendingReviewBooking(booking);
-              break;
+              const { data: reviewData } = await supabase
+                .from("reviews")
+                .select("id")
+                .eq("booking_id", booking.id)
+                .maybeSingle();
+
+              if (!reviewData) {
+                setPendingReviewBooking(booking);
+                break;
+              }
             }
           }
         }
 
-        // Tudo certo! Libera a renderização do Dashboard e do Tutorial (se for o caso)
         setIsDashboardReady(true);
       } catch (error) {
         console.error("Erro ao inicializar o dashboard:", error);
@@ -127,7 +132,6 @@ export default function DashboardPage() {
     }
   };
 
-  // TELA DE CARREGAMENTO (Evita o "piscar" de componentes)
   if (!isDashboardReady) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-slate-50">

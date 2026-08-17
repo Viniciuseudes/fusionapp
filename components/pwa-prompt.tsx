@@ -104,7 +104,7 @@ export function PWAPrompt() {
   };
 
   return (
-    <div className="fixed bottom-0 left-0 w-full z-[100] p-4 animate-in slide-in-from-bottom-10 duration-500">
+    <div className="fixed bottom-24 lg:bottom-8 left-0 w-full z-[9999] p-4 pointer-events-auto animate-in slide-in-from-bottom-10 duration-500">
       <div className="bg-slate-900 text-white p-4 rounded-3xl shadow-2xl border border-slate-800 flex items-start gap-4">
         <div className="w-12 h-12 bg-[#f05e23] rounded-2xl flex items-center justify-center font-black text-xl shrink-0 shadow-sm">
           F
