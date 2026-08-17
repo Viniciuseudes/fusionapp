@@ -60,6 +60,12 @@ import ReactCrop, { type Crop, type PixelCrop } from "react-image-crop";
 // @ts-ignore
 import "react-image-crop/dist/ReactCrop.css";
 
+// ==========================================
+// IMPORTAÇÃO DA NOVA FUNÇÃO SÊNIOR DE CONVERSÃO DE IMAGENS
+// Certifique-se de que a biblioteca heic2any foi instalada via: npm install heic2any
+// ==========================================
+import { processImageToWebp } from "@/utils/image-utils";
+
 type RoomImage = {
   id: string;
   file?: File;
@@ -132,6 +138,7 @@ export function HostSpaceForm({
   const isPartner = initialData?.is_partner || false;
 
   const [loading, setLoading] = useState(false);
+  const [isProcessingImages, setIsProcessingImages] = useState(false); // Novo estado de carregamento de fotos
   const [confirmSaveModal, setConfirmSaveModal] = useState(false);
 
   // DADOS BÁSICOS
@@ -153,9 +160,9 @@ export function HostSpaceForm({
   // CAMPOS DO ENDEREÇO REAIS
   const [street, setStreet] = useState("");
   const [number, setNumber] = useState("");
-  const [floor, setFloor] = useState(""); // NOVO: Andar
-  const [roomNumber, setRoomNumber] = useState(""); // NOVO: Nº da Sala
-  const [complement, setComplement] = useState(""); // NOVO: Complemento
+  const [floor, setFloor] = useState("");
+  const [roomNumber, setRoomNumber] = useState("");
+  const [complement, setComplement] = useState("");
   const [neighborhood, setNeighborhood] = useState("");
   const [city, setCity] = useState("");
   const [stateUF, setStateUF] = useState("");
@@ -208,9 +215,9 @@ export function HostSpaceForm({
         const ad = initialData.address_details;
         setStreet(ad.street || "");
         setNumber(ad.number || "");
-        setFloor(ad.floor || ""); // NOVO: Andar
-        setRoomNumber(ad.roomNumber || ""); // NOVO: Nº da Sala
-        setComplement(ad.complement || ""); // NOVO: Complemento
+        setFloor(ad.floor || "");
+        setRoomNumber(ad.roomNumber || "");
+        setComplement(ad.complement || "");
         setNeighborhood(ad.neighborhood || "");
         setCity(ad.city || "");
         setStateUF(ad.state || "");
@@ -308,16 +315,42 @@ export function HostSpaceForm({
     });
   };
 
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // ==========================================
+  // LÓGICA SÊNIOR DE CONVERSÃO DE IMAGENS
+  // ==========================================
+  const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      const newImages = Array.from(e.target.files).map((file, index) => ({
-        id: Math.random().toString(36).substring(7),
-        file,
-        preview: URL.createObjectURL(file),
-        isCover: images.length === 0 && index === 0,
-        isExisting: false,
-      }));
-      setImages((prev) => [...prev, ...newImages]);
+      setIsProcessingImages(true);
+      const newImages: RoomImage[] = [];
+      const fileList = Array.from(e.target.files);
+
+      for (let i = 0; i < fileList.length; i++) {
+        try {
+          const file = fileList[i];
+          // Transforma qualquer imagem (inclusive HEIC de iPhone) em WebP
+          const webpFile = await processImageToWebp(file);
+
+          newImages.push({
+            id: Math.random().toString(36).substring(7),
+            file: webpFile,
+            preview: URL.createObjectURL(webpFile),
+            isCover: images.length === 0 && i === 0,
+            isExisting: false,
+          });
+        } catch (error) {
+          console.error("Erro processando imagem:", error);
+          toast({
+            variant: "destructive",
+            title: "Erro na foto",
+            description: "Uma das fotos selecionadas não pôde ser processada.",
+          });
+        }
+      }
+
+      if (newImages.length > 0) {
+        setImages((prev) => [...prev, ...newImages]);
+      }
+      setIsProcessingImages(false);
     }
   };
 
@@ -364,8 +397,9 @@ export function HostSpaceForm({
       canvas.toBlob(
         (blob) => {
           if (!blob) return;
-          const croppedFile = new File([blob], "cropped.jpg", {
-            type: "image/jpeg",
+          // Asseguramos que o crop também seja WebP!
+          const croppedFile = new File([blob], "cropped.webp", {
+            type: "image/webp",
           });
           const newPreview = URL.createObjectURL(blob);
           setImages((prev) =>
@@ -382,8 +416,8 @@ export function HostSpaceForm({
           );
           setCropModalOpen(false);
         },
-        "image/jpeg",
-        0.95,
+        "image/webp", // Alterado para WEBP
+        0.9, // Alta qualidade
       );
     }
   };
@@ -441,15 +475,20 @@ export function HostSpaceForm({
           uploadedGallery.push(img.preview);
           if (img.isCover) finalCoverUrl = img.preview;
         } else if (img.file) {
-          const fileExt = img.file.name.split(".").pop();
-          const fileName = `${user.id}/${Date.now()}-${Math.random()}.${fileExt}`;
+          // O nome do arquivo já carrega a extensão .webp corretamente
+          const fileName = `${user.id}/${Date.now()}-${Math.random()}.webp`;
           const { error: uploadError } = await supabase.storage
             .from("rooms")
-            .upload(fileName, img.file);
+            .upload(fileName, img.file, {
+              contentType: "image/webp", // Define explicitamente para o banco
+            });
+
           if (uploadError) throw uploadError;
+
           const {
             data: { publicUrl },
           } = supabase.storage.from("rooms").getPublicUrl(fileName);
+
           uploadedGallery.push(publicUrl);
           if (img.isCover) finalCoverUrl = publicUrl;
         }
@@ -462,9 +501,9 @@ export function HostSpaceForm({
       const address_details = {
         street,
         number,
-        floor, // NOVO: Andar
-        roomNumber, // NOVO: Nº Sala
-        complement, // NOVO: Complemento
+        floor,
+        roomNumber,
+        complement,
         neighborhood,
         city,
         state: stateUF,
@@ -563,24 +602,39 @@ export function HostSpaceForm({
                   1. Fotos do Espaço
                 </h3>
               </div>
+
               <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-slate-300 border-dashed rounded-xl cursor-pointer bg-slate-50 hover:bg-slate-100 transition-colors">
                 <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                  <UploadCloud className="w-8 h-8 mb-2 text-slate-400" />
-                  <p className="text-sm text-slate-500">
-                    <span className="font-semibold text-[#f05e23]">
-                      Clique para buscar fotos
-                    </span>{" "}
-                    ou arraste
-                  </p>
+                  {isProcessingImages ? (
+                    <>
+                      <Loader2 className="w-8 h-8 mb-2 text-[#f05e23] animate-spin" />
+                      <p className="text-sm font-semibold text-[#f05e23]">
+                        Processando fotos (WebP)...
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <UploadCloud className="w-8 h-8 mb-2 text-slate-400" />
+                      <p className="text-sm text-slate-500">
+                        <span className="font-semibold text-[#f05e23]">
+                          Clique para buscar fotos
+                        </span>{" "}
+                        ou arraste
+                      </p>
+                    </>
+                  )}
                 </div>
+                {/* Permite seleção de HEIC diretamente */}
                 <input
                   type="file"
                   className="hidden"
                   multiple
-                  accept="image/*"
+                  accept="image/*, .heic, .heif"
+                  disabled={isProcessingImages}
                   onChange={handleImageSelect}
                 />
               </label>
+
               {images.length > 0 && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
                   {images.map((img) => (
@@ -654,7 +708,6 @@ export function HostSpaceForm({
                   />
                 </div>
 
-                {/* GRID DE ESPECIALIDADE PRINCIPAL */}
                 <div className="space-y-3 md:col-span-2 pt-2">
                   <Label className="font-bold text-slate-700">
                     Especialidade Principal{" "}
@@ -681,7 +734,6 @@ export function HostSpaceForm({
                   </div>
                 </div>
 
-                {/* BADGES DE ESPECIALIDADES SECUNDÁRIAS */}
                 <div className="space-y-3 md:col-span-2 bg-slate-50 p-5 rounded-2xl border border-slate-100">
                   <Label className="font-bold text-slate-700">
                     Outras Especialidades Atendidas (Opcional)
@@ -786,7 +838,6 @@ export function HostSpaceForm({
                 )}
               </div>
 
-              {/* GRID DE ENDEREÇO ATUALIZADO */}
               <div className="grid grid-cols-1 md:grid-cols-12 gap-4 bg-slate-50/70 p-5 rounded-2xl border border-slate-200">
                 <div className="space-y-2 md:col-span-9">
                   <Label className="text-slate-500 font-bold">
@@ -981,7 +1032,6 @@ export function HostSpaceForm({
               </div>
 
               <div className="grid grid-cols-1 gap-6 bg-slate-50 p-5 rounded-xl border border-slate-200">
-                {/* Disponibilizar por Hora (Precificação Dinâmica) + Banner Partner */}
                 <div
                   className={`space-y-4 p-5 rounded-2xl border transition-all ${isPartner ? "bg-white border-orange-200 shadow-sm" : "bg-slate-100/50 border-slate-200"}`}
                 >
@@ -1008,7 +1058,6 @@ export function HostSpaceForm({
                       </Label>
                     </div>
 
-                    {/* BADGE E TOOLTIP DO FUSION PARTNER */}
                     <div className="flex items-center gap-2">
                       {!isPartner ? (
                         <>
@@ -1058,7 +1107,6 @@ export function HostSpaceForm({
                         diferentes períodos.
                       </p>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-                        {/* Card 1: Horário Comercial */}
                         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
                           <div className="absolute top-0 left-0 w-1 h-full bg-[#f05e23]" />
                           <div className="flex items-center gap-2 mb-1">
@@ -1087,7 +1135,6 @@ export function HostSpaceForm({
                           </div>
                         </div>
 
-                        {/* Card 2: Horário Noturno */}
                         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
                           <div className="absolute top-0 left-0 w-1 h-full bg-indigo-500" />
                           <div className="flex items-center gap-2 mb-1">
@@ -1118,7 +1165,6 @@ export function HostSpaceForm({
                           </div>
                         </div>
 
-                        {/* Card 3: Final de Semana */}
                         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
                           <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500" />
                           <div className="flex items-center gap-2 mb-1">
@@ -1153,7 +1199,6 @@ export function HostSpaceForm({
                   )}
                 </div>
 
-                {/* Disponibilizar por Turno */}
                 <div className="space-y-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                   <div className="flex items-center space-x-3 border-b border-slate-100 pb-3">
                     <Checkbox
@@ -1237,7 +1282,6 @@ export function HostSpaceForm({
                   )}
                 </div>
 
-                {/* Contrato Fixo */}
                 <div className="space-y-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                   <div className="flex items-center space-x-3 border-b border-slate-100 pb-3">
                     <Checkbox
@@ -1284,10 +1328,10 @@ export function HostSpaceForm({
 
             <Button
               type="submit"
-              disabled={loading}
+              disabled={loading || isProcessingImages}
               className="w-full h-14 text-lg rounded-xl font-bold bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/20 transition-all active:scale-95"
             >
-              {loading
+              {loading || isProcessingImages
                 ? "Processando..."
                 : isEditing
                   ? "Salvar Alterações"
@@ -1297,7 +1341,6 @@ export function HostSpaceForm({
         </CardContent>
       </Card>
 
-      {/* Modal de Crop */}
       <Dialog open={cropModalOpen} onOpenChange={setCropModalOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -1333,7 +1376,6 @@ export function HostSpaceForm({
         </DialogContent>
       </Dialog>
 
-      {/* Modal de Confirmação */}
       <Dialog open={confirmSaveModal} onOpenChange={setConfirmSaveModal}>
         <DialogContent className="sm:max-w-md rounded-3xl">
           <DialogHeader>
