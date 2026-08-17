@@ -1,5 +1,7 @@
 // ARQUIVO: lib/image-utils.ts
-import heic2any from "heic2any";
+
+// ❌ O SEGREDO ESTÁ AQUI: Removemos o import fixo do topo!
+// Não use: import heic2any from "heic2any";
 
 /**
  * Intercepta o arquivo, converte HEIC se necessário, e exporta um WebP de Alta Qualidade.
@@ -7,20 +9,26 @@ import heic2any from "heic2any";
 export async function processImageToWebp(file: File): Promise<File> {
   let imageFile = file;
 
-  // 1. Detecta se é arquivo de iPhone (HEIC/HEIF) e converte para JPEG base
+  // 1. Detecta se é arquivo de iPhone (HEIC/HEIF)
   if (
     file.type === "image/heic" ||
     file.type === "image/heif" ||
     file.name.toLowerCase().endsWith(".heic")
   ) {
     try {
+      // ==========================================
+      // CORREÇÃO SÊNIOR: Importação Dinâmica (Lazy Loading)
+      // O Next.js vai ignorar isso no servidor. A biblioteca só 
+      // será baixada e executada quando a função for acionada no navegador.
+      // ==========================================
+      const heic2any = (await import("heic2any")).default;
+
       const convertedBlob = (await heic2any({
         blob: file,
         toType: "image/jpeg",
-        quality: 0.9, // Alta qualidade na extração inicial
+        quality: 0.9, 
       })) as Blob;
       
-      // Cria um File temporário JPEG para o navegador conseguir ler
       imageFile = new File([convertedBlob], file.name.replace(/\.heic$/i, ".jpg"), {
         type: "image/jpeg",
       });
@@ -36,10 +44,9 @@ export async function processImageToWebp(file: File): Promise<File> {
     const objectUrl = URL.createObjectURL(imageFile);
 
     img.onload = () => {
-      URL.revokeObjectURL(objectUrl); // Limpa a memória
+      URL.revokeObjectURL(objectUrl); 
       
       const canvas = document.createElement("canvas");
-      // Mantém a resolução original (Alta Qualidade)
       canvas.width = img.width;
       canvas.height = img.height;
 
@@ -49,10 +56,8 @@ export async function processImageToWebp(file: File): Promise<File> {
         return;
       }
       
-      // Desenha a imagem no canvas
       ctx.drawImage(img, 0, 0);
 
-      // Exporta como WebP puro com 90% de qualidade
       canvas.toBlob(
         (blob) => {
           if (!blob) {
@@ -60,7 +65,6 @@ export async function processImageToWebp(file: File): Promise<File> {
             return;
           }
           
-          // Troca a extensão original por .webp
           const originalName = file.name.replace(/\.[^/.]+$/, "");
           const webpFile = new File([blob], `${originalName}.webp`, {
             type: "image/webp",
@@ -69,7 +73,7 @@ export async function processImageToWebp(file: File): Promise<File> {
           resolve(webpFile);
         },
         "image/webp",
-        0.90 // <-- 90% preserva alta qualidade e comprime muito o peso!
+        0.90 
       );
     };
 
