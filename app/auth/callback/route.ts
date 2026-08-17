@@ -1,30 +1,41 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 
-// ==========================================
-// A MÁGICA DE INFRAESTRUTURA AQUI:
-// Impede o Next.js de fazer cache desta rota em produção (Vercel)
-// Isso resolve o bug de ter que logar 2x com o Google!
-// ==========================================
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const requestUrl = new URL(request.url);
-  const code = requestUrl.searchParams.get("code");
-  const next = requestUrl.searchParams.get("next") ?? "/dashboard";
+  const { searchParams, origin } = new URL(request.url);
+  const code = searchParams.get("code");
+  const next = searchParams.get("next") ?? "/dashboard";
 
   if (code) {
     const supabase = await createClient();
     
-    // Troca o código pela sessão e GARANTE que os cookies sejam gravados
+    // Troca o código pela sessão no Supabase
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     
     if (!error) {
-      // Deu certo! Redireciona o usuário para o destino
-      return NextResponse.redirect(`${requestUrl.origin}${next}`);
+      // ==========================================
+      // LÓGICA SÊNIOR DE ROTEAMENTO (VERCEL FIX)
+      // Garante que o redirecionamento seja instantâneo 
+      // driblando o balanceador de carga da Vercel.
+      // ==========================================
+      const forwardedHost = request.headers.get("x-forwarded-host");
+      const isLocalEnv = process.env.NODE_ENV === "development";
+
+      if (isLocalEnv) {
+        // No Localhost, usamos o origin normal (http://localhost:3000)
+        return NextResponse.redirect(`${origin}${next}`);
+      } else if (forwardedHost) {
+        // Na Produção, forçamos a URL real do seu domínio com HTTPS
+        return NextResponse.redirect(`https://${forwardedHost}${next}`);
+      } else {
+        // Fallback de segurança
+        return NextResponse.redirect(`${origin}${next}`);
+      }
     }
   }
 
-  // Se o código for inválido ou expirar, manda de volta pro login
-  return NextResponse.redirect(`${requestUrl.origin}/login?error=GoogleAuthFailed`);
+  // Se der erro no código do Google, volta para o login
+  return NextResponse.redirect(`${origin}/login?error=GoogleAuthFailed`);
 }
