@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Image from "next/image";
 import { X, Share, PlusSquare, Download, Loader2 } from "lucide-react";
 
 export function PWAPrompt() {
@@ -10,7 +11,6 @@ export function PWAPrompt() {
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    // 1. Verifica se já está instalado
     const checkIsStandalone = () => {
       const isStandaloneQuery = window.matchMedia(
         "(display-mode: standalone)",
@@ -27,12 +27,10 @@ export function PWAPrompt() {
       setIsStandalone(false);
     }
 
-    // 2. Detecta iOS
     const userAgent = window.navigator.userAgent.toLowerCase();
     const isIOSDevice = /iphone|ipad|ipod/.test(userAgent);
     setIsIOS(isIOSDevice);
 
-    // 3. Verifica a armadilha global repetidamente (resolve a penalidade do Chrome)
     const checkGlobalPrompt = setInterval(() => {
       if ((window as any).deferredPrompt) {
         setIsReady(true);
@@ -40,7 +38,6 @@ export function PWAPrompt() {
       }
     }, 500);
 
-    // 4. Captura também por evento (caso demore)
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
       (window as any).deferredPrompt = e;
@@ -48,7 +45,6 @@ export function PWAPrompt() {
     };
     window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
 
-    // 5. Escuta o sucesso da instalação
     const handleAppInstalled = () => {
       setIsStandalone(true);
       setShowPrompt(false);
@@ -56,7 +52,6 @@ export function PWAPrompt() {
     };
     window.addEventListener("appinstalled", handleAppInstalled);
 
-    // 6. Mostra no mobile
     const isMobile = /android|iphone|ipad|ipod/.test(userAgent);
     if (isMobile) {
       setTimeout(() => setShowPrompt(true), 2500);
@@ -72,7 +67,6 @@ export function PWAPrompt() {
     };
   }, []);
 
-  // Registra o Service Worker
   useEffect(() => {
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker
@@ -89,10 +83,8 @@ export function PWAPrompt() {
     const promptEvent = (window as any).deferredPrompt;
     if (!promptEvent) return;
 
-    // Dispara a janela nativa do Android
     promptEvent.prompt();
 
-    // Aguarda a resposta do usuário
     const { outcome } = await promptEvent.userChoice;
 
     if (outcome === "accepted") {
@@ -106,9 +98,16 @@ export function PWAPrompt() {
   return (
     <div className="fixed bottom-24 lg:bottom-8 left-0 w-full z-[9999] p-4 pointer-events-auto animate-in slide-in-from-bottom-10 duration-500">
       <div className="bg-slate-900 text-white p-4 rounded-3xl shadow-2xl border border-slate-800 flex items-start gap-4">
-        <div className="w-12 h-12 bg-[#f05e23] rounded-2xl flex items-center justify-center font-black text-xl shrink-0 shadow-sm">
-          F
+        {/* LOGO ATUALIZADA */}
+        <div className="relative w-12 h-12 shrink-0 shadow-sm rounded-2xl overflow-hidden bg-white">
+          <Image
+            src="/icon-192x192.png"
+            alt="Fusion Clinic"
+            fill
+            className="object-contain"
+          />
         </div>
+
         <div className="flex-1">
           <div className="flex justify-between items-start mb-1">
             <h3 className="font-bold text-sm">Instalar App da Fusion</h3>
