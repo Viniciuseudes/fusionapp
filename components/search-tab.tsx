@@ -20,6 +20,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Building2,
+  Stethoscope,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -43,7 +44,8 @@ export interface Room {
   priceLabel: string;
   filterPrice: number;
   image: string;
-  rating: string;
+  rating: number;
+  reviews_count: number;
   distance: string;
   distanceKm?: number;
   modalities: string[];
@@ -51,16 +53,15 @@ export interface Room {
   locationString: string;
   rawAddress?: any;
   host_id?: string;
+  specialty?: string;
   selectedModality?: RentalType;
 }
 
-// ==========================================
-// ESTRUTURA VISUAL E COPY DE ALTA CONVERSÃO (CRO) - DESIGN PREMIUM
-// ==========================================
 interface PlanOption {
   hours: number;
   price: number;
 }
+
 interface PlanPackage {
   id: "start" | "vip" | "master";
   title: string;
@@ -227,13 +228,17 @@ export function SearchTab({
         });
       }
 
-      const { data: roomsData } = await supabase
+      const { data: roomsData, error: roomsError } = await supabase
         .from("rooms")
         .select(
           `id, name, image_url, modalities, is_partner, specialty, tier, address_details, host_id`,
         )
         .eq("is_active", true)
         .eq("is_paused", false);
+
+      if (roomsError) {
+        console.error("Erro ao buscar salas:", roomsError);
+      }
 
       if (roomsData) {
         const formattedRooms = roomsData.map((r: any) => {
@@ -293,7 +298,8 @@ export function SearchTab({
             priceLabel: label,
             filterPrice: numPrice,
             image: r.image_url || "/placeholder.jpg",
-            rating: "5.0",
+            rating: 0,
+            reviews_count: 0,
             distance: address.city || "Localização pendente",
             modalities: finalModalities,
             isPartner: r.is_partner === true,
@@ -302,6 +308,7 @@ export function SearchTab({
               .join(", "),
             rawAddress: address,
             host_id: r.host_id,
+            specialty: r.specialty,
           };
         });
         setDbRooms(formattedRooms);
@@ -538,16 +545,12 @@ export function SearchTab({
     userLocation,
   ]);
 
-  const featuredRooms = processedRooms.filter((r) => r.isPartner);
   const masterRooms = processedRooms.filter((r) => r.tier === "master");
   const vipRooms = processedRooms.filter((r) => r.tier === "vip");
   const startRooms = processedRooms.filter(
     (r) => r.tier === "start" || !r.tier,
   );
 
-  // ==========================================
-  // UI COMPONENTS (CRO BANNER - PREMIUM DARK MODE)
-  // ==========================================
   const renderFusionPassBanner = () => {
     let title,
       subtitle,
@@ -650,7 +653,6 @@ export function SearchTab({
 
   return (
     <div className="flex flex-col pb-24 bg-zinc-50 min-h-screen relative font-sans">
-      {/* HEADER PRINCIPAL */}
       <header className="bg-gradient-to-r from-[#f05e23] to-[#d6521e] px-4 pb-12 pt-10 lg:px-8 lg:pt-12 rounded-b-3xl shadow-md">
         {!isPublic && (
           <div className="mx-auto max-w-5xl flex items-center justify-between">
@@ -687,9 +689,6 @@ export function SearchTab({
       </header>
 
       {isWalletOpen ? (
-        // ======================================================
-        // A NOVA CARTEIRA / VENDA DE PACOTES (DARK PREMIUM MODE)
-        // ======================================================
         <div className="mx-auto w-full max-w-5xl px-4 -mt-6 relative z-20 animate-in fade-in slide-in-from-bottom-2 duration-300">
           <div className="bg-white rounded-3xl p-8 md:p-10 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-zinc-100 relative overflow-hidden mb-10">
             <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-orange-50 via-transparent to-transparent rounded-full blur-3xl -translate-y-1/2 translate-x-1/3 pointer-events-none" />
@@ -840,13 +839,9 @@ export function SearchTab({
           </div>
         </div>
       ) : (
-        // ======================================================
-        // TELA DE BUSCA E EXPLORAÇÃO DE SALAS
-        // ======================================================
         <>
           <div className="mx-auto w-full max-w-5xl px-4 -mt-6 relative z-20 sticky top-4 animate-in fade-in duration-300">
             <div className="flex flex-col gap-3">
-              {/* Barra de Busca */}
               <div className="flex items-center gap-2">
                 <div className="relative flex items-center flex-1 bg-white rounded-2xl border border-zinc-200 shadow-[0_4px_20px_rgb(0,0,0,0.03)] h-14 transition-all focus-within:ring-2 focus-within:ring-[#f05e23]/20">
                   <Search className="absolute left-4 h-5 w-5 text-zinc-400" />
@@ -868,7 +863,6 @@ export function SearchTab({
                 </button>
               </div>
 
-              {/* Toggles Rápidos e Tiers - ESTILO PREMIUM CLEAN */}
               <div className="flex items-center gap-3 overflow-x-auto scrollbar-hide pb-1">
                 <div className="flex bg-white border border-zinc-200 p-1.5 rounded-xl shrink-0 shadow-sm">
                   <button
@@ -959,7 +953,6 @@ export function SearchTab({
             <div className="px-4 max-w-5xl mx-auto w-full space-y-12">
               {rentalType === "hora" ? (
                 <>
-                  {/* MASTER ROOMS */}
                   {(activeTier === "all" || activeTier === "master") &&
                     masterRooms.length > 0 && (
                       <section className="bg-zinc-900 -mx-4 px-4 py-8 lg:rounded-3xl lg:mx-0 border border-zinc-800 shadow-2xl">
@@ -992,7 +985,6 @@ export function SearchTab({
                       </section>
                     )}
 
-                  {/* VIP ROOMS */}
                   {(activeTier === "all" || activeTier === "vip") &&
                     vipRooms.length > 0 && (
                       <section className="pt-8">
@@ -1025,7 +1017,6 @@ export function SearchTab({
                       </section>
                     )}
 
-                  {/* BASIC ROOMS */}
                   {(activeTier === "all" || activeTier === "start") &&
                     startRooms.length > 0 && (
                       <section className="border-t border-zinc-200 pt-8 pb-8">
@@ -1094,7 +1085,6 @@ export function SearchTab({
         </>
       )}
 
-      {/* MODAL DE FILTROS */}
       <Dialog open={isFilterModalOpen} onOpenChange={setIsFilterModalOpen}>
         <DialogContent className="sm:max-w-md rounded-3xl">
           <DialogHeader className="border-b border-zinc-100 pb-3">
@@ -1195,9 +1185,6 @@ export function SearchTab({
   );
 }
 
-// ==========================================
-// COMPONENTE DO CARD DA SALA
-// ==========================================
 function RoomCard({
   room,
   isFavorited,
@@ -1274,41 +1261,69 @@ function RoomCard({
         </button>
       </div>
 
-      <div className="flex flex-col p-4 flex-1">
-        <div className="flex justify-between items-start gap-2 mb-1.5">
-          <h3 className="truncate text-base font-bold text-zinc-900 leading-tight group-hover:text-[#f05e23] transition-colors">
-            {room.name}
-          </h3>
-          <div className="flex shrink-0 items-center gap-0.5">
-            <Star className="h-3 w-3 fill-zinc-900 text-zinc-900" />
-            <span className="text-xs font-semibold text-zinc-700">
-              {room.rating}
-            </span>
+      <div className="flex flex-col p-4 flex-1 bg-white">
+        <div>
+          <div className="flex justify-between items-start mb-3 gap-2">
+            <h3 className="font-bold text-lg text-slate-900 leading-tight line-clamp-2 group-hover:text-[#f05e23] transition-colors">
+              {room.name}
+            </h3>
+
+            {room.reviews_count > 0 || (room.rating && room.rating > 0) ? (
+              <div className="flex items-center gap-1 bg-slate-50 px-2 py-1 rounded-md shrink-0 border border-slate-100">
+                <Star className="w-3.5 h-3.5 fill-[#f05e23] text-[#f05e23]" />
+                <span className="text-sm font-black text-slate-900">
+                  {Number(room.rating).toFixed(1)}
+                </span>
+              </div>
+            ) : (
+              <div className="bg-orange-50 px-2 py-1 rounded-md shrink-0 border border-orange-100">
+                <span className="text-[10px] font-black text-[#f05e23] uppercase tracking-wider">
+                  Novo
+                </span>
+              </div>
+            )}
           </div>
+
+          <div className="space-y-2 mb-4">
+            <div className="flex items-center gap-2 text-slate-500">
+              <MapPin className="w-4 h-4 shrink-0 text-slate-400" />
+              <span className="text-sm font-medium truncate">
+                {room.rawAddress?.neighborhood || "Bairro não inf."},{" "}
+                {room.rawAddress?.city || "Localização pendente"}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 text-slate-500">
+              <Stethoscope className="w-4 h-4 shrink-0 text-slate-400" />
+              <span className="text-sm font-medium truncate">
+                {room.specialty || room.category || "Consultório Padrão"}
+              </span>
+            </div>
+          </div>
+
+          {usingLocation && room.distanceKm && (
+            <p className="text-[10px] font-bold text-emerald-600 bg-emerald-50 w-fit px-2 py-1 rounded-md mb-2 flex items-center gap-1">
+              <Navigation className="w-3 h-3" /> A {room.distanceKm.toFixed(1)}{" "}
+              km
+            </p>
+          )}
         </div>
 
-        <p className="text-xs font-medium text-zinc-500 truncate flex items-center gap-1.5 mb-2">
-          <MapPin className="w-3.5 h-3.5 shrink-0" />
-          {room.category} • {room.distance}
-        </p>
-
-        {usingLocation && room.distanceKm && (
-          <p className="text-[10px] font-bold text-emerald-600 bg-emerald-50 w-fit px-2 py-1 rounded-md mb-2 flex items-center gap-1">
-            <Navigation className="w-3 h-3" /> A {room.distanceKm.toFixed(1)} km
-          </p>
-        )}
-
-        <div className="mt-auto pt-3 border-t border-zinc-100 flex items-end justify-between">
+        <div className="mt-auto pt-4 border-t border-slate-100 flex items-end justify-between">
           <div>
-            <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mb-0.5">
-              Locação Avulsa
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">
+              {room.selectedModality === "hora"
+                ? "Locação Avulsa"
+                : room.selectedModality === "turno"
+                  ? "Locação por Turno"
+                  : "Locação Fixa"}
             </p>
-            <p className="text-base font-black text-zinc-900">
+            <p className="text-lg font-black text-slate-900">
               {room.priceLabel}
             </p>
           </div>
-          <div className="w-8 h-8 rounded-full bg-zinc-50 flex items-center justify-center group-hover:bg-[#f05e23] group-hover:text-white transition-colors text-zinc-400">
-            <ArrowRight className="w-4 h-4" />
+          <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center group-hover:bg-[#f05e23] group-hover:text-white transition-colors border border-slate-100 text-slate-400">
+            <ArrowRight className="w-5 h-5" />
           </div>
         </div>
       </div>

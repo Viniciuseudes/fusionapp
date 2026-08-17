@@ -61,7 +61,15 @@ export async function GET(request: Request) {
         const roomData = booking.rooms as any;
         const roomName = Array.isArray(roomData) ? roomData[0]?.name : roomData?.name;
 
-        const referenceTime = new Date(booking.checkin_time || booking.start_time).getTime();
+        // ===================================================================
+        // LÓGICA SÊNIOR: REGRA DO MAIOR VALOR (GRACE PERIOD)
+        // Se chegou antes, o relógio oficial começa no horário agendado (start_time).
+        // Se chegou atrasado, o relógio começa no horário do check-in real.
+        // ===================================================================
+        const checkInTimeMs = booking.checkin_time ? new Date(booking.checkin_time).getTime() : 0;
+        const startTimeMs = new Date(booking.start_time).getTime();
+        const referenceTime = Math.max(checkInTimeMs, startTimeMs);
+        
         const diffMinutes = (now.getTime() - referenceTime) / 60000;
 
         // AVISO 1: Aos 45 minutos (Faltam 5 min para a saída ideal)
