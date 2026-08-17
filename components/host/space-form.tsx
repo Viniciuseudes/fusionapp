@@ -64,7 +64,7 @@ import "react-image-crop/dist/ReactCrop.css";
 // IMPORTAÇÃO DA NOVA FUNÇÃO SÊNIOR DE CONVERSÃO DE IMAGENS
 // Certifique-se de que a biblioteca heic2any foi instalada via: npm install heic2any
 // ==========================================
-import { processImageToWebp } from "@/utils/image-utils";
+import { processImageToWebp } from "@/lib/image-utils";
 
 type RoomImage = {
   id: string;
@@ -83,6 +83,7 @@ const SPECIALTIES = [
   "Salas com Maca",
   "Odontologia",
   "Fisioterapia",
+  "Infantil",
 ];
 
 const AMENITIES_LIST = [
