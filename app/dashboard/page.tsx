@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react"; // IMPORTAMOS O SUSPENSE AQUI
-import { useRouter } from "next/navigation";
+import { useState, useEffect, Suspense } from "react";
+import { useRouter, usePathname } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import {
   Search,
@@ -12,7 +12,6 @@ import {
   Loader2,
 } from "lucide-react";
 
-// Importando os componentes
 import { SearchTab } from "@/components/search-tab";
 import { FavoritesTab } from "@/components/favorites-tab";
 import { BookingsTab } from "@/components/bookings-tab";
@@ -26,11 +25,9 @@ import { PushRegistry } from "@/components/push-registry";
 
 type TabType = "search" | "favorites" | "bookings" | "chat" | "profile";
 
-// ==========================================
-// CORREÇÃO SÊNIOR: Transformamos a página antiga no "Conteúdo"
-// ==========================================
 function DashboardContent() {
   const router = useRouter();
+  const pathname = usePathname();
   const supabase = createClient();
 
   const [isDashboardReady, setIsDashboardReady] = useState(false);
@@ -39,6 +36,42 @@ function DashboardContent() {
   const [pendingReviewBooking, setPendingReviewBooking] = useState<any | null>(
     null,
   );
+
+  // ==========================================
+  // CORREÇÃO SÊNIOR: ARMADILHA DO BOTÃO VOLTAR DO ANDROID (PWA)
+  // ==========================================
+  useEffect(() => {
+    // 1. Blinda a página inicial para que o botão voltar nunca jogue para o /login
+    if (!window.history.state?.dashboard_init) {
+      window.history.replaceState({ dashboard_init: true }, "", pathname);
+    }
+
+    // 2. Ouve o clique do botão físico de voltar do celular
+    const handlePopState = (e: PopStateEvent) => {
+      // Se a sala estiver aberta, nós interceptamos e apenas fechamos a sala
+      if (selectedRoom) {
+        setSelectedRoom(null);
+      }
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [selectedRoom, pathname]);
+
+  // Função modificada para abrir a sala e injetar o "estado fantasma" no histórico
+  const handleOpenRoom = (room: any) => {
+    window.history.pushState({ view: "room_detail" }, "", pathname);
+    setSelectedRoom(room);
+  };
+
+  // Função modificada para o botão "voltar" visual da tela
+  const handleCloseRoom = () => {
+    if (window.history.state?.view === "room_detail") {
+      window.history.back(); // Aciona o popstate e fecha naturalmente
+    } else {
+      setSelectedRoom(null);
+    }
+  };
 
   useEffect(() => {
     async function initializeDashboard() {
@@ -58,16 +91,11 @@ function DashboardContent() {
           .eq("id", user.id)
           .single();
 
-        // 1. Se a role for nula, vai pro Onboarding
         if (!profile?.role) {
           router.push("/onboarding");
           return;
         }
 
-        // ==========================================
-        // GUARDIÃO DE ROTA (Segurança de Porta)
-        // Redireciona imediatamente Anfitriões e Admins para seus painéis corretos
-        // ==========================================
         if (profile.role === "host") {
           router.push("/host");
           return;
@@ -78,17 +106,12 @@ function DashboardContent() {
           return;
         }
 
-        // ==========================================
-        // LÓGICA SÊNIOR: FILA DE PRIORIDADE DE MODAIS
-        // Só exibe a avaliação se o usuário já passou pelo Onboarding
-        // ==========================================
         const hasSeenOnboarding = localStorage.getItem(
           `fusion_onboarding_${user.id}`,
         );
 
         if (hasSeenOnboarding) {
           const now = new Date().toISOString();
-
           const { data: bookings } = await supabase
             .from("bookings")
             .select(`id, room_id, start_time, end_time, status, rooms ( name )`)
@@ -131,9 +154,9 @@ function DashboardContent() {
   const renderTab = () => {
     switch (activeTab) {
       case "search":
-        return <SearchTab onOpenRoom={setSelectedRoom} />;
+        return <SearchTab onOpenRoom={handleOpenRoom} />;
       case "favorites":
-        return <FavoritesTab onOpenRoom={setSelectedRoom} />;
+        return <FavoritesTab onOpenRoom={handleOpenRoom} />;
       case "bookings":
         return (
           <BookingsTab
@@ -146,7 +169,7 @@ function DashboardContent() {
       case "profile":
         return <ProfileTab />;
       default:
-        return <SearchTab onOpenRoom={setSelectedRoom} />;
+        return <SearchTab onOpenRoom={handleOpenRoom} />;
     }
   };
 
@@ -266,13 +289,13 @@ function DashboardContent() {
         <RoomDetail
           roomId={selectedRoom.id}
           room={selectedRoom}
-          onBack={() => setSelectedRoom(null)}
+          onBack={handleCloseRoom}
           onNavigateToProfile={() => {
-            setSelectedRoom(null);
+            handleCloseRoom();
             setActiveTab("profile");
           }}
           onNavigateToChat={() => {
-            setSelectedRoom(null);
+            handleCloseRoom();
             setActiveTab("chat");
           }}
           initialModality={selectedRoom.selectedModality || "hora"}
@@ -335,10 +358,6 @@ function MobileNavItem({ icon: Icon, label, isActive, onClick }: any) {
   );
 }
 
-// ==========================================
-// CORREÇÃO SÊNIOR: Export Principal envelopado com Suspense
-// O Next.js/Vercel agora entende que a página está segura para build
-// ==========================================
 export default function DashboardPage() {
   return (
     <Suspense
