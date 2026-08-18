@@ -60,11 +60,7 @@ import ReactCrop, { type Crop, type PixelCrop } from "react-image-crop";
 // @ts-ignore
 import "react-image-crop/dist/ReactCrop.css";
 
-// ==========================================
-// IMPORTAÇÃO DA NOVA FUNÇÃO SÊNIOR DE CONVERSÃO DE IMAGENS
-// Certifique-se de que a biblioteca heic2any foi instalada via: npm install heic2any
-// ==========================================
-import { processImageToWebp } from "@/lib/image-utils";
+import { processImageToWebp } from "@/lib/image-utils"; // ATENÇÃO AQUI: Se trocou para "@/utils", ajuste aqui!
 
 type RoomImage = {
   id: string;
@@ -74,7 +70,6 @@ type RoomImage = {
   isExisting?: boolean;
 };
 
-// Constante com as Especialidades Fixas
 const SPECIALTIES = [
   "Multiuso",
   "Estética",
@@ -83,7 +78,6 @@ const SPECIALTIES = [
   "Salas com Maca",
   "Odontologia",
   "Fisioterapia",
-  "Infantil",
 ];
 
 const AMENITIES_LIST = [
@@ -139,7 +133,7 @@ export function HostSpaceForm({
   const isPartner = initialData?.is_partner || false;
 
   const [loading, setLoading] = useState(false);
-  const [isProcessingImages, setIsProcessingImages] = useState(false); // Novo estado de carregamento de fotos
+  const [isProcessingImages, setIsProcessingImages] = useState(false);
   const [confirmSaveModal, setConfirmSaveModal] = useState(false);
 
   // DADOS BÁSICOS
@@ -253,6 +247,7 @@ export function HostSpaceForm({
           isCover: true,
           isExisting: true,
         });
+
       if (initialData.address_details?.gallery) {
         initialData.address_details.gallery.forEach(
           (url: string, index: number) => {
@@ -283,7 +278,7 @@ export function HostSpaceForm({
         const data = await response.json();
         setAddressSuggestions(data || []);
       } catch (err) {
-        console.error("Erro no autocomplete de endereço:", err);
+        console.error("Erro autocomplete:", err);
       } finally {
         setIsSearchingAddress(false);
       }
@@ -294,31 +289,18 @@ export function HostSpaceForm({
 
   const handleSelectSuggestion = (place: any) => {
     const addr = place.address;
-    const localStreet = addr.road || addr.pedestrian || addr.avenue || "";
-    const localNeighborhood =
-      addr.suburb || addr.neighbourhood || addr.district || "";
-    const localCity = addr.city || addr.town || addr.municipality || "";
-    const stateName = (addr.state || "").toLowerCase();
-    const localUF = STATE_MAP[stateName] || addr.state || "";
-
-    setStreet(localStreet);
-    setNeighborhood(localNeighborhood);
-    setCity(localCity);
-    setStateUF(localUF);
-
+    setStreet(addr.road || addr.pedestrian || addr.avenue || "");
+    setNeighborhood(addr.suburb || addr.neighbourhood || addr.district || "");
+    setCity(addr.city || addr.town || addr.municipality || "");
+    setStateUF(STATE_MAP[(addr.state || "").toLowerCase()] || addr.state || "");
     setAddressSearch(place.display_name);
     setShowSuggestions(false);
-
     toast({
       title: "Endereço selecionado!",
-      description:
-        "Preenchemos os campos estruturais abaixo. Insira apenas o número e os detalhes da sala.",
+      description: "Preenchemos os campos estruturais abaixo.",
     });
   };
 
-  // ==========================================
-  // LÓGICA SÊNIOR DE CONVERSÃO DE IMAGENS
-  // ==========================================
   const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       setIsProcessingImages(true);
@@ -328,13 +310,12 @@ export function HostSpaceForm({
       for (let i = 0; i < fileList.length; i++) {
         try {
           const file = fileList[i];
-          // Transforma qualquer imagem (inclusive HEIC de iPhone) em WebP
-          const webpFile = await processImageToWebp(file);
+          const processedFile = await processImageToWebp(file);
 
           newImages.push({
             id: Math.random().toString(36).substring(7),
-            file: webpFile,
-            preview: URL.createObjectURL(webpFile),
+            file: processedFile,
+            preview: URL.createObjectURL(processedFile),
             isCover: images.length === 0 && i === 0,
             isExisting: false,
           });
@@ -348,10 +329,11 @@ export function HostSpaceForm({
         }
       }
 
-      if (newImages.length > 0) {
-        setImages((prev) => [...prev, ...newImages]);
-      }
+      if (newImages.length > 0) setImages((prev) => [...prev, ...newImages]);
       setIsProcessingImages(false);
+
+      // Limpa o input para permitir selecionar a mesma foto caso o dev teste
+      e.target.value = "";
     }
   };
 
@@ -398,11 +380,18 @@ export function HostSpaceForm({
       canvas.toBlob(
         (blob) => {
           if (!blob) return;
-          // Asseguramos que o crop também seja WebP!
-          const croppedFile = new File([blob], "cropped.webp", {
-            type: "image/webp",
+
+          // CORREÇÃO SÊNIOR NO CROP: respeitando o MIME gerado
+          const mimeType = blob.type;
+          let ext = "webp";
+          if (mimeType === "image/png") ext = "png";
+          if (mimeType === "image/jpeg") ext = "jpg";
+
+          const croppedFile = new File([blob], `cropped.${ext}`, {
+            type: mimeType,
           });
           const newPreview = URL.createObjectURL(blob);
+
           setImages((prev) =>
             prev.map((img) =>
               img.id === croppingId
@@ -417,23 +406,20 @@ export function HostSpaceForm({
           );
           setCropModalOpen(false);
         },
-        "image/webp", // Alterado para WEBP
-        0.9, // Alta qualidade
+        "image/webp",
+        0.9,
       );
     }
   };
 
-  const toggleAmenity = (id: string) => {
+  const toggleAmenity = (id: string) =>
     setAmenities((prev) =>
       prev.includes(id) ? prev.filter((a) => a !== id) : [...prev, id],
     );
-  };
-
-  const toggleSecondarySpecialty = (spec: string) => {
+  const toggleSecondarySpecialty = (spec: string) =>
     setSecondarySpecialties((prev) =>
       prev.includes(spec) ? prev.filter((s) => s !== spec) : [...prev, spec],
     );
-  };
 
   const handlePreSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -476,13 +462,14 @@ export function HostSpaceForm({
           uploadedGallery.push(img.preview);
           if (img.isCover) finalCoverUrl = img.preview;
         } else if (img.file) {
-          // O nome do arquivo já carrega a extensão .webp corretamente
-          const fileName = `${user.id}/${Date.now()}-${Math.random()}.webp`;
+          // CORREÇÃO SÊNIOR NO SUPABASE: Lê dinamicamente a extensão e o content-type final
+          const fileExt = img.file.name.split(".").pop();
+          const mimeType = img.file.type;
+          const fileName = `${user.id}/${Date.now()}-${Math.random()}.${fileExt}`;
+
           const { error: uploadError } = await supabase.storage
             .from("rooms")
-            .upload(fileName, img.file, {
-              contentType: "image/webp", // Define explicitamente para o banco
-            });
+            .upload(fileName, img.file, { contentType: mimeType });
 
           if (uploadError) throw uploadError;
 
@@ -610,7 +597,7 @@ export function HostSpaceForm({
                     <>
                       <Loader2 className="w-8 h-8 mb-2 text-[#f05e23] animate-spin" />
                       <p className="text-sm font-semibold text-[#f05e23]">
-                        Processando fotos (WebP)...
+                        Processando fotos para Alta Qualidade...
                       </p>
                     </>
                   ) : (
@@ -625,7 +612,6 @@ export function HostSpaceForm({
                     </>
                   )}
                 </div>
-                {/* Permite seleção de HEIC diretamente */}
                 <input
                   type="file"
                   className="hidden"
@@ -720,11 +706,7 @@ export function HostSpaceForm({
                         key={spec}
                         type="button"
                         onClick={() => setSpecialty(spec)}
-                        className={`p-3 rounded-xl border-2 text-sm font-bold transition-all text-left flex justify-between items-center ${
-                          specialty === spec
-                            ? "border-[#f05e23] bg-orange-50 text-[#f05e23]"
-                            : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-                        }`}
+                        className={`p-3 rounded-xl border-2 text-sm font-bold transition-all text-left flex justify-between items-center ${specialty === spec ? "border-[#f05e23] bg-orange-50 text-[#f05e23]" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
                       >
                         <span className="truncate pr-2">{spec}</span>
                         {specialty === spec && (
@@ -750,13 +732,9 @@ export function HostSpaceForm({
                         <Badge
                           key={spec}
                           onClick={() => toggleSecondarySpecialty(spec)}
-                          className={`cursor-pointer px-4 py-2 text-xs font-bold border transition-colors ${
-                            isSelected
-                              ? "bg-slate-900 text-white border-slate-900 hover:bg-slate-800"
-                              : "bg-white text-slate-500 border-slate-200 hover:bg-slate-100"
-                          }`}
+                          className={`cursor-pointer px-4 py-2 text-xs font-bold border transition-colors ${isSelected ? "bg-slate-900 text-white border-slate-900 hover:bg-slate-800" : "bg-white text-slate-500 border-slate-200 hover:bg-slate-100"}`}
                         >
-                          {isSelected && <Check className="w-3 h-3 mr-1.5" />}
+                          {isSelected && <Check className="w-3 h-3 mr-1.5" />}{" "}
                           {spec}
                         </Badge>
                       );
@@ -845,7 +823,7 @@ export function HostSpaceForm({
                     Rua / Logradouro
                   </Label>
                   <Input
-                    placeholder="Preenchido automaticamente"
+                    placeholder="Automático"
                     value={street}
                     readOnly
                     className="h-11 bg-slate-100 font-bold text-slate-700"
@@ -886,7 +864,7 @@ export function HostSpaceForm({
                     Complemento
                   </Label>
                   <Input
-                    placeholder="Ponto de referência, bloco..."
+                    placeholder="Ponto de referência..."
                     value={complement}
                     onChange={(e) => setComplement(e.target.value)}
                     className="h-11 bg-white"
@@ -988,13 +966,10 @@ export function HostSpaceForm({
                   <Label className="font-bold">
                     Antecedência Mínima para Reserva
                   </Label>
-                  <p className="text-xs text-slate-500 mb-2">
-                    Com quanto tempo de aviso o profissional pode agendar?
-                  </p>
                   <select
                     value={minNotice}
                     onChange={(e) => setMinNotice(e.target.value)}
-                    className="flex h-11 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f05e23]/20"
+                    className="flex h-11 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium"
                   >
                     <option value="1">Até 1 hora antes</option>
                     <option value="2">Até 2 horas antes</option>
@@ -1004,20 +979,15 @@ export function HostSpaceForm({
                 </div>
                 <div className="space-y-2">
                   <Label className="font-bold">Política de Cancelamento</Label>
-                  <p className="text-xs text-slate-500 mb-2">
-                    Até quando o profissional pode cancelar gratuitamente?
-                  </p>
                   <select
                     value={cancellationPolicy}
                     onChange={(e) => setCancellationPolicy(e.target.value)}
-                    className="flex h-11 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f05e23]/20"
+                    className="flex h-11 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium"
                   >
                     <option value="12">Reembolso até 12h antes</option>
                     <option value="24">Reembolso até 24h antes</option>
                     <option value="48">Reembolso até 48h antes</option>
-                    <option value="0">
-                      Sem reembolso (Cancelamento Rigoroso)
-                    </option>
+                    <option value="0">Sem reembolso (Rigoroso)</option>
                   </select>
                 </div>
               </div>
@@ -1058,7 +1028,6 @@ export function HostSpaceForm({
                         Locação Por Hora (Dinâmico)
                       </Label>
                     </div>
-
                     <div className="flex items-center gap-2">
                       {!isPartner ? (
                         <>
@@ -1084,29 +1053,22 @@ export function HostSpaceForm({
                                   <strong className="text-orange-400">
                                     Fusion Partner
                                   </strong>{" "}
-                                  podem oferecer locação flexível Por Hora. Após
-                                  concluir este cadastro, acesse seu painel para
-                                  solicitar a auditoria da nossa equipe.
+                                  podem oferecer locação flexível Por Hora.
                                 </p>
                               </TooltipContent>
                             </Tooltip>
                           </TooltipProvider>
                         </>
                       ) : (
-                        <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100 font-black border-0 px-3 py-1 shadow-sm">
+                        <Badge className="bg-orange-100 text-orange-700 font-black border-0 px-3 py-1 shadow-sm">
                           <Star className="w-3.5 h-3.5 fill-orange-500 text-orange-500 mr-1.5" />{" "}
                           Fusion Partner
                         </Badge>
                       )}
                     </div>
                   </div>
-
                   {modalities.includes("hora") && isPartner && (
                     <div className="pt-2 animate-in fade-in slide-in-from-top-2">
-                      <p className="text-sm text-slate-500 font-medium mb-5">
-                        Maximize seus lucros definindo valores estratégicos para
-                        diferentes períodos.
-                      </p>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
                           <div className="absolute top-0 left-0 w-1 h-full bg-[#f05e23]" />
@@ -1116,9 +1078,6 @@ export function HostSpaceForm({
                               Comercial
                             </h4>
                           </div>
-                          <p className="text-[10px] text-slate-500 font-medium mb-3">
-                            Seg a Sex (08h às 18h)
-                          </p>
                           <div className="relative">
                             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-black">
                               R$
@@ -1135,7 +1094,6 @@ export function HostSpaceForm({
                             />
                           </div>
                         </div>
-
                         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
                           <div className="absolute top-0 left-0 w-1 h-full bg-indigo-500" />
                           <div className="flex items-center gap-2 mb-1">
@@ -1144,16 +1102,13 @@ export function HostSpaceForm({
                               Noturno
                             </h4>
                           </div>
-                          <p className="text-[10px] text-slate-500 font-medium mb-3">
-                            Seg a Sex (18h às 08h)
-                          </p>
                           <div className="relative">
                             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-black">
                               R$
                             </span>
                             <Input
                               type="number"
-                              placeholder="Ex: 55"
+                              placeholder="55"
                               value={prices.afterHours}
                               onChange={(e) =>
                                 setPrices({
@@ -1161,11 +1116,10 @@ export function HostSpaceForm({
                                   afterHours: e.target.value,
                                 })
                               }
-                              className="w-full pl-9 h-11 bg-slate-50 border-slate-200 font-bold focus-visible:ring-indigo-500/20 focus-visible:border-indigo-500"
+                              className="w-full pl-9 h-11 bg-slate-50 border-slate-200 font-bold"
                             />
                           </div>
                         </div>
-
                         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
                           <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500" />
                           <div className="flex items-center gap-2 mb-1">
@@ -1174,16 +1128,13 @@ export function HostSpaceForm({
                               Fim de Semana
                             </h4>
                           </div>
-                          <p className="text-[10px] text-slate-500 font-medium mb-3">
-                            Sábados e Domingos
-                          </p>
                           <div className="relative">
                             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-black">
                               R$
                             </span>
                             <Input
                               type="number"
-                              placeholder="Ex: 65"
+                              placeholder="65"
                               value={prices.weekend}
                               onChange={(e) =>
                                 setPrices({
@@ -1191,7 +1142,7 @@ export function HostSpaceForm({
                                   weekend: e.target.value,
                                 })
                               }
-                              className="w-full pl-9 h-11 bg-slate-50 border-slate-200 font-bold focus-visible:ring-emerald-500/20 focus-visible:border-emerald-500"
+                              className="w-full pl-9 h-11 bg-slate-50 border-slate-200 font-bold"
                             />
                           </div>
                         </div>
@@ -1231,7 +1182,7 @@ export function HostSpaceForm({
                             R$
                           </span>
                           <Input
-                            placeholder="Ex: 100"
+                            placeholder="100"
                             value={prices.morning}
                             onChange={(e) =>
                               setPrices({ ...prices, morning: e.target.value })
@@ -1249,7 +1200,7 @@ export function HostSpaceForm({
                             R$
                           </span>
                           <Input
-                            placeholder="Ex: 120"
+                            placeholder="120"
                             value={prices.afternoon}
                             onChange={(e) =>
                               setPrices({
@@ -1270,7 +1221,7 @@ export function HostSpaceForm({
                             R$
                           </span>
                           <Input
-                            placeholder="Ex: 150"
+                            placeholder="150"
                             value={prices.night}
                             onChange={(e) =>
                               setPrices({ ...prices, night: e.target.value })
@@ -1313,7 +1264,7 @@ export function HostSpaceForm({
                           R$
                         </span>
                         <Input
-                          placeholder="Ex: 2500"
+                          placeholder="2500"
                           value={prices.monthly}
                           onChange={(e) =>
                             setPrices({ ...prices, monthly: e.target.value })
