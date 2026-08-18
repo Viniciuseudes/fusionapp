@@ -12,6 +12,7 @@ import {
   Loader2,
 } from "lucide-react";
 
+// Importando os componentes
 import { SearchTab } from "@/components/search-tab";
 import { FavoritesTab } from "@/components/favorites-tab";
 import { BookingsTab } from "@/components/bookings-tab";
@@ -38,38 +39,48 @@ function DashboardContent() {
   );
 
   // ==========================================
-  // CORREÇÃO SÊNIOR: ARMADILHA DO BOTÃO VOLTAR DO ANDROID (PWA)
+  // CORREÇÃO SÊNIOR: A ARMADILHA DE HASH (PWA)
+  // Essa lógica amarra os componentes do React à linha do tempo do Android
   // ==========================================
   useEffect(() => {
-    // 1. Blinda a página inicial para que o botão voltar nunca jogue para o /login
-    if (!window.history.state?.dashboard_init) {
-      window.history.replaceState({ dashboard_init: true }, "", pathname);
+    // 1. Ao montar o Dashboard, injetamos a âncora base (#app)
+    if (!window.location.hash || window.location.hash === "") {
+      window.history.replaceState(null, "", window.location.pathname + "#app");
     }
 
-    // 2. Ouve o clique do botão físico de voltar do celular
     const handlePopState = (e: PopStateEvent) => {
-      // Se a sala estiver aberta, nós interceptamos e apenas fechamos a sala
-      if (selectedRoom) {
+      const currentHash = window.location.hash;
+
+      // 2. O Escudo Final: Se o Android tentou remover o hash e fechar o app/ir pro login
+      // Nós prendemos o usuário de volta no #app
+      if (currentHash === "") {
+        window.history.pushState(null, "", window.location.pathname + "#app");
+        return;
+      }
+
+      // 3. Voltar página a página: Se o hash sumiu (deixou de ser #room), nós fechamos a tela da sala!
+      if (currentHash !== "#room") {
         setSelectedRoom(null);
       }
     };
 
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [selectedRoom, pathname]);
+  }, []); // Sem dependências para não criar loops na memória
 
-  // Função modificada para abrir a sala e injetar o "estado fantasma" no histórico
+  // Nova função de ABRIR a sala injetando o hash
   const handleOpenRoom = (room: any) => {
-    window.history.pushState({ view: "room_detail" }, "", pathname);
     setSelectedRoom(room);
+    window.history.pushState(null, "", window.location.pathname + "#room");
   };
 
-  // Função modificada para o botão "voltar" visual da tela
+  // Nova função de FECHAR a sala pela UI sincronizada com o Android
   const handleCloseRoom = () => {
-    if (window.history.state?.view === "room_detail") {
-      window.history.back(); // Aciona o popstate e fecha naturalmente
+    if (window.location.hash === "#room") {
+      window.history.back(); // Isso avisa o Android para recuar, disparando o evento que fecha a sala
     } else {
       setSelectedRoom(null);
+      window.history.replaceState(null, "", window.location.pathname + "#app");
     }
   };
 
@@ -112,6 +123,7 @@ function DashboardContent() {
 
         if (hasSeenOnboarding) {
           const now = new Date().toISOString();
+
           const { data: bookings } = await supabase
             .from("bookings")
             .select(`id, room_id, start_time, end_time, status, rooms ( name )`)
