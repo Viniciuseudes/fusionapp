@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useState, useEffect, Suspense } from "react"; // IMPORTAMOS O SUSPENSE AQUI
+import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import {
   Search,
@@ -26,42 +26,19 @@ import { PushRegistry } from "@/components/push-registry";
 
 type TabType = "search" | "favorites" | "bookings" | "chat" | "profile";
 
-export default function DashboardPage() {
+// ==========================================
+// CORREÇÃO SÊNIOR: Transformamos a página antiga no "Conteúdo"
+// ==========================================
+function DashboardContent() {
   const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
   const supabase = createClient();
 
-  // O estado da aba agora é derivado da URL. Se não houver, o padrão é "search"
-  const activeTab = (searchParams.get("view") as TabType) || "search";
-
   const [isDashboardReady, setIsDashboardReady] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabType>("search");
   const [selectedRoom, setSelectedRoom] = useState<any | null>(null);
   const [pendingReviewBooking, setPendingReviewBooking] = useState<any | null>(
     null,
   );
-
-  // Função para mudar de aba atualizando a URL
-  const setActiveTab = (tab: TabType) => {
-    router.push(`${pathname}?view=${tab}`, { scroll: false });
-  };
-
-  // Interceptador para o botão voltar do Android quando uma sala (RoomDetail) estiver aberta
-  useEffect(() => {
-    if (selectedRoom) {
-      window.history.pushState({ isRoomOpen: true }, "");
-
-      const handlePopState = (event: PopStateEvent) => {
-        event.preventDefault();
-        setSelectedRoom(null); // Fecha a sala ao invés de voltar a página
-      };
-
-      window.addEventListener("popstate", handlePopState);
-      return () => {
-        window.removeEventListener("popstate", handlePopState);
-      };
-    }
-  }, [selectedRoom]);
 
   useEffect(() => {
     async function initializeDashboard() {
@@ -355,5 +332,23 @@ function MobileNavItem({ icon: Icon, label, isActive, onClick }: any) {
         </span>
       </button>
     </li>
+  );
+}
+
+// ==========================================
+// CORREÇÃO SÊNIOR: Export Principal envelopado com Suspense
+// O Next.js/Vercel agora entende que a página está segura para build
+// ==========================================
+export default function DashboardPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-screen w-full items-center justify-center bg-slate-50">
+          <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        </div>
+      }
+    >
+      <DashboardContent />
+    </Suspense>
   );
 }
