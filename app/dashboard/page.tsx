@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import {
   Search,
@@ -28,14 +28,40 @@ type TabType = "search" | "favorites" | "bookings" | "chat" | "profile";
 
 export default function DashboardPage() {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const supabase = createClient();
 
+  // O estado da aba agora é derivado da URL. Se não houver, o padrão é "search"
+  const activeTab = (searchParams.get("view") as TabType) || "search";
+
   const [isDashboardReady, setIsDashboardReady] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabType>("search");
   const [selectedRoom, setSelectedRoom] = useState<any | null>(null);
   const [pendingReviewBooking, setPendingReviewBooking] = useState<any | null>(
     null,
   );
+
+  // Função para mudar de aba atualizando a URL
+  const setActiveTab = (tab: TabType) => {
+    router.push(`${pathname}?view=${tab}`, { scroll: false });
+  };
+
+  // Interceptador para o botão voltar do Android quando uma sala (RoomDetail) estiver aberta
+  useEffect(() => {
+    if (selectedRoom) {
+      window.history.pushState({ isRoomOpen: true }, "");
+
+      const handlePopState = (event: PopStateEvent) => {
+        event.preventDefault();
+        setSelectedRoom(null); // Fecha a sala ao invés de voltar a página
+      };
+
+      window.addEventListener("popstate", handlePopState);
+      return () => {
+        window.removeEventListener("popstate", handlePopState);
+      };
+    }
+  }, [selectedRoom]);
 
   useEffect(() => {
     async function initializeDashboard() {
