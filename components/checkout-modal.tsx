@@ -11,10 +11,12 @@ import {
   ArrowRight,
   CheckCircle2,
   Clock,
+  TimerReset,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { useToast } from "@/hooks/use-toast";
 
 export interface CheckoutSummary {
   durationHours: number;
@@ -48,34 +50,29 @@ export function CheckoutModal({
   selectedDate,
   totalBaseBRL,
 }: CheckoutModalProps) {
+  const { toast } = useToast();
   const [paymentMethod, setPaymentMethod] = useState<"wallet" | "pix" | "card">(
     "wallet",
   );
 
   // ==========================================
-  // ARQUITETURA SÊNIOR: SMART MODAL HISTORY
-  // Ensina o Android a fechar o modal corretamente no botão voltar
+  // ESTADO DO CRONÔMETRO (5 MINUTOS)
   // ==========================================
+  const [timeLeft, setTimeLeft] = useState(5 * 60);
+
+  // Escudo PWA (Android Back Button)
   useEffect(() => {
     if (isOpen) {
-      // 1. Quando o modal abre, empurramos "/checkout" na URL (invisível)
       window.history.pushState(
         { modal: "checkout" },
         "",
         window.location.hash + "/checkout",
       );
-
-      const handlePop = () => {
-        // 2. Se o usuário apertar o botão físico do Android, disparamos o fechamento do React
-        onClose();
-      };
-
+      const handlePop = () => onClose();
       window.addEventListener("popstate", handlePop);
 
       return () => {
         window.removeEventListener("popstate", handlePop);
-        // 3. O SEGREDO: Se o modal foi fechado no botão "X" ou finalizou a compra,
-        // mas a URL ainda tem a sujeira do "checkout", nós forçamos a limpeza da linha do tempo!
         if (window.history.state?.modal === "checkout") {
           window.history.back();
         }
@@ -83,17 +80,58 @@ export function CheckoutModal({
     }
   }, [isOpen, onClose]);
 
+  // Motor do Cronômetro
+  useEffect(() => {
+    if (isOpen) {
+      setTimeLeft(5 * 60); // Reseta para 5 minutos sempre que abre
+      const timer = setInterval(() => {
+        setTimeLeft((prev) => {
+          if (prev <= 1) {
+            clearInterval(timer);
+            onClose(); // Fecha o modal
+            toast({
+              variant: "destructive",
+              title: "Tempo Esgotado ⏰",
+              description:
+                "Os horários foram liberados para outros usuários. Tente reservar novamente.",
+            });
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      return () => clearInterval(timer);
+    }
+  }, [isOpen, onClose, toast]);
+
   if (!isOpen || !summary || !room) return null;
 
   const dateFormatted = format(selectedDate, "dd 'de' MMMM, yyyy", {
     locale: ptBR,
   });
-
   const totalBRL = totalBaseBRL + summary.upgradeFeeBRL;
+
+  // Formatação do tempo (MM:SS)
+  const minutes = Math.floor(timeLeft / 60);
+  const seconds = timeLeft % 60;
+  const timeFormatted = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  const isTimeRunningOut = timeLeft < 60; // Fica vermelho no último minuto
 
   return (
     <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
       <div className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-300 max-h-[95vh]">
+        {/* BANNER DO CRONÔMETRO */}
+        <div
+          className={`px-6 py-2.5 flex items-center justify-center gap-2 transition-colors ${isTimeRunningOut ? "bg-red-500 text-white" : "bg-slate-900 text-white"}`}
+        >
+          <TimerReset className="w-4 h-4 animate-pulse" />
+          <p className="text-xs font-bold tracking-widest uppercase">
+            Horários bloqueados para você por{" "}
+            <span className="font-black text-sm ml-1">{timeFormatted}</span>
+          </p>
+        </div>
+
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-white">
           <h2 className="text-lg font-bold text-slate-900">Revisar Reserva</h2>
           <button
@@ -331,8 +369,8 @@ export function CheckoutModal({
               ) : (
                 <Button
                   onClick={() => onConfirm(paymentMethod)}
-                  disabled={loading}
-                  className="w-full h-14 rounded-xl font-black bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-md transition-all text-base"
+                  disabled={loading || (isTimeRunningOut && timeLeft === 0)}
+                  className="w-full h-14 rounded-xl font-black bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-md transition-all text-base disabled:opacity-50"
                 >
                   {loading ? (
                     "Processando..."

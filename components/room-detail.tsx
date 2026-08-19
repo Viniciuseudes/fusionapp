@@ -50,6 +50,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { CheckoutModal, CheckoutSummary } from "@/components/checkout-modal";
+import { useMobileBack } from "@/hooks/use-mobile-back";
 
 const AMENITIES_LIST = [
   { id: "wifi", label: "Wi-Fi de alta velocidade", icon: Wifi },
@@ -119,6 +120,27 @@ export function RoomDetail(props: RoomDetailProps) {
 
   const [showProfileModal, setShowProfileModal] = useState(false);
 
+  useMobileBack(
+    isCheckoutOpen,
+    () => setIsCheckoutOpen(false),
+    "checkout-modal",
+  );
+  useMobileBack(
+    isAllPhotosOpen,
+    () => setIsAllPhotosOpen(false),
+    "galeria-fotos",
+  );
+  useMobileBack(
+    isLightboxOpen,
+    () => setIsLightboxOpen(false),
+    "foto-ampliada",
+  );
+  useMobileBack(
+    showProfileModal,
+    () => setShowProfileModal(false),
+    "modal-perfil-incompleto",
+  );
+
   useEffect(() => {
     let isMounted = true;
     const rawInput = props.roomId || props.room;
@@ -166,19 +188,48 @@ export function RoomDetail(props: RoomDetailProps) {
   }, [props.roomId, props.room, initialModality, supabase]);
 
   useEffect(() => {
+    if (!roomData?.id) return;
+
+    let channel: any;
+
     async function fetchRoomBookings() {
-      if (!roomData?.id) return;
       const { data, error } = await supabase
         .from("bookings")
-        .select("start_time, end_time, status")
+        .select("id, start_time, end_time, status")
         .eq("room_id", roomData.id)
-        .in("status", ["confirmed", "pending_payment", "completed"]);
+        .in("status", [
+          "confirmed",
+          "pending_payment",
+          "completed",
+          "locked_temp",
+        ]);
 
       if (!error && data) {
         setRoomBookings(data);
       }
     }
+
     fetchRoomBookings();
+
+    channel = supabase
+      .channel(`room_bookings_${roomData.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "bookings",
+          filter: `room_id=eq.${roomData.id}`,
+        },
+        () => {
+          fetchRoomBookings();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      if (channel) supabase.removeChannel(channel);
+    };
   }, [roomData?.id, supabase]);
 
   useEffect(() => {
@@ -236,9 +287,6 @@ export function RoomDetail(props: RoomDetailProps) {
         ).toFixed(1)
       : "Novo";
 
-  // ==========================================
-  // GERAÇÃO DE SLOTS COM HORA CLÍNICA (50 MIN) BLINDADA
-  // ==========================================
   const availableSlots = useMemo(() => {
     if (!roomData || activeTab !== "hora") return [];
     let avail = roomData.availability;
@@ -279,14 +327,13 @@ export function RoomDetail(props: RoomDetailProps) {
           const parts = h.split("-");
           if (parts.length < 2) return h;
 
-          // BUGFIX: Limpa a sujeira do banco e extrai SÓ o número da hora (Ex: "18h00" vira 18)
           const rawStart = parts[0].trim().replace("h", ":");
           const hourNumber = parseInt(rawStart.split(":")[0], 10);
 
           if (isNaN(hourNumber)) return "";
 
           const formattedHour = hourNumber.toString().padStart(2, "0");
-          return `${formattedHour}:00 - ${formattedHour}:50`; // Garante sempre "18:00 - 18:50"
+          return `${formattedHour}:00 - ${formattedHour}:50`;
         })
         .filter(Boolean);
     }
@@ -510,20 +557,56 @@ export function RoomDetail(props: RoomDetailProps) {
         return;
       }
 
-      // FLUXO DE RESERVA POR HORA
       if (activeTab === "hora") {
         if (!selectedDate || isNaN(selectedDate.getTime())) {
           throw new Error("A data base selecionada é inválida.");
         }
 
         const sortedSlots = [...selectedSlots].sort();
-        const firstSlot = sortedSlots[0];
 
+        // Verifica colisão DE NOVO antes de gerar os locks
+        for (const slotKey of sortedSlots) {
+          if (isSlotBooked(slotKey)) {
+            setSelectedSlots([]);
+            throw new Error(
+              "Um dos horários selecionados acabou de ser reservado por outra pessoa. Atualize a página.",
+            );
+          }
+        }
+
+        const bookingPayloads = sortedSlots.map((slotKey) => {
+          const [dateStr, slotTime] = slotKey.split("|");
+          const startSlotStr = slotTime.split(" - ")[0];
+          const endSlotStr = slotTime.split(" - ")[1];
+
+          const startTime = parseSlotDate(dateStr, startSlotStr);
+          const endTime = parseSlotDate(dateStr, endSlotStr);
+
+          return {
+            user_id: user.id,
+            room_id: roomData.id,
+            start_time: startTime.toISOString(),
+            end_time: endTime.toISOString(),
+            total_cost: 0,
+            status: "locked_temp",
+          };
+        });
+
+        const { data: lockedData, error: lockError } = await supabase
+          .from("bookings")
+          .insert(bookingPayloads)
+          .select("id");
+
+        if (lockError) {
+          throw new Error(
+            "Erro ao criar reserva temporária. Horário indisponível.",
+          );
+        }
+
+        const firstSlot = sortedSlots[0];
         const [startDateStr, startTimeStr] = firstSlot.split("|");
         const startSlotStr = startTimeStr.split(" - ")[0];
-
         const startDate = parseSlotDate(startDateStr, startSlotStr);
-
         const totalHours = selectedSlots.length;
         const endDateForApi = new Date(
           startDate.getTime() + totalHours * 60 * 60 * 1000,
@@ -541,19 +624,20 @@ export function RoomDetail(props: RoomDetailProps) {
 
         const contentType = response.headers.get("content-type");
         if (!contentType || !contentType.includes("application/json")) {
-          throw new Error(
-            "Erro de rota: A API de pagamento não foi encontrada.",
-          );
+          throw new Error("Erro de rota: A API de cálculo não foi encontrada.");
         }
 
         const summaryData = await response.json();
         if (!response.ok)
           throw new Error(summaryData.error || "Erro ao calcular valores.");
 
-        setCheckoutSummary(summaryData);
+        // Guardamos os IDs dos locks para o modal confirmar ou deletar
+        setCheckoutSummary({
+          ...summaryData,
+          lockIds: lockedData.map((d: any) => d.id),
+        });
         setIsCheckoutOpen(true);
       } else {
-        // FLUXO DE NEGOCIAÇÃO (Turno e Fixo)
         toast({
           title: "Iniciando negociação...",
           description: "Criando canal seguro com o anfitrião e a Fusion...",
@@ -612,33 +696,21 @@ export function RoomDetail(props: RoomDetailProps) {
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuário não autenticado.");
 
+      const lockIds = (checkoutSummary as any).lockIds;
+
       if (method === "wallet") {
         const creditCostPerHour =
           checkoutSummary.creditsRequired / selectedSlots.length;
 
-        const bookingPayloads = selectedSlots.map((slotKey) => {
-          const [dateStr, slotTime] = slotKey.split("|");
-          const startSlotStr = slotTime.split(" - ")[0];
-          const endSlotStr = slotTime.split(" - ")[1];
-
-          // AQUI SALVAMOS A HORA CLÍNICA REAL NO BANCO (08:00 - 08:50)
-          const startTime = parseSlotDate(dateStr, startSlotStr);
-          const endTime = parseSlotDate(dateStr, endSlotStr);
-
-          return {
-            user_id: user.id,
-            room_id: roomData.id,
-            start_time: startTime.toISOString(),
-            end_time: endTime.toISOString(),
+        const { error: updateError } = await supabase
+          .from("bookings")
+          .update({
             total_cost: creditCostPerHour,
             status: "confirmed",
-          };
-        });
+          })
+          .in("id", lockIds);
 
-        const { error: bookingError } = await supabase
-          .from("bookings")
-          .insert(bookingPayloads);
-        if (bookingError) throw bookingError;
+        if (updateError) throw updateError;
 
         const { error: walletError } = await supabase
           .from("wallet_transactions")
@@ -657,6 +729,7 @@ export function RoomDetail(props: RoomDetailProps) {
         });
         setIsCheckoutOpen(false);
         setCheckoutSummary(null);
+        setSelectedSlots([]);
         onBack();
       } else {
         toast({
@@ -666,29 +739,15 @@ export function RoomDetail(props: RoomDetailProps) {
 
         const paymentRef = `REF_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
 
-        const bookingPayloads = selectedSlots.map((slotKey) => {
-          const [dateStr, slotTime] = slotKey.split("|");
-          const startSlotStr = slotTime.split(" - ")[0];
-          const endSlotStr = slotTime.split(" - ")[1];
-
-          const startTime = parseSlotDate(dateStr, startSlotStr);
-          const endTime = parseSlotDate(dateStr, endSlotStr);
-
-          return {
-            user_id: user.id,
-            room_id: roomData.id,
-            start_time: startTime.toISOString(),
-            end_time: endTime.toISOString(),
-            total_cost: 0,
+        const { error: updateError } = await supabase
+          .from("bookings")
+          .update({
             status: "pending_payment",
             asaas_payment_id: paymentRef,
-          };
-        });
+          })
+          .in("id", lockIds);
 
-        const { error: bookingError } = await supabase
-          .from("bookings")
-          .insert(bookingPayloads);
-        if (bookingError) throw bookingError;
+        if (updateError) throw updateError;
 
         const response = await fetch("/api/checkout", {
           method: "POST",
@@ -699,6 +758,7 @@ export function RoomDetail(props: RoomDetailProps) {
             paymentRef: paymentRef,
           }),
         });
+
         const data = await response.json();
         if (!response.ok) throw new Error(data.error);
 
@@ -714,6 +774,15 @@ export function RoomDetail(props: RoomDetailProps) {
     } finally {
       setActionLoading(false);
     }
+  };
+
+  const handleCheckoutClose = async () => {
+    setIsCheckoutOpen(false);
+    if (checkoutSummary && (checkoutSummary as any).lockIds) {
+      const lockIds = (checkoutSummary as any).lockIds;
+      await supabase.from("bookings").delete().in("id", lockIds);
+    }
+    setCheckoutSummary(null);
   };
 
   const handleFavoriteToggle = async () => {
@@ -1755,7 +1824,7 @@ export function RoomDetail(props: RoomDetailProps) {
 
       <CheckoutModal
         isOpen={isCheckoutOpen}
-        onClose={() => setIsCheckoutOpen(false)}
+        onClose={handleCheckoutClose}
         onConfirm={(method) => {
           handleConfirmCheckout(method);
         }}
