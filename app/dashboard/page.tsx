@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, Suspense } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import {
   Search,
@@ -28,7 +28,6 @@ type TabType = "search" | "favorites" | "bookings" | "chat" | "profile";
 
 function DashboardContent() {
   const router = useRouter();
-  const pathname = usePathname();
   const supabase = createClient();
 
   const [isDashboardReady, setIsDashboardReady] = useState(false);
@@ -39,51 +38,107 @@ function DashboardContent() {
   );
 
   // ==========================================
-  // CORREÇÃO SÊNIOR: A ARMADILHA DE HASH (PWA)
-  // Essa lógica amarra os componentes do React à linha do tempo do Android
+  // ARQUITETURA SÊNIOR: HASH ROUTER PARA PWA
+  // Resolve o botão físico de voltar do Android e gera URLs únicas
   // ==========================================
   useEffect(() => {
-    // 1. Ao montar o Dashboard, injetamos a âncora base (#app)
-    if (!window.location.hash || window.location.hash === "") {
-      window.history.replaceState(null, "", window.location.pathname + "#app");
-    }
+    const handlePopState = () => {
+      // Pega o hash atual sem o '#'
+      const hash = window.location.hash.replace("#", "");
 
-    const handlePopState = (e: PopStateEvent) => {
-      const currentHash = window.location.hash;
-
-      // 2. O Escudo Final: Se o Android tentou remover o hash e fechar o app/ir pro login
-      // Nós prendemos o usuário de volta no #app
-      if (currentHash === "") {
-        window.history.pushState(null, "", window.location.pathname + "#app");
+      // 1. Se o usuário voltou até a raiz do dashboard (sem hash), prende ele na busca.
+      // Isso impede que o app feche acidentalmente ou volte pro Login
+      if (!hash) {
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + "#search",
+        );
+        setActiveTab("search");
+        setSelectedRoom(null);
         return;
       }
 
-      // 3. Voltar página a página: Se o hash sumiu (deixou de ser #room), nós fechamos a tela da sala!
-      if (currentHash !== "#room") {
+      // 2. Se a URL for uma sala (ex: #room/uuid-1234), mantém a sala aberta
+      if (hash.startsWith("room/")) {
+        return;
+      }
+
+      // 3. Se a URL for uma Aba do Menu, fecha a sala (se houver) e navega pra aba
+      if (
+        ["search", "favorites", "bookings", "chat", "profile"].includes(hash)
+      ) {
         setSelectedRoom(null);
+        setActiveTab(hash as TabType);
       }
     };
 
+    // Sincronização inicial quando a página carrega
+    if (!window.location.hash) {
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + "#search",
+      );
+    } else {
+      const hash = window.location.hash.replace("#", "");
+      if (
+        ["search", "favorites", "bookings", "chat", "profile"].includes(hash)
+      ) {
+        setActiveTab(hash as TabType);
+      } else if (hash.startsWith("room/")) {
+        // Se a pessoa deu F5 (reload) na sala, o state da sala foi limpo da memória.
+        // Volto a pessoa com segurança para a tela de busca.
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + "#search",
+        );
+        setActiveTab("search");
+      }
+    }
+
+    // Liga o "ouvinte" do botão físico do celular
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, []); // Sem dependências para não criar loops na memória
+  }, []);
 
-  // Nova função de ABRIR a sala injetando o hash
-  const handleOpenRoom = (room: any) => {
-    setSelectedRoom(room);
-    window.history.pushState(null, "", window.location.pathname + "#room");
+  // Controladores de Navegação (Eles informam o Android do que está acontecendo)
+  const handleTabChange = (tab: TabType) => {
+    if (activeTab === tab && !selectedRoom) return; // Evita empilhar o mesmo click
+    setActiveTab(tab);
+    setSelectedRoom(null);
+    window.history.pushState(null, "", window.location.pathname + "#" + tab);
   };
 
-  // Nova função de FECHAR a sala pela UI sincronizada com o Android
+  const handleOpenRoom = (room: any) => {
+    setSelectedRoom(room);
+    // Cria a URL única da Sala! (Ex: #room/1234-uuid)
+    window.history.pushState(
+      null,
+      "",
+      window.location.pathname + "#room/" + room.id,
+    );
+  };
+
   const handleCloseRoom = () => {
-    if (window.location.hash === "#room") {
-      window.history.back(); // Isso avisa o Android para recuar, disparando o evento que fecha a sala
+    if (window.location.hash.startsWith("#room/")) {
+      window.history.back(); // Pede ao Android para dar 1 passo atrás e fechar a sala
     } else {
       setSelectedRoom(null);
-      window.history.replaceState(null, "", window.location.pathname + "#app");
     }
   };
 
+  const handleNavigateFromRoom = (tab: TabType) => {
+    setSelectedRoom(null);
+    setActiveTab(tab);
+    // Troca o hash da sala pelo hash da aba (replace não cria lixo na linha do tempo)
+    window.history.replaceState(null, "", window.location.pathname + "#" + tab);
+  };
+
+  // ==========================================
+  // INICIALIZAÇÃO DE DADOS (Igual antes)
+  // ==========================================
   useEffect(() => {
     async function initializeDashboard() {
       try {
@@ -123,7 +178,6 @@ function DashboardContent() {
 
         if (hasSeenOnboarding) {
           const now = new Date().toISOString();
-
           const { data: bookings } = await supabase
             .from("bookings")
             .select(`id, room_id, start_time, end_time, status, rooms ( name )`)
@@ -172,8 +226,8 @@ function DashboardContent() {
       case "bookings":
         return (
           <BookingsTab
-            onNavigateToSearch={() => setActiveTab("search")}
-            onNavigateToChat={() => setActiveTab("chat")}
+            onNavigateToSearch={() => handleTabChange("search")}
+            onNavigateToChat={() => handleTabChange("chat")}
           />
         );
       case "chat":
@@ -224,31 +278,31 @@ function DashboardContent() {
               icon={Search}
               label="Explorar Salas"
               isActive={activeTab === "search"}
-              onClick={() => setActiveTab("search")}
+              onClick={() => handleTabChange("search")}
             />
             <DesktopNavItem
               icon={Heart}
               label="Favoritos"
               isActive={activeTab === "favorites"}
-              onClick={() => setActiveTab("favorites")}
+              onClick={() => handleTabChange("favorites")}
             />
             <DesktopNavItem
               icon={Calendar}
               label="Minhas Reservas"
               isActive={activeTab === "bookings"}
-              onClick={() => setActiveTab("bookings")}
+              onClick={() => handleTabChange("bookings")}
             />
             <DesktopNavItem
               icon={MessageSquare}
               label="Mensagens"
               isActive={activeTab === "chat"}
-              onClick={() => setActiveTab("chat")}
+              onClick={() => handleTabChange("chat")}
             />
             <DesktopNavItem
               icon={User}
               label="Meu Perfil"
               isActive={activeTab === "profile"}
-              onClick={() => setActiveTab("profile")}
+              onClick={() => handleTabChange("profile")}
             />
           </ul>
         </aside>
@@ -267,31 +321,31 @@ function DashboardContent() {
               icon={Search}
               label="Buscar"
               isActive={activeTab === "search"}
-              onClick={() => setActiveTab("search")}
+              onClick={() => handleTabChange("search")}
             />
             <MobileNavItem
               icon={Heart}
               label="Favoritos"
               isActive={activeTab === "favorites"}
-              onClick={() => setActiveTab("favorites")}
+              onClick={() => handleTabChange("favorites")}
             />
             <MobileNavItem
               icon={Calendar}
               label="Reservas"
               isActive={activeTab === "bookings"}
-              onClick={() => setActiveTab("bookings")}
+              onClick={() => handleTabChange("bookings")}
             />
             <MobileNavItem
               icon={MessageSquare}
               label="Inbox"
               isActive={activeTab === "chat"}
-              onClick={() => setActiveTab("chat")}
+              onClick={() => handleTabChange("chat")}
             />
             <MobileNavItem
               icon={User}
               label="Perfil"
               isActive={activeTab === "profile"}
-              onClick={() => setActiveTab("profile")}
+              onClick={() => handleTabChange("profile")}
             />
           </ul>
         </nav>
@@ -302,14 +356,8 @@ function DashboardContent() {
           roomId={selectedRoom.id}
           room={selectedRoom}
           onBack={handleCloseRoom}
-          onNavigateToProfile={() => {
-            handleCloseRoom();
-            setActiveTab("profile");
-          }}
-          onNavigateToChat={() => {
-            handleCloseRoom();
-            setActiveTab("chat");
-          }}
+          onNavigateToProfile={() => handleNavigateFromRoom("profile")}
+          onNavigateToChat={() => handleNavigateFromRoom("chat")}
           initialModality={selectedRoom.selectedModality || "hora"}
         />
       )}
