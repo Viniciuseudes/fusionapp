@@ -197,12 +197,7 @@ export function RoomDetail(props: RoomDetailProps) {
         .from("bookings")
         .select("id, start_time, end_time, status")
         .eq("room_id", roomData.id)
-        .in("status", [
-          "confirmed",
-          "pending_payment",
-          "completed",
-          "locked_temp",
-        ]);
+        .in("status", ["confirmed", "pending_payment", "completed"]);
 
       if (!error && data) {
         setRoomBookings(data);
@@ -564,7 +559,6 @@ export function RoomDetail(props: RoomDetailProps) {
 
         const sortedSlots = [...selectedSlots].sort();
 
-        // Verifica colisão DE NOVO antes de gerar os locks
         for (const slotKey of sortedSlots) {
           if (isSlotBooked(slotKey)) {
             setSelectedSlots([]);
@@ -588,7 +582,7 @@ export function RoomDetail(props: RoomDetailProps) {
             start_time: startTime.toISOString(),
             end_time: endTime.toISOString(),
             total_cost: 0,
-            status: "locked_temp",
+            status: "pending_payment",
           };
         });
 
@@ -631,7 +625,6 @@ export function RoomDetail(props: RoomDetailProps) {
         if (!response.ok)
           throw new Error(summaryData.error || "Erro ao calcular valores.");
 
-        // Guardamos os IDs dos locks para o modal confirmar ou deletar
         setCheckoutSummary({
           ...summaryData,
           lockIds: lockedData.map((d: any) => d.id),
