@@ -19,6 +19,7 @@ import {
   Star,
   Printer,
   Loader2,
+  LogOut,
 } from "lucide-react";
 import {
   AreaChart,
@@ -65,6 +66,17 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
   const [totalBookings, setTotalBookings] = useState(0);
   const [globalRevPerSqM, setGlobalRevPerSqM] = useState(0);
   const [occupancyRate, setOccupancyRate] = useState(0);
+
+  const handleLogout = async () => {
+    try {
+      const supabase = createClient();
+      await supabase.auth.signOut();
+      sessionStorage.clear();
+      window.location.replace("/login");
+    } catch (error) {
+      console.error("Erro ao sair:", error);
+    }
+  };
 
   useEffect(() => {
     async function fetchDashboardData() {
@@ -168,7 +180,6 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
         // Processar cada reserva
         bookings?.forEach((b) => {
           // Calcula receita aproximada (Créditos base + Taxas de Upgrade)
-          // Se quiser converter o custo de crédito em R$, assumiremos 1 CR = R$ 45 (Exemplo Base)
           const bookingRevenue =
             Number(b.total_cost || 0) * 45 + Number(b.upgrade_fee_amount || 0);
           revTotal += bookingRevenue;
@@ -207,7 +218,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
         setTotalBookings(bookTotal);
         setGlobalRevPerSqM(areaTotal > 0 ? revTotal / areaTotal : 0);
 
-        // Ocupação simulada baseada na quantidade de reservas (Fórmula de Exemplo)
+        // Ocupação simulada baseada na quantidade de reservas
         setOccupancyRate(
           bookTotal > 0
             ? Math.min(
@@ -223,9 +234,9 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           occupancy: Math.min(
             Math.round((r.bookings / (daysDiff * 4)) * 100),
             100,
-          ), // Cálculo demonstrativo
+          ),
         }));
-        setRoomPerformance(perfArray.sort((a, b) => b.revenue - a.revenue)); // Mais rentáveis primeiro
+        setRoomPerformance(perfArray.sort((a, b) => b.revenue - a.revenue));
 
         // Atualiza Gráfico Diário
         setRevenueData(Object.values(dailyRev));
@@ -252,7 +263,6 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
   }, [supabase, timeFilter]);
 
   const getHeatmapColor = (intensity: number) => {
-    // Escala dinâmica simples baseada no volume
     if (intensity === 0) return "bg-slate-50 border-slate-100";
     if (intensity <= 2)
       return "bg-orange-100 border-orange-200 text-orange-800";
@@ -263,7 +273,6 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
   };
 
   const handlePrintPDF = () => {
-    // Aciona a impressão nativa do navegador (pode ser salva como PDF)
     window.print();
   };
 
@@ -288,7 +297,6 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           </p>
         </div>
 
-        {/* Esconde filtros na impressão */}
         <div className="print:hidden flex items-center gap-2 bg-white border border-slate-200 p-1.5 rounded-xl shadow-sm overflow-x-auto scrollbar-hide shrink-0">
           {[
             { id: "hoje", label: "Hoje" },
@@ -312,7 +320,6 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
 
       {/* 4 KPIs PRINCIPAIS */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8 print:grid-cols-4">
-        {/* KPI 1: Rendimento Total */}
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group">
           <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-50 rounded-full blur-2xl -mr-4 -mt-4 transition-transform group-hover:scale-150"></div>
           <div className="relative z-10">
@@ -333,7 +340,6 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           </div>
         </div>
 
-        {/* KPI 2: Rendimento por m2 (MÉTRICA PREMIUM) */}
         <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-6 rounded-2xl shadow-xl relative overflow-hidden group print:bg-white print:border print:border-slate-200 print:shadow-none">
           <div className="absolute top-0 right-0 w-32 h-32 bg-[#f05e23]/20 rounded-full blur-2xl -mr-8 -mt-8 transition-transform group-hover:scale-150 print:hidden"></div>
           <div className="relative z-10">
@@ -357,7 +363,6 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           </div>
         </div>
 
-        {/* KPI 3: Reservas */}
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
           <div className="flex justify-between items-start mb-4">
             <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600">
@@ -372,7 +377,6 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           </h3>
         </div>
 
-        {/* KPI 4: Taxa de Ocupação */}
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
           <div className="flex justify-between items-start mb-4">
             <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600">
@@ -518,7 +522,6 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
               ))}
             </div>
 
-            {/* Legenda do Heatmap */}
             <div className="flex items-center justify-center gap-2 mt-6">
               <span className="text-[10px] font-bold text-slate-400 uppercase">
                 Livre
@@ -653,9 +656,8 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
         </div>
       </div>
 
-      {/* AÇÕES RÁPIDAS NO FINAL DA PÁGINA (Igual ao código original) */}
       <div className="print:hidden">
-        <h3 className="text-lg font-black text-slate-900 mb-4">
+        <h3 className="text-lg font-black text-slate-900 mb-4 mt-8">
           Ações Rápidas
         </h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -694,6 +696,14 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
             <Star className="w-8 h-8" />
             <span className="font-bold">Ver Avaliações</span>
           </Button>
+
+          <button
+            onClick={handleLogout}
+            className="lg:hidden col-span-2 flex flex-col items-center justify-center p-6 bg-red-50/50 border border-red-100 rounded-2xl hover:bg-red-50 transition-colors text-red-600 gap-3 mt-2"
+          >
+            <LogOut className="w-6 h-6" />
+            <span className="font-bold text-sm">Sair da Conta</span>
+          </button>
         </div>
       </div>
     </div>
