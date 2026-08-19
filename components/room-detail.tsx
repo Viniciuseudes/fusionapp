@@ -1044,7 +1044,7 @@ export function RoomDetail(props: RoomDetailProps) {
               <div
                 key={idx}
                 onClick={() => setIsAllPhotosOpen(true)}
-                className="relative w-full h-full shrink-0 snap-center cursor-pointer"
+                className="relative w-full h-full shrink-0 snap-center snap-always cursor-pointer"
               >
                 <Image
                   src={img}
@@ -1149,7 +1149,7 @@ export function RoomDetail(props: RoomDetailProps) {
                 Localização da Sala
               </h2>
               <div className="relative w-full h-64 bg-slate-100 rounded-2xl overflow-hidden border border-slate-200 shadow-inner">
-                <div className="absolute top-[-70px] left-0 w-full h-[calc(100%+70px)] pointer-events-none">
+                <div className="absolute top-[-70px] left-0 w-full h-[calc(100%+70px)]">
                   <iframe
                     width="100%"
                     height="100%"
@@ -1162,7 +1162,7 @@ export function RoomDetail(props: RoomDetailProps) {
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                   <div className="w-48 h-48 bg-[#00bcd4]/20 border-2 border-[#00bcd4]/40 rounded-full shadow-[0_0_15px_rgba(0,188,212,0.3)]"></div>
                 </div>
-                <div className="absolute bottom-4 left-4 right-4 md:right-auto md:w-64 bg-white/95 backdrop-blur-md px-4 py-3 rounded-xl shadow-md border border-slate-100 flex items-center gap-3">
+                <div className="absolute bottom-4 left-4 right-4 md:right-auto md:w-64 bg-white/95 backdrop-blur-md px-4 py-3 rounded-xl shadow-md border border-slate-100 flex items-center gap-3 pointer-events-none">
                   <div className="w-10 h-10 rounded-full bg-cyan-50 flex items-center justify-center shrink-0">
                     <MapPin className="w-5 h-5 text-cyan-600" />
                   </div>
@@ -1749,7 +1749,7 @@ export function RoomDetail(props: RoomDetailProps) {
               {allImages.map((img, idx) => (
                 <div
                   key={idx}
-                  className="relative w-full h-full shrink-0 snap-center flex items-center justify-center p-0 md:p-16"
+                  className="relative w-full h-full shrink-0 snap-center snap-always flex items-center justify-center p-0 md:p-16"
                 >
                   <Image
                     src={img}
