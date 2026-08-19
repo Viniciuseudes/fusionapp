@@ -5,6 +5,7 @@ import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { useMobileBack } from "@/hooks/use-mobile-back";
 import {
   Search,
   SlidersHorizontal,
@@ -191,6 +192,17 @@ export function SearchTab({
   const [isProcessingCheckout, setIsProcessingCheckout] = useState<
     string | null
   >(null);
+
+  useMobileBack(
+    isWalletOpen,
+    () => setIsWalletOpen(false),
+    "fusion-pass-modal",
+  );
+  useMobileBack(
+    isFilterModalOpen,
+    () => setIsFilterModalOpen(false),
+    "filter-modal",
+  );
 
   useEffect(() => {
     async function fetchData() {
