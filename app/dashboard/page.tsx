@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, Suspense } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import {
   Search,
@@ -29,6 +29,9 @@ function DashboardContent() {
   const router = useRouter();
   const supabase = createClient();
 
+  // INJEÇÃO DO HOOK DE URL
+  const searchParams = useSearchParams();
+
   const [activeTab, setActiveTab] = useState<TabType>("search");
   const [selectedRoom, setSelectedRoom] = useState<any | null>(null);
   const [pendingReviewBooking, setPendingReviewBooking] = useState<any | null>(
@@ -36,19 +39,35 @@ function DashboardContent() {
   );
 
   useEffect(() => {
-    if (!window.location.hash || window.location.hash === "") {
+    const scanParam = searchParams.get("scan");
+    const currentHash = window.location.hash.replace("#", "");
+
+    // 1. INTERCEPTOR SÊNIOR: Verifica se é uma requisição de Scanner
+    if (scanParam && currentHash !== "bookings") {
       window.history.replaceState(
         null,
         "",
-        window.location.pathname + "#search",
+        window.location.pathname + window.location.search + "#bookings",
+      );
+      setActiveTab("bookings");
+    }
+    // 2. Fluxo Padrão: Se não tem Hash nem requisição, vai para Busca
+    else if (!window.location.hash || window.location.hash === "") {
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + window.location.search + "#search",
       );
       setActiveTab("search");
-    } else {
-      const hash = window.location.hash.replace("#", "");
+    }
+    // 3. Se tiver Hash normal salvo, recupera a aba
+    else {
       if (
-        ["search", "favorites", "bookings", "chat", "profile"].includes(hash)
+        ["search", "favorites", "bookings", "chat", "profile"].includes(
+          currentHash,
+        )
       ) {
-        setActiveTab(hash as TabType);
+        setActiveTab(currentHash as TabType);
       }
     }
 
@@ -60,7 +79,7 @@ function DashboardContent() {
           window.history.pushState(
             null,
             "",
-            window.location.pathname + "#search",
+            window.location.pathname + window.location.search + "#search",
           );
           setActiveTab("search");
           setSelectedRoom(null);
@@ -82,7 +101,7 @@ function DashboardContent() {
 
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [activeTab]);
+  }, [activeTab, searchParams]);
 
   const handleTabChange = (tab: TabType) => {
     if (activeTab === tab && !selectedRoom) return;
@@ -97,13 +116,13 @@ function DashboardContent() {
         window.history.pushState(
           null,
           "",
-          window.location.pathname + "#" + tab,
+          window.location.pathname + window.location.search + "#" + tab,
         );
       } else {
         window.history.replaceState(
           null,
           "",
-          window.location.pathname + "#" + tab,
+          window.location.pathname + window.location.search + "#" + tab,
         );
       }
       setActiveTab(tab);
@@ -116,7 +135,7 @@ function DashboardContent() {
     window.history.pushState(
       null,
       "",
-      window.location.pathname + "#room/" + room.id,
+      window.location.pathname + window.location.search + "#room/" + room.id,
     );
   };
 
@@ -131,7 +150,11 @@ function DashboardContent() {
   const handleNavigateFromRoom = (tab: TabType) => {
     setSelectedRoom(null);
     setActiveTab(tab);
-    window.history.replaceState(null, "", window.location.pathname + "#" + tab);
+    window.history.replaceState(
+      null,
+      "",
+      window.location.pathname + window.location.search + "#" + tab,
+    );
   };
 
   useEffect(() => {
