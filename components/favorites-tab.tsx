@@ -19,7 +19,6 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
     async function fetchFavorites() {
       try {
         setLoading(true);
-        // 1. Verifica se o usuário está logado
         const {
           data: { user },
           error: userError,
@@ -33,7 +32,6 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
 
         setIsAuthenticated(true);
 
-        // 2. Faz o JOIN mágico: Busca na tabela 'favorites' e já traz os dados da tabela 'rooms'
         const { data, error } = await supabase
           .from("favorites")
           .select(
@@ -45,7 +43,9 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
               name,
               image_url,
               address_details,
-              is_partner
+              is_partner,
+              is_active,
+              is_paused
             )
           `,
           )
@@ -54,11 +54,10 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
 
         if (error) throw error;
 
-        // 3. Mapeia e limpa a resposta para ficar num formato fácil para a interface usar
         if (data) {
           const mappedRooms = data
-            .map((item: any) => ({ ...item.rooms, favorite_id: item.id })) // Extrai o objeto da sala
-            .filter(Boolean); // Remove nulos caso alguma sala tenha sido deletada
+            .map((item: any) => ({ ...item.rooms, favorite_id: item.id }))
+            .filter(Boolean);
 
           setFavoritedRooms(mappedRooms);
         }
@@ -102,7 +101,6 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
 
   return (
     <div className="flex flex-col pb-20 lg:pb-6 animate-in fade-in duration-300">
-      {/* Header */}
       <div className="px-5 pt-6 pb-4 lg:px-8 border-b border-slate-100 mb-2 bg-white sticky top-0 z-10">
         <div className="mx-auto max-w-3xl">
           <h1 className="text-2xl font-black text-slate-900">Favoritos</h1>
@@ -113,7 +111,6 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
         </div>
       </div>
 
-      {/* List */}
       <div className="px-4 lg:px-8 mt-2">
         <div className="mx-auto flex max-w-3xl flex-col gap-3">
           {favoritedRooms.length === 0 ? (
@@ -127,7 +124,6 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
             </div>
           ) : (
             favoritedRooms.map((room) => {
-              // Parse seguro do JSONB de endereço
               let address = room.address_details || {};
               if (typeof address === "string") {
                 try {
@@ -145,11 +141,18 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
                 .toFixed(2)
                 .replace(".", ",");
 
+              const isAvailable = room.is_active && !room.is_paused;
+
               return (
                 <button
                   key={room.favorite_id || room.id}
-                  onClick={() => onOpenRoom(room)}
-                  className="flex gap-3 rounded-2xl border border-slate-100 bg-white p-3 text-left shadow-sm transition-all hover:shadow-md hover:border-slate-200 group"
+                  onClick={() => isAvailable && onOpenRoom(room)}
+                  disabled={!isAvailable}
+                  className={`flex gap-3 rounded-2xl border bg-white p-3 text-left transition-all group ${
+                    isAvailable
+                      ? "border-slate-100 shadow-sm hover:shadow-md hover:border-slate-200 cursor-pointer"
+                      : "border-slate-200 opacity-80 grayscale cursor-not-allowed"
+                  }`}
                 >
                   <div className="relative h-24 w-28 shrink-0 overflow-hidden rounded-xl bg-slate-100">
                     {room.image_url ? (
@@ -157,7 +160,7 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
                         src={room.image_url}
                         alt={room.name || "Sala"}
                         fill
-                        className="object-cover group-hover:scale-105 transition-transform duration-300"
+                        className={`object-cover ${isAvailable ? "group-hover:scale-105 transition-transform duration-300" : ""}`}
                         sizes="112px"
                       />
                     ) : (
@@ -165,20 +168,34 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
                         Sem foto
                       </div>
                     )}
+
+                    {!isAvailable && (
+                      <div className="absolute inset-0 bg-slate-900/50 z-10 flex items-center justify-center">
+                        <span className="bg-slate-900 text-white text-[9px] font-black px-2 py-1 rounded-md uppercase tracking-wider shadow-sm">
+                          Indisponível
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex flex-1 flex-col py-0.5 min-w-0">
-                    <h3 className="text-sm font-bold text-slate-900 truncate pr-4">
+                    <h3
+                      className={`text-sm font-bold truncate pr-4 ${isAvailable ? "text-slate-900" : "text-slate-600"}`}
+                    >
                       {room.name}
                     </h3>
 
                     <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 mt-1 truncate">
-                      <MapPin className="h-3 w-3 shrink-0 text-[#f05e23]" />
+                      <MapPin
+                        className={`h-3 w-3 shrink-0 ${isAvailable ? "text-[#f05e23]" : "text-slate-400"}`}
+                      />
                       <span className="truncate">{locationStr}</span>
                     </div>
 
                     <div className="flex items-center gap-1 mt-1.5">
-                      <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+                      <Star
+                        className={`h-3.5 w-3.5 ${isAvailable ? "fill-amber-400 text-amber-400" : "fill-slate-400 text-slate-400"}`}
+                      />
                       <span className="text-xs font-bold text-slate-700">
                         5.0
                       </span>
@@ -188,7 +205,9 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
                     </div>
 
                     <p className="mt-auto text-xs">
-                      <span className="font-black text-lg text-slate-900">
+                      <span
+                        className={`font-black text-lg ${isAvailable ? "text-slate-900" : "text-slate-500"}`}
+                      >
                         R$ {basePrice}
                       </span>
                       <span className="text-slate-400 font-medium"> /hora</span>
