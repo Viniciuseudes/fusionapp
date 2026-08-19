@@ -1038,7 +1038,7 @@ export function RoomDetail(props: RoomDetailProps) {
           </div>
         </div>
 
-        {/* CARROSSEL MOBILE COM CORREÇÃO DE SCROLL (ANDROID) E LAZY LOAD */}
+        {/* CARROSSEL MOBILE COM CORREÇÃO DE SCROLL E LAZY LOAD */}
         <div className="md:hidden relative w-full h-[35vh] bg-slate-200 flex overflow-x-auto snap-x snap-mandatory scrollbar-hide touch-pan-x">
           {allImages.length > 0 ? (
             allImages.map((img, idx) => (
@@ -1146,29 +1146,22 @@ export function RoomDetail(props: RoomDetailProps) {
 
             <div className="w-full h-px bg-slate-100" />
 
-            {/* MAPA ESTÁTICO (BLINDADO) */}
+            {/* MAPA NATIVO (INTERATIVO, DESBLOQUEADO) */}
             <section>
               <h2 className="text-lg font-black text-slate-900 mb-4">
                 Localização da Sala
               </h2>
               <div className="relative w-full h-64 bg-slate-100 rounded-2xl overflow-hidden border border-slate-200 shadow-inner">
-                {/* O Iframe fica escondido atrás de um vidro invisível para não poder ser arrastado */}
-                <div className="absolute inset-0 z-10 pointer-events-none"></div>
-                <div className="absolute top-[-70px] left-0 w-full h-[calc(100%+70px)] pointer-events-none">
-                  <iframe
-                    width="100%"
-                    height="100%"
-                    style={{ border: 0 }}
-                    loading="lazy"
-                    src={`https://www.google.com/maps?q=${mapSearchQuery}&output=embed&z=15`}
-                  ></iframe>
-                </div>
-                {/* A bolinha de escudo no meio da tela */}
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
-                  <div className="w-48 h-48 bg-[#00bcd4]/20 border-2 border-[#00bcd4]/40 rounded-full shadow-[0_0_15px_rgba(0,188,212,0.3)]"></div>
-                </div>
-                {/* Etiqueta de Endereço */}
-                <div className="absolute bottom-4 left-4 right-4 md:right-auto md:w-64 bg-white/95 backdrop-blur-md px-4 py-3 rounded-xl shadow-md border border-slate-100 flex items-center gap-3 z-30">
+                <iframe
+                  width="100%"
+                  height="100%"
+                  style={{ border: 0 }}
+                  loading="lazy"
+                  allowFullScreen
+                  src={`https://www.google.com/maps?q=${mapSearchQuery}&output=embed&z=14`}
+                ></iframe>
+                {/* Etiqueta de Endereço protegida */}
+                <div className="absolute bottom-4 left-4 right-4 md:right-auto md:w-64 bg-white/95 backdrop-blur-md px-4 py-3 rounded-xl shadow-md border border-slate-100 flex items-center gap-3 z-30 pointer-events-none">
                   <div className="w-10 h-10 rounded-full bg-cyan-50 flex items-center justify-center shrink-0">
                     <MapPin className="w-5 h-5 text-cyan-600" />
                   </div>
@@ -1192,8 +1185,8 @@ export function RoomDetail(props: RoomDetailProps) {
                     Endereço exato protegido
                   </p>
                   <p className="text-xs text-slate-500 font-medium mt-1 leading-relaxed">
-                    Para segurança da clínica, exibimos apenas a região
-                    aproximada no mapa estático.{" "}
+                    Para segurança da clínica, o mapa exibe um pino referencial
+                    na região.{" "}
                     <b>
                       O endereço completo, número e andar serão liberados
                       imediatamente após a confirmação da sua reserva.
