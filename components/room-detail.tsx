@@ -54,7 +54,7 @@ import { useMobileBack } from "@/hooks/use-mobile-back";
 
 const AMENITIES_LIST = [
   { id: "wifi", label: "Wi-Fi de alta velocidade", icon: Wifi },
-  { id: "tv", label: "TV com WIFI/HDMI", icon: Monitor },
+  { id: "tv", label: 'TV 65" com HDMI', icon: Monitor },
   { id: "coffee", label: "Café e água", icon: Coffee },
   { id: "ac", label: "Ar-condicionado", icon: Wind },
   { id: "printer", label: "Impressora disponível", icon: Printer },
@@ -195,15 +195,12 @@ export function RoomDetail(props: RoomDetailProps) {
     async function fetchRoomBookings() {
       const { data, error } = await supabase
         .from("bookings")
-        .select("id, start_time, end_time, status")
+        // ADICIONAMOS created_at E asaas_payment_id PARA O CÁLCULO DE TTL
+        .select(
+          "id, start_time, end_time, status, created_at, asaas_payment_id",
+        )
         .eq("room_id", roomData.id)
-        .in("status", [
-          "confirmed",
-          "pending_payment",
-          "completed",
-          "in_progress",
-          "locked_temp",
-        ]);
+        .in("status", ["confirmed", "pending_payment", "completed"]);
 
       if (!error && data) {
         setRoomBookings(data);
@@ -483,6 +480,25 @@ export function RoomDetail(props: RoomDetailProps) {
       const slotStart = parseSlotDate(dateStr, startSlotStr).getTime();
 
       return roomBookings.some((b) => {
+        // ==========================================
+        // MOTOR SÊNIOR: GESTÃO DE ABANDONO (TTL)
+        // Ignora reservas fantasmas presas no banco
+        // ==========================================
+        if (b.status === "pending_payment" && b.created_at) {
+          const lockTime = new Date(b.created_at).getTime();
+          const now = new Date().getTime();
+
+          // Caso 1: Lock de Checkout (Sem PIX gerado). Expira rigorosamente em 6 minutos.
+          if (!b.asaas_payment_id && now - lockTime > 6 * 60 * 1000) {
+            return false; // Ignora e libera a sala
+          }
+
+          // Caso 2: PIX Gerado, aguardando pagamento. Expira em 30 minutos.
+          if (b.asaas_payment_id && now - lockTime > 30 * 60 * 1000) {
+            return false; // Ignora e libera a sala
+          }
+        }
+
         const bStart = new Date(b.start_time).getTime();
         const bEnd = new Date(b.end_time).getTime();
         return slotStart >= bStart && slotStart < bEnd;
@@ -1044,7 +1060,7 @@ export function RoomDetail(props: RoomDetailProps) {
           </div>
         </div>
 
-        {/* CARROSSEL MOBILE COM CORREÇÃO DE SCROLL (ANDROID) E LAZY LOAD */}
+        {/* CARROSSEL MOBILE COM CORREÇÃO DE SCROLL E LAZY LOAD */}
         <div className="md:hidden relative w-full h-[35vh] bg-slate-200 flex overflow-x-auto snap-x snap-mandatory scrollbar-hide touch-pan-x">
           {allImages.length > 0 ? (
             allImages.map((img, idx) => (
@@ -1158,23 +1174,23 @@ export function RoomDetail(props: RoomDetailProps) {
                 Localização da Sala
               </h2>
               <div className="relative w-full h-64 bg-slate-100 rounded-2xl overflow-hidden border border-slate-200 shadow-inner">
-                {/* O Iframe fica escondido atrás de um vidro invisível para não poder ser arrastado */}
-                <div className="absolute inset-0 z-10 pointer-events-none"></div>
+                {/* Iframe encapsulado com pointer-events-none para não interagir */}
                 <div className="absolute top-[-70px] left-0 w-full h-[calc(100%+70px)] pointer-events-none">
                   <iframe
                     width="100%"
                     height="100%"
                     style={{ border: 0 }}
                     loading="lazy"
+                    allowFullScreen
                     src={`https://www.google.com/maps?q=${mapSearchQuery}&output=embed&z=15`}
                   ></iframe>
                 </div>
-                {/* A bolinha de escudo no meio da tela */}
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+                {/* Raio Azul Falso (Fixo no centro) */}
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                   <div className="w-48 h-48 bg-[#00bcd4]/20 border-2 border-[#00bcd4]/40 rounded-full shadow-[0_0_15px_rgba(0,188,212,0.3)]"></div>
                 </div>
                 {/* Etiqueta de Endereço */}
-                <div className="absolute bottom-4 left-4 right-4 md:right-auto md:w-64 bg-white/95 backdrop-blur-md px-4 py-3 rounded-xl shadow-md border border-slate-100 flex items-center gap-3 z-30">
+                <div className="absolute bottom-4 left-4 right-4 md:right-auto md:w-64 bg-white/95 backdrop-blur-md px-4 py-3 rounded-xl shadow-md border border-slate-100 flex items-center gap-3 pointer-events-none">
                   <div className="w-10 h-10 rounded-full bg-cyan-50 flex items-center justify-center shrink-0">
                     <MapPin className="w-5 h-5 text-cyan-600" />
                   </div>
