@@ -6,6 +6,7 @@ import { createClient } from "@/utils/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { format, parseISO, differenceInDays } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { useMobileBack } from "@/hooks/use-mobile-back";
 import {
   User,
   MapPin,
@@ -39,9 +40,6 @@ import { Badge } from "@/components/ui/badge";
 
 type ViewState = "overview" | "edit" | "wallet";
 
-// ==========================================
-// FUNÇÕES SÊNIOR DE VALIDAÇÃO
-// ==========================================
 const isValidCPF = (cpf: string) => {
   cpf = cpf.replace(/[^\d]+/g, "");
   if (cpf.length !== 11 || !!cpf.match(/(\d)\1{10}/)) return false;
@@ -61,12 +59,7 @@ const isValidCPF = (cpf: string) => {
   return true;
 };
 
-// ==========================================
-// MOTOR DE GAMIFICAÇÃO OFICIAL (PROFISSIONAIS)
-// Iniciante -> Bronze -> Prata -> Ouro -> Diamante
-// ==========================================
 const getTierInfo = (bookingsCount: number, isProfileComplete: boolean) => {
-  // Se não preencheu os dados
   if (!isProfileComplete) {
     return {
       name: "Iniciante",
@@ -82,7 +75,6 @@ const getTierInfo = (bookingsCount: number, isProfileComplete: boolean) => {
     };
   }
 
-  // Preencheu tudo = Pelo menos Bronze
   if (bookingsCount < 10) {
     return {
       name: "Bronze",
@@ -128,7 +120,6 @@ const getTierInfo = (bookingsCount: number, isProfileComplete: boolean) => {
     };
   }
 
-  // Nível Máximo
   return {
     name: "Diamante",
     current: bookingsCount,
@@ -162,7 +153,6 @@ export function ProfileTab() {
   const [transactions, setTransactions] = useState<any[]>([]);
   const [loadingWallet, setLoadingWallet] = useState(false);
 
-  // Estado para Gamificação
   const [bookingsCount, setBookingsCount] = useState(0);
 
   const [walletBalances, setWalletBalances] = useState({
@@ -191,6 +181,12 @@ export function ProfileTab() {
     address_state: "",
   });
 
+  useMobileBack(
+    view !== "overview",
+    () => setView("overview"),
+    "perfil-interno",
+  );
+
   useEffect(() => {
     async function loadProfile() {
       try {
@@ -202,7 +198,6 @@ export function ProfileTab() {
           return;
         }
 
-        // 1. Busca Perfil
         const { data, error } = await supabase
           .from("profiles")
           .select("*")
@@ -210,7 +205,6 @@ export function ProfileTab() {
           .single();
         if (error) throw error;
 
-        // 2. REGRA SÊNIOR: APENAS COMPLETED (Para evitar fraudes no sistema de Níveis)
         const { count } = await supabase
           .from("bookings")
           .select("*", { count: "exact", head: true })
@@ -320,21 +314,15 @@ export function ProfileTab() {
   const handleLogout = async () => {
     setLoading(true);
     try {
-      // 1. Desloga da sessão ativa no servidor do Supabase
       await supabase.auth.signOut();
 
-      // 2. Limpa APENAS os tokens de autenticação locais,
-      // preservando as preferências do usuário (ex: Tutorial e Avaliações puladas)
       for (let key in localStorage) {
         if (key.startsWith("sb-")) {
           localStorage.removeItem(key);
         }
       }
 
-      // 3. Limpa a memória de sessão volátil
       sessionStorage.clear();
-
-      // 4. Redireciona com hard reload para a tela de login
       window.location.href = "/login";
     } catch (error) {
       toast({
@@ -543,9 +531,6 @@ export function ProfileTab() {
     );
   }
 
-  // ==========================================
-  // RENDER: VISÃO DA CARTEIRA
-  // ==========================================
   if (view === "wallet") {
     return (
       <div className="p-4 lg:p-8 animate-in slide-in-from-right-8 duration-300 max-w-2xl mx-auto w-full pb-32">
@@ -715,23 +700,17 @@ export function ProfileTab() {
     );
   }
 
-  // ==========================================
-  // RENDER: VISÃO GERAL (O NOVO DESIGN)
-  // ==========================================
   if (view === "overview") {
-    // Calcula as métricas de evolução Sênior baseando-se APENAS no Completed
     const tierInfo = getTierInfo(bookingsCount, !!isProfileComplete);
 
     return (
       <div className="space-y-6 max-w-md mx-auto w-full animate-in fade-in pb-24 pt-8 px-4">
-        {/* Título Centralizado */}
         <div className="text-center mb-6">
           <h2 className="text-2xl font-black text-slate-900 tracking-tight">
             Meu Perfil
           </h2>
         </div>
 
-        {/* 1. CARTÃO PERFIL E GAMIFICAÇÃO */}
         <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100 flex flex-col gap-6">
           <div className="flex gap-4 items-center">
             <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 border-2 border-slate-50 shadow-inner">
@@ -762,7 +741,6 @@ export function ProfileTab() {
             </div>
           </div>
 
-          {/* PROGRESS BAR SÊNIOR */}
           <div className="pt-4 border-t border-slate-50">
             <div className="flex justify-between items-end mb-2">
               <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
@@ -781,7 +759,6 @@ export function ProfileTab() {
           </div>
         </div>
 
-        {/* 2. CARTÃO DA CARTEIRA DE CRÉDITOS */}
         <div
           onClick={() => setView("wallet")}
           className="cursor-pointer bg-[#ea580c] rounded-[2rem] p-6 text-white shadow-lg flex items-center justify-between hover:scale-[1.02] transition-transform duration-300"
@@ -801,7 +778,6 @@ export function ProfileTab() {
           </div>
         </div>
 
-        {/* Alerta de Perfil Incompleto */}
         {!isProfileComplete && (
           <div className="bg-red-50 border border-red-200 p-4 rounded-[2rem] flex items-start gap-3">
             <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
@@ -822,7 +798,6 @@ export function ProfileTab() {
           </div>
         )}
 
-        {/* 3. MENU DE AÇÕES */}
         <div className="bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden divide-y divide-slate-100">
           <button
             onClick={() => setView("edit")}
@@ -886,9 +861,6 @@ export function ProfileTab() {
     );
   }
 
-  // ==========================================
-  // RENDER: TELA DE EDIÇÃO (MEUS DADOS)
-  // ==========================================
   return (
     <div className="p-4 lg:p-8 animate-in slide-in-from-right-8 duration-300 max-w-4xl mx-auto w-full pb-32">
       <div className="mb-6 flex items-center gap-4">

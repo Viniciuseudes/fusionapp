@@ -7,6 +7,7 @@ import { createClient } from "@/utils/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { format, isSameDay, addDays } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { useMobileBack } from "@/hooks/use-mobile-back";
 import {
   CalendarDays,
   MapPin,
@@ -30,13 +31,12 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
-// Componentes da Sessão e Scanner
 import { ActiveSession } from "@/components/active-session";
 import { RoomQRScanner } from "@/components/qr-scanner";
 
 interface Booking {
   id: string;
-  original_ids?: string[]; // Array Sênior para Mesclagem de Sessões
+  original_ids?: string[];
   room_id: string;
   start_time: string;
   end_time: string;
@@ -81,7 +81,6 @@ export function BookingsTab({
     "all",
   );
   const [bookings, setBookings] = useState<Booking[]>([]);
-
   const [adjacentMap, setAdjacentMap] = useState<Record<string, boolean>>({});
 
   const [cancelModal, setCancelModal] = useState<{
@@ -103,6 +102,22 @@ export function BookingsTab({
     type: "checkin",
     booking: null,
   });
+
+  useMobileBack(
+    !!activeSessionBooking,
+    () => setActiveSessionBooking(null),
+    "sessao-ativa",
+  );
+  useMobileBack(
+    scannerConfig.isOpen,
+    () => setScannerConfig({ isOpen: false, type: "checkin", booking: null }),
+    "scanner-qr",
+  );
+  useMobileBack(
+    cancelModal.isOpen,
+    () => setCancelModal({ isOpen: false, booking: null }),
+    "modal-cancelamento",
+  );
 
   const fetchBookings = async () => {
     setLoading(true);
@@ -126,11 +141,6 @@ export function BookingsTab({
       if (error) throw error;
 
       const fetchedBookings = (data as unknown as Booking[]) || [];
-
-      // ==========================================
-      // MOTOR SÊNIOR: SMART SESSION MERGING (Mesclagem de Horários)
-      // Funde reservas coladas (ou com até 15 min de gap) na mesma sala
-      // ==========================================
       let mergedBookings: Booking[] = [];
 
       fetchedBookings.forEach((b) => {
@@ -149,23 +159,18 @@ export function BookingsTab({
           const currStart = new Date(b.start_time).getTime();
           const gapMs = currStart - lastEnd;
 
-          // Se for colado ou tiver até 15 minutos de diferença (intervalo de limpeza)
           if (gapMs >= 0 && gapMs <= 15 * 60 * 1000) {
             last.end_time = b.end_time;
             last.total_cost += b.total_cost;
             if (!last.original_ids) last.original_ids = [last.id];
             last.original_ids.push(b.id);
-            return; // Pula para a próxima (pois fundiu com a anterior)
+            return;
           }
         }
 
-        // Se não fundiu, adiciona como nova
         mergedBookings.push({ ...b, original_ids: [b.id] });
       });
 
-      // ==========================================
-      // BULK FETCH DE ADJACÊNCIA (Colisão com outros médicos)
-      // ==========================================
       const upcoming = mergedBookings.filter((b) => b.status === "confirmed");
       const newAdjacentMap: Record<string, boolean> = {};
 
@@ -208,14 +213,12 @@ export function BookingsTab({
     if (!scannerConfig.booking) return;
     const currentBooking = scannerConfig.booking;
 
-    // Fecha a câmera imediatamente
     setScannerConfig({ isOpen: false, type: "checkin", booking: null });
 
     try {
       const checkinTime = new Date().toISOString();
       const idsToUpdate = currentBooking.original_ids || [currentBooking.id];
 
-      // Atualização Sênior em Lote (Bulk Update)
       const { error } = await supabase
         .from("bookings")
         .update({ status: "in_progress", checkin_time: checkinTime })
@@ -225,7 +228,7 @@ export function BookingsTab({
 
       toast({
         title: "Check-in Realizado! 🔓",
-        description: "Sessão múltipla/única liberada com sucesso.",
+        description: "Sessão liberada com sucesso.",
       });
 
       const {
@@ -282,7 +285,7 @@ export function BookingsTab({
           room_id: booking.room_id,
           guest_id: user.id,
           host_id: booking.rooms.host_id,
-          booking_id: booking.id, // Em caso de mescla, vincula ao primeiro ID
+          booking_id: booking.id,
         });
         if (insertError) throw insertError;
       }
@@ -331,10 +334,10 @@ export function BookingsTab({
           .from("wallet_transactions")
           .insert({
             user_id: user.id,
-            amount: booking.total_cost, // Reembolsa o valor total da reserva (mesclada ou não)
+            amount: booking.total_cost,
             type: "refund",
             tier: booking.rooms.tier || "start",
-            description: `Estorno (Cancelamento Múltiplo/Único): ${booking.rooms.name}`,
+            description: `Estorno (Cancelamento): ${booking.rooms.name}`,
             expires_at: expiresAt.toISOString(),
           });
         if (refundError) throw refundError;
@@ -523,7 +526,6 @@ export function BookingsTab({
 
               const isInProgress = booking.status === "in_progress";
 
-              // Verifica se essa reserva foi mesclada
               const isMerged =
                 booking.original_ids && booking.original_ids.length > 1;
 
@@ -776,7 +778,6 @@ export function BookingsTab({
         </Dialog>
       </div>
 
-      {/* O SCANNER AGORA ESTÁ BLINDADO */}
       {scannerConfig.isOpen && scannerConfig.booking && (
         <RoomQRScanner
           key="checkin-scanner"

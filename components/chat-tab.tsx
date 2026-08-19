@@ -5,6 +5,7 @@ import { createClient } from "@/utils/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { format, parseISO, addHours, isAfter } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { useMobileBack } from "@/hooks/use-mobile-back";
 import {
   Search,
   MessageSquare,
@@ -60,17 +61,16 @@ export function ChatTab() {
   const [loading, setLoading] = useState(true);
   const [chats, setChats] = useState<ChatPreview[]>([]);
 
-  // Filtros e Busca
   const [activeFilter, setActiveFilter] = useState<"all" | "unread">("all");
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Estado do Chat Ativo
   const [selectedChat, setSelectedChat] = useState<ChatPreview | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [sending, setSending] = useState(false);
 
-  // Carrega a lista de chats e aplica a REGRA DE AUTO-DESTRUIÇÃO
+  useMobileBack(!!selectedChat, () => setSelectedChat(null), "chat-aberto");
+
   useEffect(() => {
     async function fetchChats() {
       try {
@@ -128,7 +128,6 @@ export function ChatTab() {
             (m) => m.sender_id !== user.id && !m.read_at,
           ).length;
 
-          // CORREÇÃO AQUI: Lidando com o Array do Supabase para bookings e rooms
           const bookingData = Array.isArray(chat.bookings)
             ? chat.bookings[0]
             : chat.bookings;
@@ -145,23 +144,18 @@ export function ChatTab() {
             displayName = "Anfitrião Parceiro";
           }
 
-          // ==========================================
-          // FILTRO ANTI-POLUIÇÃO (AUTO-DESTRUIÇÃO)
-          // ==========================================
           if (!isNegotiation) {
-            // Regra 1: Se a reserva foi cancelada, o chat some.
             if (bookingData?.status === "cancelled") {
               continue;
             }
 
-            // Regra 2: Se passou 1 hora do fim da reserva, o chat some.
             if (bookingData?.end_time) {
               const expirationTime = addHours(
                 parseISO(bookingData.end_time),
                 1,
               );
               if (isAfter(now, expirationTime)) {
-                continue; // Oculta da lista
+                continue;
               }
             }
           }
@@ -186,7 +180,6 @@ export function ChatTab() {
           });
         }
 
-        // Ordena pelos que tem mensagens mais recentes
         validChats.sort((a, b) => {
           if (!a.last_message_date) return 1;
           if (!b.last_message_date) return -1;
@@ -198,7 +191,6 @@ export function ChatTab() {
 
         setChats(validChats);
 
-        // Se o chat atualmente aberto foi ocultado por essa regra de validade, fecha ele na tela
         if (selectedChat) {
           const stillExists = validChats.find((c) => c.id === selectedChat.id);
           if (!stillExists) setSelectedChat(null);
@@ -213,7 +205,6 @@ export function ChatTab() {
     fetchChats();
   }, [supabase]);
 
-  // Carrega as mensagens do chat selecionado
   useEffect(() => {
     if (!selectedChat) return;
 
@@ -230,7 +221,6 @@ export function ChatTab() {
         setMessages(data);
         scrollToBottom();
 
-        // Marca como lidas
         const unreadIds = data
           .filter((m) => m.sender_id !== myId && !m.read_at)
           .map((m) => m.id);
@@ -250,7 +240,6 @@ export function ChatTab() {
 
     fetchMessages();
 
-    // Inscrição Real-time
     channel = supabase
       .channel(`chat_${selectedChat.id}`)
       .on(
@@ -381,9 +370,6 @@ export function ChatTab() {
   return (
     <div className="h-[100dvh] md:h-[calc(100vh-4rem)] max-w-7xl mx-auto w-full bg-slate-50 pb-[84px] md:pb-6 lg:pb-8 md:pt-6 lg:pt-8 md:px-6 lg:px-8 animate-in fade-in duration-500 box-border">
       <div className="bg-white md:rounded-3xl shadow-sm border border-slate-200 h-full flex overflow-hidden">
-        {/* ========================================== */}
-        {/* PAINEL ESQUERDO: LISTA DE CONVERSAS          */}
-        {/* ========================================== */}
         <div
           className={`w-full md:w-[380px] lg:w-[420px] flex flex-col border-r border-slate-100 bg-white shrink-0 ${selectedChat ? "hidden md:flex" : "flex"}`}
         >
@@ -519,9 +505,6 @@ export function ChatTab() {
           </div>
         </div>
 
-        {/* ========================================== */}
-        {/* PAINEL DIREITO: CONVERSA ATIVA               */}
-        {/* ========================================== */}
         <div
           className={`flex-1 flex flex-col bg-[#f8f9fa] relative ${!selectedChat ? "hidden md:flex" : "flex"}`}
         >
@@ -540,7 +523,6 @@ export function ChatTab() {
             </div>
           ) : (
             <>
-              {/* CABEÇALHO DO CHAT COM ESCUDO ANTI-BYPASS */}
               <div className="h-[72px] bg-white border-b border-slate-200 px-4 flex items-center gap-4 shrink-0 shadow-sm z-20">
                 <button
                   onClick={() => setSelectedChat(null)}
@@ -578,7 +560,6 @@ export function ChatTab() {
                 </div>
               </div>
 
-              {/* CONTEXTO DA CONVERSA: CARD DE RESERVA OU DE NEGOCIAÇÃO */}
               {selectedChat.type === "negotiation" ? (
                 <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-b border-amber-200/60 p-3 sm:px-6 flex flex-row items-center justify-between shrink-0 z-10 shadow-sm">
                   <div className="flex items-center gap-3">
@@ -647,7 +628,6 @@ export function ChatTab() {
                 </div>
               ) : null}
 
-              {/* ÁREA DE MENSAGENS */}
               <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
                 {selectedChat.type === "negotiation" ? (
                   <div className="text-center my-4">
@@ -709,7 +689,6 @@ export function ChatTab() {
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* INPUT AREA */}
               <div className="p-4 bg-white border-t border-slate-200 shrink-0">
                 <form
                   onSubmit={handleSendMessage}
