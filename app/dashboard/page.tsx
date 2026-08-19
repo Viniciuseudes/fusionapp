@@ -36,45 +36,43 @@ function DashboardContent() {
     null,
   );
 
-  // ==========================================
-  // O ESCUDO PWA: HOTEL CALIFORNIA
-  // Impede o logout acidental com botão físico
-  // ==========================================
   useEffect(() => {
-    // 1. Armadilha: Quando entra, criamos um fundo duplo no histórico
-    if (!window.history.state?.isApp) {
+    if (!window.location.hash || window.location.hash === "") {
       window.history.replaceState(
-        { isApp: true },
-        "",
-        window.location.pathname,
-      );
-      window.history.pushState(
-        { tab: "search" },
+        null,
         "",
         window.location.pathname + "#search",
       );
+      setActiveTab("search");
+    } else {
+      const hash = window.location.hash.replace("#", "");
+      if (
+        ["search", "favorites", "bookings", "chat", "profile"].includes(hash)
+      ) {
+        setActiveTab(hash as TabType);
+      }
     }
 
     const handlePopState = () => {
       const hash = window.location.hash.replace("#", "");
 
-      // 2. O Escudo Absoluto: Se o hash sumiu (o usuário tentou sair pro login), nós o sugamos de volta!
       if (!hash || hash === "") {
-        window.history.pushState(
-          { tab: activeTab },
-          "",
-          window.location.pathname + "#" + activeTab,
-        );
+        if (activeTab !== "search") {
+          window.history.pushState(
+            null,
+            "",
+            window.location.pathname + "#search",
+          );
+          setActiveTab("search");
+          setSelectedRoom(null);
+        }
         return;
       }
 
-      // 3. Se a URL atual é uma sala (ou sub-modal como checkout), não faz nada.
-      // (Quem cuida do sub-modal é o arquivo do CheckoutModal que já arrumamos!)
-      if (hash.startsWith("room/")) {
+      if (hash.startsWith("room/") || hash.includes("checkout")) {
         return;
       }
 
-      // 4. Se a pessoa navegou pra trás até uma aba anterior, troca a aba e garante que a sala tá fechada.
       if (
         ["search", "favorites", "bookings", "chat", "profile"].includes(hash)
       ) {
@@ -85,29 +83,25 @@ function DashboardContent() {
 
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [activeTab]); // Importante depender da tab para forçar a volta pra aba correta
+  }, [activeTab]);
 
-  // ==========================================
-  // Controladores Visuais Sincronizados com Histórico
-  // ==========================================
   const handleTabChange = (tab: TabType) => {
     if (activeTab === tab && !selectedRoom) return;
     setActiveTab(tab);
     setSelectedRoom(null);
-    window.history.pushState({ tab }, "", window.location.pathname + "#" + tab);
+    window.history.pushState(null, "", window.location.pathname + "#" + tab);
   };
 
   const handleOpenRoom = (room: any) => {
     setSelectedRoom(room);
     window.history.pushState(
-      { room: room.id },
+      null,
       "",
       window.location.pathname + "#room/" + room.id,
     );
   };
 
   const handleCloseRoom = () => {
-    // Se a sala ainda está na URL, mandamos o celular recuar e ele dispara o PopState que cuida do resto
     if (window.location.hash.startsWith("#room/")) {
       window.history.back();
     } else {
@@ -118,14 +112,9 @@ function DashboardContent() {
   const handleNavigateFromRoom = (tab: TabType) => {
     setSelectedRoom(null);
     setActiveTab(tab);
-    window.history.replaceState(
-      { tab },
-      "",
-      window.location.pathname + "#" + tab,
-    );
+    window.history.replaceState(null, "", window.location.pathname + "#" + tab);
   };
 
-  // Inicialização (Igual antes)
   useEffect(() => {
     async function initializeDashboard() {
       try {

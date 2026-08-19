@@ -1,11 +1,19 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/utils/supabase/client";
 import { cn } from "@/lib/utils";
 import { SearchTab, type Room } from "@/components/search-tab";
 import { RoomDetail } from "@/components/room-detail";
-import { Search, Heart, CalendarDays, LogIn, UserPlus } from "lucide-react";
+import {
+  Search,
+  Heart,
+  CalendarDays,
+  LogIn,
+  UserPlus,
+  Loader2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const navItems = [
@@ -19,29 +27,128 @@ type TabId = (typeof navItems)[number]["id"];
 
 export default function AppPage() {
   const router = useRouter();
+  const supabase = createClient();
+
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [activeTab, setActiveTab] = useState<TabId>("buscar");
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
 
+  useEffect(() => {
+    async function checkAuth() {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (session?.user) {
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", session.user.id)
+            .single();
+
+          if (profile?.role === "host") {
+            router.replace("/host");
+          } else if (profile?.role === "admin") {
+            router.replace("/admin/dashboard");
+          } else {
+            router.replace("/dashboard");
+          }
+        } else {
+          setIsCheckingAuth(false);
+        }
+      } catch (error) {
+        setIsCheckingAuth(false);
+      }
+    }
+    checkAuth();
+  }, [router, supabase]);
+
+  useEffect(() => {
+    if (isCheckingAuth) return;
+
+    if (!window.location.hash || window.location.hash === "") {
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + "#buscar",
+      );
+      setActiveTab("buscar");
+    } else {
+      const hash = window.location.hash.replace("#", "");
+      if (hash === "buscar") {
+        setActiveTab("buscar");
+      }
+    }
+
+    const handlePopState = () => {
+      const hash = window.location.hash.replace("#", "");
+
+      if (!hash || hash === "") {
+        if (activeTab !== "buscar") {
+          window.history.pushState(
+            null,
+            "",
+            window.location.pathname + "#buscar",
+          );
+          setActiveTab("buscar");
+          setSelectedRoom(null);
+        }
+        return;
+      }
+
+      if (hash.startsWith("room/")) {
+        return;
+      }
+
+      if (hash === "buscar") {
+        setSelectedRoom(null);
+        setActiveTab("buscar");
+      }
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [activeTab, isCheckingAuth]);
+
   const handleOpenRoom = useCallback((room: Room) => {
     setSelectedRoom(room);
+    window.history.pushState(
+      null,
+      "",
+      window.location.pathname + "#room/" + room.id,
+    );
   }, []);
 
   const handleCloseRoom = useCallback(() => {
-    setSelectedRoom(null);
+    if (window.location.hash.startsWith("#room/")) {
+      window.history.back();
+    } else {
+      setSelectedRoom(null);
+    }
   }, []);
 
   const handleTabClick = (id: TabId) => {
     if (id !== "buscar") {
       router.push("/login");
     } else {
-      setActiveTab(id);
+      if (activeTab === "buscar" && !selectedRoom) return;
+      setActiveTab("buscar");
       setSelectedRoom(null);
+      window.history.pushState(null, "", window.location.pathname + "#buscar");
     }
   };
 
+  if (isCheckingAuth) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-slate-50">
+        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-svh flex-col bg-slate-50">
-      {/* Desktop Sidebar (Limpa e usando cores do Tema) */}
       <aside className="hidden lg:flex fixed inset-y-0 left-0 z-40 w-64 flex-col border-r border-slate-200 bg-white shadow-sm">
         <div className="flex items-center gap-3 px-6 py-5 border-b border-slate-100">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary shadow-sm">
@@ -80,7 +187,6 @@ export default function AppPage() {
           })}
         </nav>
 
-        {/* CALL TO ACTION LOGAR NO DESKTOP */}
         <div className="p-4 border-t border-slate-100 space-y-3 bg-slate-50/50">
           <p className="text-xs text-slate-500 font-medium text-center">
             Faça login para reservar salas e ganhar cashback.
@@ -101,7 +207,6 @@ export default function AppPage() {
         </div>
       </aside>
 
-      {/* Main Content (Sem o cabeçalho branco duplicado!) */}
       <main
         className={cn("flex-1 lg:ml-64", selectedRoom ? "" : "pb-20 lg:pb-0")}
       >
@@ -122,7 +227,6 @@ export default function AppPage() {
         )}
       </main>
 
-      {/* Mobile Bottom Nav (Usando a cor Primary) */}
       {!selectedRoom && (
         <nav className="fixed inset-x-0 bottom-0 z-50 flex lg:hidden items-stretch justify-around border-t border-slate-200 bg-white/90 backdrop-blur-md pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
           {navItems.map((item) => {
