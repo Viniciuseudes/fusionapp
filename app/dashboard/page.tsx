@@ -12,7 +12,6 @@ import {
   Loader2,
 } from "lucide-react";
 
-// Importando os componentes
 import { SearchTab } from "@/components/search-tab";
 import { FavoritesTab } from "@/components/favorites-tab";
 import { BookingsTab } from "@/components/bookings-tab";
@@ -38,33 +37,44 @@ function DashboardContent() {
   );
 
   // ==========================================
-  // ARQUITETURA SÊNIOR: HASH ROUTER PARA PWA
-  // Resolve o botão físico de voltar do Android e gera URLs únicas
+  // O ESCUDO PWA: HOTEL CALIFORNIA
+  // Impede o logout acidental com botão físico
   // ==========================================
   useEffect(() => {
+    // 1. Armadilha: Quando entra, criamos um fundo duplo no histórico
+    if (!window.history.state?.isApp) {
+      window.history.replaceState(
+        { isApp: true },
+        "",
+        window.location.pathname,
+      );
+      window.history.pushState(
+        { tab: "search" },
+        "",
+        window.location.pathname + "#search",
+      );
+    }
+
     const handlePopState = () => {
-      // Pega o hash atual sem o '#'
       const hash = window.location.hash.replace("#", "");
 
-      // 1. Se o usuário voltou até a raiz do dashboard (sem hash), prende ele na busca.
-      // Isso impede que o app feche acidentalmente ou volte pro Login
-      if (!hash) {
-        window.history.replaceState(
-          null,
+      // 2. O Escudo Absoluto: Se o hash sumiu (o usuário tentou sair pro login), nós o sugamos de volta!
+      if (!hash || hash === "") {
+        window.history.pushState(
+          { tab: activeTab },
           "",
-          window.location.pathname + "#search",
+          window.location.pathname + "#" + activeTab,
         );
-        setActiveTab("search");
-        setSelectedRoom(null);
         return;
       }
 
-      // 2. Se a URL for uma sala (ex: #room/uuid-1234), mantém a sala aberta
+      // 3. Se a URL atual é uma sala (ou sub-modal como checkout), não faz nada.
+      // (Quem cuida do sub-modal é o arquivo do CheckoutModal que já arrumamos!)
       if (hash.startsWith("room/")) {
         return;
       }
 
-      // 3. Se a URL for uma Aba do Menu, fecha a sala (se houver) e navega pra aba
+      // 4. Se a pessoa navegou pra trás até uma aba anterior, troca a aba e garante que a sala tá fechada.
       if (
         ["search", "favorites", "bookings", "chat", "profile"].includes(hash)
       ) {
@@ -73,57 +83,33 @@ function DashboardContent() {
       }
     };
 
-    // Sincronização inicial quando a página carrega
-    if (!window.location.hash) {
-      window.history.replaceState(
-        null,
-        "",
-        window.location.pathname + "#search",
-      );
-    } else {
-      const hash = window.location.hash.replace("#", "");
-      if (
-        ["search", "favorites", "bookings", "chat", "profile"].includes(hash)
-      ) {
-        setActiveTab(hash as TabType);
-      } else if (hash.startsWith("room/")) {
-        // Se a pessoa deu F5 (reload) na sala, o state da sala foi limpo da memória.
-        // Volto a pessoa com segurança para a tela de busca.
-        window.history.replaceState(
-          null,
-          "",
-          window.location.pathname + "#search",
-        );
-        setActiveTab("search");
-      }
-    }
-
-    // Liga o "ouvinte" do botão físico do celular
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, []);
+  }, [activeTab]); // Importante depender da tab para forçar a volta pra aba correta
 
-  // Controladores de Navegação (Eles informam o Android do que está acontecendo)
+  // ==========================================
+  // Controladores Visuais Sincronizados com Histórico
+  // ==========================================
   const handleTabChange = (tab: TabType) => {
-    if (activeTab === tab && !selectedRoom) return; // Evita empilhar o mesmo click
+    if (activeTab === tab && !selectedRoom) return;
     setActiveTab(tab);
     setSelectedRoom(null);
-    window.history.pushState(null, "", window.location.pathname + "#" + tab);
+    window.history.pushState({ tab }, "", window.location.pathname + "#" + tab);
   };
 
   const handleOpenRoom = (room: any) => {
     setSelectedRoom(room);
-    // Cria a URL única da Sala! (Ex: #room/1234-uuid)
     window.history.pushState(
-      null,
+      { room: room.id },
       "",
       window.location.pathname + "#room/" + room.id,
     );
   };
 
   const handleCloseRoom = () => {
+    // Se a sala ainda está na URL, mandamos o celular recuar e ele dispara o PopState que cuida do resto
     if (window.location.hash.startsWith("#room/")) {
-      window.history.back(); // Pede ao Android para dar 1 passo atrás e fechar a sala
+      window.history.back();
     } else {
       setSelectedRoom(null);
     }
@@ -132,13 +118,14 @@ function DashboardContent() {
   const handleNavigateFromRoom = (tab: TabType) => {
     setSelectedRoom(null);
     setActiveTab(tab);
-    // Troca o hash da sala pelo hash da aba (replace não cria lixo na linha do tempo)
-    window.history.replaceState(null, "", window.location.pathname + "#" + tab);
+    window.history.replaceState(
+      { tab },
+      "",
+      window.location.pathname + "#" + tab,
+    );
   };
 
-  // ==========================================
-  // INICIALIZAÇÃO DE DADOS (Igual antes)
-  // ==========================================
+  // Inicialização (Igual antes)
   useEffect(() => {
     async function initializeDashboard() {
       try {

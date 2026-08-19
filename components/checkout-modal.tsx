@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Wallet,
   X,
@@ -52,20 +52,48 @@ export function CheckoutModal({
     "wallet",
   );
 
+  // ==========================================
+  // ARQUITETURA SÊNIOR: SMART MODAL HISTORY
+  // Ensina o Android a fechar o modal corretamente no botão voltar
+  // ==========================================
+  useEffect(() => {
+    if (isOpen) {
+      // 1. Quando o modal abre, empurramos "/checkout" na URL (invisível)
+      window.history.pushState(
+        { modal: "checkout" },
+        "",
+        window.location.hash + "/checkout",
+      );
+
+      const handlePop = () => {
+        // 2. Se o usuário apertar o botão físico do Android, disparamos o fechamento do React
+        onClose();
+      };
+
+      window.addEventListener("popstate", handlePop);
+
+      return () => {
+        window.removeEventListener("popstate", handlePop);
+        // 3. O SEGREDO: Se o modal foi fechado no botão "X" ou finalizou a compra,
+        // mas a URL ainda tem a sujeira do "checkout", nós forçamos a limpeza da linha do tempo!
+        if (window.history.state?.modal === "checkout") {
+          window.history.back();
+        }
+      };
+    }
+  }, [isOpen, onClose]);
+
   if (!isOpen || !summary || !room) return null;
 
   const dateFormatted = format(selectedDate, "dd 'de' MMMM, yyyy", {
     locale: ptBR,
   });
 
-  // Cálculos Financeiros
   const totalBRL = totalBaseBRL + summary.upgradeFeeBRL;
 
   return (
     <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      {/* Modal Container */}
       <div className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-300 max-h-[95vh]">
-        {/* Header */}
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-white">
           <h2 className="text-lg font-bold text-slate-900">Revisar Reserva</h2>
           <button
@@ -76,9 +104,8 @@ export function CheckoutModal({
           </button>
         </div>
 
-        {/* Body Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 overflow-y-auto">
-          {/* LADO ESQUERDO: Detalhes do Agendamento */}
+          {/* LADO ESQUERDO */}
           <div className="p-6 md:p-8 bg-slate-50 border-b md:border-b-0 md:border-r border-slate-100 flex flex-col">
             <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-6">
               Detalhes do Espaço
@@ -118,7 +145,6 @@ export function CheckoutModal({
                 </div>
               </div>
 
-              {/* Box de Horário com Botão de Alterar */}
               <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-sm mt-4">
                 <div className="flex justify-between items-start mb-3 border-b border-slate-100 pb-3">
                   <div className="flex items-center gap-2">
@@ -139,10 +165,9 @@ export function CheckoutModal({
                   {dateFormatted}
                 </p>
 
-                {/* LISTA DE HORÁRIOS UM ABAIXO DO OUTRO */}
                 <div className="flex flex-col gap-2">
                   {selectedSlots.map((slot) => {
-                    const time = slot.split("|")[1]; // Pega "09h00 - 10h00"
+                    const time = slot.split("|")[1];
                     return (
                       <div
                         key={slot}
@@ -164,13 +189,12 @@ export function CheckoutModal({
             </div>
           </div>
 
-          {/* LADO DIREITO: Financeiro e Pagamento */}
+          {/* LADO DIREITO */}
           <div className="p-6 md:p-8 flex flex-col bg-white">
             <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-6">
               Resumo de Compra
             </h3>
 
-            {/* Recibo / Fatura Dupla */}
             <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 mb-8">
               <div className="flex justify-between items-center pb-3 border-b border-slate-200 mb-3">
                 <span className="text-sm font-medium text-slate-600">
@@ -200,13 +224,11 @@ export function CheckoutModal({
               )}
             </div>
 
-            {/* Métodos de Pagamento (Selectable Cards) */}
             <div className="mb-8 space-y-3">
               <p className="text-sm font-bold text-slate-900">
                 Como você deseja pagar?
               </p>
 
-              {/* Opção: Carteira */}
               <div
                 onClick={() => setPaymentMethod("wallet")}
                 className={`p-4 rounded-xl border-2 cursor-pointer flex items-center justify-between transition-all ${paymentMethod === "wallet" ? "bg-orange-50 border-[#f05e23]" : "bg-white border-slate-200 hover:border-slate-300"}`}
@@ -235,7 +257,6 @@ export function CheckoutModal({
                 </div>
               </div>
 
-              {/* Opção: PIX */}
               <div
                 onClick={() => setPaymentMethod("pix")}
                 className={`p-4 rounded-xl border-2 cursor-pointer flex items-center justify-between transition-all ${paymentMethod === "pix" ? "bg-orange-50 border-[#f05e23]" : "bg-white border-slate-200 hover:border-slate-300"}`}
@@ -264,7 +285,6 @@ export function CheckoutModal({
                 </div>
               </div>
 
-              {/* Opção: Cartão */}
               <div
                 onClick={() => setPaymentMethod("card")}
                 className={`p-4 rounded-xl border-2 cursor-pointer flex items-center justify-between transition-all ${paymentMethod === "card" ? "bg-orange-50 border-[#f05e23]" : "bg-white border-slate-200 hover:border-slate-300"}`}
@@ -294,7 +314,6 @@ export function CheckoutModal({
               </div>
             </div>
 
-            {/* Ação Dinâmica baseada no Método de Pagamento */}
             <div className="mt-auto">
               {paymentMethod === "wallet" && !summary.hasEnoughCredits ? (
                 <div className="space-y-3">
