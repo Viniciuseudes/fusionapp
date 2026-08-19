@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { format, isSameDay, addDays } from "date-fns";
@@ -73,6 +73,7 @@ export function BookingsTab({
   const supabase = createClient();
   const { toast } = useToast();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -208,6 +209,25 @@ export function BookingsTab({
   useEffect(() => {
     fetchBookings();
   }, [supabase]);
+
+  useEffect(() => {
+    const scanAction = searchParams.get("scan");
+    const targetBookingId = searchParams.get("bookingId");
+
+    if (scanAction && targetBookingId && bookings.length > 0) {
+      const targetBooking = bookings.find((b) => b.id === targetBookingId);
+
+      if (targetBooking) {
+        setScannerConfig({
+          isOpen: true,
+          type: scanAction as "checkin" | "checkout",
+          booking: targetBooking,
+        });
+
+        router.replace("/dashboard", { scroll: false });
+      }
+    }
+  }, [searchParams, bookings, router]);
 
   const handleCheckinSuccess = async () => {
     if (!scannerConfig.booking) return;

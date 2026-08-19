@@ -54,7 +54,7 @@ import { useMobileBack } from "@/hooks/use-mobile-back";
 
 const AMENITIES_LIST = [
   { id: "wifi", label: "Wi-Fi de alta velocidade", icon: Wifi },
-  { id: "tv", label: 'TV 65" com HDMI', icon: Monitor },
+  { id: "tv", label: "TV com WIFI/HDMI", icon: Monitor },
   { id: "coffee", label: "Café e água", icon: Coffee },
   { id: "ac", label: "Ar-condicionado", icon: Wind },
   { id: "printer", label: "Impressora disponível", icon: Printer },
@@ -197,7 +197,13 @@ export function RoomDetail(props: RoomDetailProps) {
         .from("bookings")
         .select("id, start_time, end_time, status")
         .eq("room_id", roomData.id)
-        .in("status", ["confirmed", "pending_payment", "completed"]);
+        .in("status", [
+          "confirmed",
+          "pending_payment",
+          "completed",
+          "in_progress",
+          "locked_temp",
+        ]);
 
       if (!error && data) {
         setRoomBookings(data);

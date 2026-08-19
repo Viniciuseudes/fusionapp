@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Scanner } from "@yudiel/react-qr-scanner";
 import { useToast } from "@/hooks/use-toast";
 import { MapPin, X, Camera, AlertCircle } from "lucide-react";
@@ -12,10 +12,6 @@ interface QRScannerProps {
   type: "checkin" | "checkout";
 }
 
-// COORDENADAS DA FUSION CLINIC
-const CLINIC_LAT = -5.8118;
-const CLINIC_LNG = -35.2054;
-
 export function RoomQRScanner({
   expectedRoomId,
   onSuccess,
@@ -26,6 +22,9 @@ export function RoomQRScanner({
   const [checkingLocation, setCheckingLocation] = useState(true);
   const [scanned, setScanned] = useState(false);
   const [cameraError, setCameraError] = useState("");
+
+  // Memória para evitar Spam de alertas do Scanner (Debounce)
+  const lastErrorTimeRef = useRef<number>(0);
 
   useEffect(() => {
     document.body.style.overflow = "hidden";
@@ -60,11 +59,16 @@ export function RoomQRScanner({
       setScanned(true);
       onSuccess();
     } else {
-      toast({
-        variant: "destructive",
-        title: "QR Code Inválido",
-        description: "Esta não é a sala correta da sua reserva.",
-      });
+      // REGRA SÊNIOR: Debounce de 3 segundos para não travar o celular com alertas
+      const now = Date.now();
+      if (now - lastErrorTimeRef.current > 3000) {
+        lastErrorTimeRef.current = now;
+        toast({
+          variant: "destructive",
+          title: "QR Code Inválido 🚫",
+          description: "O código lido não pertence à sala da sua reserva.",
+        });
+      }
     }
   };
 
@@ -84,7 +88,6 @@ export function RoomQRScanner({
 
   return (
     <div className="fixed top-0 left-0 w-screen h-[100dvh] z-[9999] bg-black flex flex-col overflow-hidden">
-      {/* Header Escuro Sobreposto (Ajustado para o Notch do iPhone) */}
       <div className="absolute top-0 inset-x-0 z-50 p-6 pt-14 flex justify-between items-center bg-gradient-to-b from-black/90 to-transparent">
         <button
           onClick={onCancel}
@@ -113,7 +116,6 @@ export function RoomQRScanner({
         </div>
       )}
 
-      {/* Camada do Vídeo da Câmera */}
       <div className="absolute inset-0 w-full h-full z-0 flex items-center justify-center bg-black">
         <Scanner
           onScan={handleScan}
@@ -126,7 +128,7 @@ export function RoomQRScanner({
           constraints={{ facingMode: "environment" }}
           components={{
             tracker: () => {},
-          }} /* <-- A MÁGICA AQUI: Função vazia no lugar de 'false' */
+          }}
           styles={{
             container: { width: "100%", height: "100%" },
             video: { objectFit: "cover", width: "100%", height: "100%" },
@@ -134,7 +136,6 @@ export function RoomQRScanner({
         />
       </div>
 
-      {/* Camada da Interface Animada (Ajustada para o centro exato) */}
       <div className="absolute inset-0 z-10 pointer-events-none flex flex-col items-center justify-center">
         <div className="w-64 h-64 border-2 border-white/20 rounded-[2rem] relative flex items-center justify-center overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.5)]">
           <div className="absolute top-0 left-0 w-12 h-12 border-t-4 border-l-4 border-[#f05e23] rounded-tl-[2rem]"></div>

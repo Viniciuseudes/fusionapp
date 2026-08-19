@@ -10,12 +10,12 @@ import {
   AlertOctagon,
   Loader2,
   Clock,
+  PlusCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { createClient } from "@/utils/supabase/client";
 
-// Importamos a nossa câmera blindada
 import { RoomQRScanner } from "@/components/qr-scanner";
 
 interface ActiveSessionProps {
@@ -28,20 +28,17 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
   const { toast } = useToast();
 
   const [loading, setLoading] = useState(false);
+  const [extending, setExtending] = useState(false);
   const [secondsElapsed, setSecondsElapsed] = useState(0);
   const [sessionPhase, setSessionPhase] = useState<
     "early" | "running" | "overtime"
   >("early");
-
-  // Controle da Câmera de Check-out
+  const [overstayInfo, setOverstayInfo] = useState<
+    "checking" | "free" | "occupied"
+  >("checking");
   const [showScanner, setShowScanner] = useState(false);
 
-  // ==========================================
-  // MOTOR SÊNIOR DE CÁLCULO DE TEMPO & HARDWARE LOCK
-  // Resolve o problema de Check-in Adiantado, resiste ao F5 e PROÍBE re-renderização se a câmera abrir
-  // ==========================================
   useEffect(() => {
-    // A MÁGICA: Se o Scanner abriu, trava o relógio! Isso impede que o React interrompa a câmera no celular
     if (!booking || showScanner) return;
 
     const interval = setInterval(() => {
@@ -50,66 +47,135 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
       const endTime = parseISO(booking.end_time);
 
       if (now < startTime) {
-        // FASE 1: Check-in antecipado (ex: Chegou 11:45 para sessão de 12:00)
-        // O tempo DEVE ficar cravado em 0. O médico não perde minutos por ter chegado cedo.
         setSessionPhase("early");
         setSecondsElapsed(0);
       } else if (now >= startTime && now <= endTime) {
-        // FASE 2: Sessão rolando oficialmente.
-        // Calculamos a diferença entre AGORA e a HORA DE INÍCIO OFICIAL (start_time), ignorando o clique.
         setSessionPhase("running");
         setSecondsElapsed(differenceInSeconds(now, startTime));
       } else {
-        // FASE 3: Estourou o tempo.
         setSessionPhase("overtime");
         setSecondsElapsed(differenceInSeconds(now, startTime));
       }
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [booking, showScanner]); // O showScanner é a dependência que trava o relógio
+  }, [booking, showScanner]);
 
-  const minutesElapsed = Math.floor(secondsElapsed / 60);
-  const secondsReminder = secondsElapsed % 60;
+  // Checa disponibilidade para venda de hora extra quando entra em Overtime
+  useEffect(() => {
+    if (sessionPhase === "overtime") {
+      const checkAvailability = async () => {
+        const eTime = parseISO(booking.end_time);
+        const limit = new Date(eTime.getTime() + 60 * 60 * 1000); // 1 hora de janela
 
-  // Como o booking pode ser uma "Mescla" de várias sessões, nós precisamos somar o tempo real.
-  // Uma sessão padrão tem 60 minutos de intervalo de agenda, então o "estouro" de tolerância
-  // acontece nos 5 min finais.
+        const { data } = await supabase
+          .from("bookings")
+          .select("id")
+          .eq("room_id", booking.room_id)
+          .gte("start_time", eTime.toISOString())
+          .lt("start_time", limit.toISOString())
+          .in("status", ["confirmed", "pending_payment", "in_progress"]);
+
+        setOverstayInfo(data && data.length > 0 ? "occupied" : "free");
+      };
+      checkAvailability();
+    }
+  }, [sessionPhase, booking.end_time, booking.room_id, supabase]);
+
   const totalSessionMinutes =
     differenceInSeconds(
       parseISO(booking.end_time),
       parseISO(booking.start_time),
     ) / 60;
-  const warningThreshold = totalSessionMinutes - 10; // 50 min em uma sessão de 1h
-  const fineThreshold = totalSessionMinutes - 5; // 55 min em uma sessão de 1h
+
+  const warningThreshold = totalSessionMinutes - 10;
+  const fineThreshold = totalSessionMinutes;
+
+  const minutesElapsed = Math.floor(secondsElapsed / 60);
+  const secondsReminder = secondsElapsed % 60;
 
   let statusColor = "bg-emerald-500";
   let bgGlow = "bg-emerald-50";
   let statusText = "Sessão em andamento";
   let statusIcon = <CheckCircle2 className="w-5 h-5 text-emerald-500" />;
 
-  // Se for Check-in antecipado, sobrescreve o visual
   if (sessionPhase === "early") {
     statusColor = "bg-blue-500";
     bgGlow = "bg-blue-50";
     statusText = "Aguardando Início Oficial";
     statusIcon = <Clock className="w-5 h-5 text-blue-500" />;
-  } else if (
-    minutesElapsed >= warningThreshold &&
-    minutesElapsed < fineThreshold
-  ) {
+  } else if (sessionPhase === "running" && minutesElapsed >= warningThreshold) {
     statusColor = "bg-amber-500";
     bgGlow = "bg-amber-50";
     statusText = "Tolerância de Limpeza. Faça o Check-out.";
     statusIcon = <AlertTriangle className="w-5 h-5 text-amber-500" />;
-  } else if (minutesElapsed >= fineThreshold) {
+  } else if (sessionPhase === "overtime") {
     statusColor = "bg-red-500";
     bgGlow = "bg-red-50";
-    statusText = "Atraso! Sujeito a multa e bloqueio.";
+    statusText =
+      overstayInfo === "occupied"
+        ? "Tempo esgotado! Próximo médico aguardando."
+        : "Tempo esgotado! Sujeito a multa.";
     statusIcon = <AlertOctagon className="w-5 h-5 text-red-500" />;
   }
 
-  // Check-out Multi-Sessões
+  const handleExtendSession = async () => {
+    setExtending(true);
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("Usuário não autenticado");
+
+      const currentEndTime = parseISO(booking.end_time);
+      const newEndTime = new Date(
+        currentEndTime.getTime() + 60 * 60 * 1000,
+      ).toISOString();
+      const idsToUpdate = booking.original_ids || [booking.id];
+      const baseCost =
+        booking.total_cost > 0 ? booking.total_cost / idsToUpdate.length : 45;
+
+      // Cobra a carteira
+      const { error: walletError } = await supabase
+        .from("wallet_transactions")
+        .insert({
+          user_id: user.id,
+          amount: -baseCost,
+          type: "usage",
+          tier: booking.rooms?.tier || "start",
+          description: `Extensão Rápida (+1h): ${booking.rooms?.name}`,
+        });
+
+      if (walletError) throw walletError;
+
+      // Adiciona o tempo no banco para a ÚLTIMA reserva mesclada
+      const { error: updateError } = await supabase
+        .from("bookings")
+        .update({
+          end_time: newEndTime,
+          total_cost: booking.total_cost + baseCost,
+        })
+        .eq("id", idsToUpdate[idsToUpdate.length - 1]); // Estende só a última perna
+
+      if (updateError) throw updateError;
+
+      toast({
+        title: "Sessão Estendida! ⏰",
+        description: "Você comprou mais 1 hora de uso com sucesso.",
+      });
+
+      onSessionEnd();
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro ao estender",
+        description: error.message,
+      });
+    } finally {
+      setExtending(false);
+    }
+  };
+
   const processCheckout = async () => {
     setLoading(true);
     setShowScanner(false);
@@ -117,28 +183,25 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
       let penalty = "none";
       let amount = 0;
 
-      if (
-        minutesElapsed >= warningThreshold &&
-        minutesElapsed < fineThreshold
-      ) {
+      if (sessionPhase === "running" && minutesElapsed >= warningThreshold) {
         penalty = "warning";
-      } else if (minutesElapsed >= fineThreshold) {
+      } else if (sessionPhase === "overtime") {
         penalty = "fined";
-        amount = booking.total_cost > 0 ? booking.total_cost : 45; // Mantivemos sua regra de negócios original
+        const idsToUpdate = booking.original_ids || [booking.id];
+        amount =
+          booking.total_cost > 0 ? booking.total_cost / idsToUpdate.length : 45;
       }
 
       const checkoutTime = new Date().toISOString();
       const idsToUpdate = booking.original_ids || [booking.id];
 
-      // ATUALIZAÇÃO SÊNIOR EM LOTE
       const { error } = await supabase
         .from("bookings")
         .update({
           checkout_time: checkoutTime,
           status: "completed",
           penalty_status: penalty,
-          // A penalidade (fined) é aplicada uniformemente ou fracionada, mas o supabase fará o update pra todas.
-          penalty_amount: amount / idsToUpdate.length,
+          penalty_amount: amount,
         })
         .in("id", idsToUpdate);
 
@@ -147,8 +210,9 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
       if (penalty === "fined") {
         toast({
           variant: "destructive",
-          title: "Check-out com Atraso",
-          description: "O tempo limite foi excedido. Uma multa será aplicada.",
+          title: "Check-out com Multa",
+          description:
+            "Você ultrapassou o horário da sua reserva. O valor de 1 hora foi debitado.",
         });
       } else if (penalty === "warning") {
         toast({
@@ -178,7 +242,7 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
     <>
       <div className="max-w-2xl mx-auto w-full p-4 mt-6 animate-in zoom-in-95 duration-500">
         <div
-          className={`rounded-[2rem] border-2 shadow-2xl overflow-hidden transition-all duration-300 ${showScanner ? "scale-95 opacity-50 blur-sm" : ""} ${minutesElapsed >= fineThreshold ? "border-red-200" : minutesElapsed >= warningThreshold ? "border-amber-200" : sessionPhase === "early" ? "border-blue-200" : "border-emerald-200"}`}
+          className={`rounded-[2rem] border-2 shadow-2xl overflow-hidden transition-all duration-300 ${showScanner ? "scale-95 opacity-50 blur-sm" : ""} ${sessionPhase === "overtime" ? "border-red-200" : sessionPhase === "running" && minutesElapsed >= warningThreshold ? "border-amber-200" : sessionPhase === "early" ? "border-blue-200" : "border-emerald-200"}`}
         >
           <div
             className={`p-8 text-center ${bgGlow} transition-colors duration-500`}
@@ -216,39 +280,71 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
           </div>
 
           <div className="bg-white p-6 md:p-8 flex flex-col gap-4">
-            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 mb-2">
-              <h4 className="text-xs font-bold uppercase text-slate-400 mb-2 tracking-wider">
-                Regras de Saída
-              </h4>
-              <ul className="text-sm text-slate-600 font-medium space-y-2">
-                <li className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>{" "}
-                  Saia até os últimos 10 min: Limpeza ideal.
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                  Últimos 10 min: Tolerância (Advertência).
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-red-500"></span>
-                  Estouro do relógio: Multa no sistema.
-                </li>
-              </ul>
-            </div>
+            {sessionPhase === "overtime" && overstayInfo === "free" ? (
+              <div className="flex flex-col gap-3">
+                <Button
+                  onClick={handleExtendSession}
+                  disabled={extending}
+                  className="w-full h-16 rounded-2xl font-black text-lg bg-emerald-500 hover:bg-emerald-600 text-white shadow-xl transition-all hover:scale-[1.02]"
+                >
+                  {extending ? (
+                    <Loader2 className="w-6 h-6 animate-spin" />
+                  ) : (
+                    <>
+                      <PlusCircle className="w-6 h-6 mr-2" /> Comprar +1 Hora
+                    </>
+                  )}
+                </Button>
+                <Button
+                  onClick={() => setShowScanner(true)}
+                  disabled={loading}
+                  variant="outline"
+                  className="w-full h-14 rounded-2xl font-bold text-red-600 border-red-200 hover:bg-red-50"
+                >
+                  Fazer Check-out Atrasado (Pagar Multa)
+                </Button>
+              </div>
+            ) : (
+              <>
+                {sessionPhase !== "overtime" && (
+                  <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 mb-2">
+                    <h4 className="text-xs font-bold uppercase text-slate-400 mb-2 tracking-wider">
+                      Regras de Saída
+                    </h4>
+                    <ul className="text-sm text-slate-600 font-medium space-y-2">
+                      <li className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500"></span>{" "}
+                        Saia até os últimos 10 min: Limpeza ideal.
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                        Últimos 10 min: Tolerância (Advertência).
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                        Estouro do relógio: Multa no sistema.
+                      </li>
+                    </ul>
+                  </div>
+                )}
 
-            <Button
-              onClick={() => setShowScanner(true)}
-              disabled={loading || sessionPhase === "early"}
-              className={`w-full h-16 rounded-2xl font-black text-lg text-white shadow-xl transition-all hover:scale-[1.02] ${statusColor}`}
-            >
-              {loading ? (
-                <Loader2 className="w-6 h-6 animate-spin" />
-              ) : sessionPhase === "early" ? (
-                "Aguarde o início da sessão..."
-              ) : (
-                "Ler QR Code de Saída"
-              )}
-            </Button>
+                <Button
+                  onClick={() => setShowScanner(true)}
+                  disabled={loading || sessionPhase === "early"}
+                  className={`w-full h-16 rounded-2xl font-black text-lg text-white shadow-xl transition-all hover:scale-[1.02] ${statusColor}`}
+                >
+                  {loading ? (
+                    <Loader2 className="w-6 h-6 animate-spin" />
+                  ) : sessionPhase === "early" ? (
+                    "Aguarde o início da sessão..."
+                  ) : sessionPhase === "overtime" ? (
+                    "Ler QR Code e Pagar Multa"
+                  ) : (
+                    "Ler QR Code de Saída"
+                  )}
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </div>
