@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useMemo } from "react";
+import { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
@@ -195,7 +195,6 @@ export function RoomDetail(props: RoomDetailProps) {
     async function fetchRoomBookings() {
       const { data, error } = await supabase
         .from("bookings")
-        // ADICIONAMOS created_at E asaas_payment_id PARA O CÁLCULO DE TTL
         .select(
           "id, start_time, end_time, status, created_at, asaas_payment_id",
         )
@@ -480,22 +479,16 @@ export function RoomDetail(props: RoomDetailProps) {
       const slotStart = parseSlotDate(dateStr, startSlotStr).getTime();
 
       return roomBookings.some((b) => {
-        // ==========================================
-        // MOTOR SÊNIOR: GESTÃO DE ABANDONO (TTL)
-        // Ignora reservas fantasmas presas no banco
-        // ==========================================
         if (b.status === "pending_payment" && b.created_at) {
           const lockTime = new Date(b.created_at).getTime();
           const now = new Date().getTime();
 
-          // Caso 1: Lock de Checkout (Sem PIX gerado). Expira rigorosamente em 6 minutos.
           if (!b.asaas_payment_id && now - lockTime > 6 * 60 * 1000) {
-            return false; // Ignora e libera a sala
+            return false;
           }
 
-          // Caso 2: PIX Gerado, aguardando pagamento. Expira em 30 minutos.
           if (b.asaas_payment_id && now - lockTime > 30 * 60 * 1000) {
-            return false; // Ignora e libera a sala
+            return false;
           }
         }
 
@@ -791,14 +784,21 @@ export function RoomDetail(props: RoomDetailProps) {
     }
   };
 
-  const handleCheckoutClose = async () => {
+  // ==========================================
+  // CORREÇÃO DO LOOP INFINITO (USECALLBACK)
+  // Congelamos a função para o useEffect do modal não pirar
+  // ==========================================
+  const handleCheckoutClose = useCallback(() => {
     setIsCheckoutOpen(false);
-    if (checkoutSummary && (checkoutSummary as any).lockIds) {
-      const lockIds = (checkoutSummary as any).lockIds;
-      await supabase.from("bookings").delete().in("id", lockIds);
-    }
-    setCheckoutSummary(null);
-  };
+    setCheckoutSummary((prevSummary) => {
+      if (prevSummary && (prevSummary as any).lockIds) {
+        const lockIds = (prevSummary as any).lockIds;
+        // Deleção silenciosa das reservas fantasmas
+        supabase.from("bookings").delete().in("id", lockIds).then();
+      }
+      return null;
+    });
+  }, [supabase]);
 
   const handleFavoriteToggle = async () => {
     if (isFavoriteLoading || !roomData) return;
@@ -1060,7 +1060,6 @@ export function RoomDetail(props: RoomDetailProps) {
           </div>
         </div>
 
-        {/* CARROSSEL MOBILE COM CORREÇÃO DE SCROLL E LAZY LOAD */}
         <div className="md:hidden relative w-full h-[35vh] bg-slate-200 flex overflow-x-auto snap-x snap-mandatory scrollbar-hide touch-pan-x">
           {allImages.length > 0 ? (
             allImages.map((img, idx) => (
@@ -1168,13 +1167,11 @@ export function RoomDetail(props: RoomDetailProps) {
 
             <div className="w-full h-px bg-slate-100" />
 
-            {/* MAPA ESTÁTICO (BLINDADO) */}
             <section>
               <h2 className="text-lg font-black text-slate-900 mb-4">
                 Localização da Sala
               </h2>
               <div className="relative w-full h-64 bg-slate-100 rounded-2xl overflow-hidden border border-slate-200 shadow-inner">
-                {/* Iframe encapsulado com pointer-events-none para não interagir */}
                 <div className="absolute top-[-70px] left-0 w-full h-[calc(100%+70px)] pointer-events-none">
                   <iframe
                     width="100%"
@@ -1185,11 +1182,9 @@ export function RoomDetail(props: RoomDetailProps) {
                     src={`https://www.google.com/maps?q=${mapSearchQuery}&output=embed&z=15`}
                   ></iframe>
                 </div>
-                {/* Raio Azul Falso (Fixo no centro) */}
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                   <div className="w-48 h-48 bg-[#00bcd4]/20 border-2 border-[#00bcd4]/40 rounded-full shadow-[0_0_15px_rgba(0,188,212,0.3)]"></div>
                 </div>
-                {/* Etiqueta de Endereço */}
                 <div className="absolute bottom-4 left-4 right-4 md:right-auto md:w-64 bg-white/95 backdrop-blur-md px-4 py-3 rounded-xl shadow-md border border-slate-100 flex items-center gap-3 pointer-events-none">
                   <div className="w-10 h-10 rounded-full bg-cyan-50 flex items-center justify-center shrink-0">
                     <MapPin className="w-5 h-5 text-cyan-600" />
@@ -1846,9 +1841,7 @@ export function RoomDetail(props: RoomDetailProps) {
       <CheckoutModal
         isOpen={isCheckoutOpen}
         onClose={handleCheckoutClose}
-        onConfirm={(method) => {
-          handleConfirmCheckout(method);
-        }}
+        onConfirm={handleConfirmCheckout}
         loading={actionLoading}
         summary={checkoutSummary}
         room={roomData}
