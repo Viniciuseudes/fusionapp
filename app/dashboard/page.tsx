@@ -29,7 +29,6 @@ function DashboardContent() {
   const router = useRouter();
   const supabase = createClient();
 
-  const [isDashboardReady, setIsDashboardReady] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>("search");
   const [selectedRoom, setSelectedRoom] = useState<any | null>(null);
   const [pendingReviewBooking, setPendingReviewBooking] = useState<any | null>(
@@ -87,9 +86,29 @@ function DashboardContent() {
 
   const handleTabChange = (tab: TabType) => {
     if (activeTab === tab && !selectedRoom) return;
-    setActiveTab(tab);
-    setSelectedRoom(null);
-    window.history.pushState(null, "", window.location.pathname + "#" + tab);
+
+    if (tab === "search") {
+      if (activeTab !== "search") {
+        window.history.back();
+        return;
+      }
+    } else {
+      if (activeTab === "search") {
+        window.history.pushState(
+          null,
+          "",
+          window.location.pathname + "#" + tab,
+        );
+      } else {
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + "#" + tab,
+        );
+      }
+      setActiveTab(tab);
+      setSelectedRoom(null);
+    }
   };
 
   const handleOpenRoom = (room: any) => {
@@ -183,8 +202,6 @@ function DashboardContent() {
             }
           }
         }
-
-        setIsDashboardReady(true);
       } catch (error) {
         console.error("Erro ao inicializar o dashboard:", error);
       }
@@ -214,14 +231,6 @@ function DashboardContent() {
         return <SearchTab onOpenRoom={handleOpenRoom} />;
     }
   };
-
-  if (!isDashboardReady) {
-    return (
-      <div className="flex h-screen w-full items-center justify-center bg-slate-50">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
-      </div>
-    );
-  }
 
   return (
     <div className="flex min-h-svh flex-col bg-slate-50">
