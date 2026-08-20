@@ -11,7 +11,6 @@ import {
   ArrowRight,
   CheckCircle2,
   Clock,
-  TimerReset,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { format } from "date-fns";
@@ -25,6 +24,7 @@ export interface CheckoutSummary {
   hasEnoughCredits: boolean;
   currentBalance: number;
   canProceed: boolean;
+  lockIds?: string[];
 }
 
 interface CheckoutModalProps {
@@ -54,10 +54,6 @@ export function CheckoutModal({
   const [paymentMethod, setPaymentMethod] = useState<"wallet" | "pix" | "card">(
     "wallet",
   );
-
-  // ==========================================
-  // ESTADO DO CRONÔMETRO (5 MINUTOS)
-  // ==========================================
   const [timeLeft, setTimeLeft] = useState(5 * 60);
 
   // Escudo PWA (Android Back Button)
@@ -80,20 +76,19 @@ export function CheckoutModal({
     }
   }, [isOpen, onClose]);
 
-  // Motor do Cronômetro
+  // Motor do Cronômetro Neutro
   useEffect(() => {
     if (isOpen) {
-      setTimeLeft(5 * 60); // Reseta para 5 minutos sempre que abre
+      setTimeLeft(5 * 60);
       const timer = setInterval(() => {
         setTimeLeft((prev) => {
           if (prev <= 1) {
             clearInterval(timer);
-            onClose(); // Fecha o modal
+            onClose();
+            // ALERTA NEUTRO E AMIGÁVEL AO INVÉS DE CAIXA VERMELHA
             toast({
-              variant: "destructive",
-              title: "Tempo Esgotado ⏰",
-              description:
-                "Os horários foram liberados para outros usuários. Tente reservar novamente.",
+              title: "Tempo de compra esgotado",
+              description: "Os horários foram liberados para outros usuários.",
             });
             return 0;
           }
@@ -112,23 +107,21 @@ export function CheckoutModal({
   });
   const totalBRL = totalBaseBRL + summary.upgradeFeeBRL;
 
-  // Formatação do tempo (MM:SS)
   const minutes = Math.floor(timeLeft / 60);
   const seconds = timeLeft % 60;
   const timeFormatted = `${minutes}:${seconds.toString().padStart(2, "0")}`;
-  const isTimeRunningOut = timeLeft < 60; // Fica vermelho no último minuto
 
   return (
     <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
       <div className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-300 max-h-[95vh]">
-        {/* BANNER DO CRONÔMETRO */}
-        <div
-          className={`px-6 py-2.5 flex items-center justify-center gap-2 transition-colors ${isTimeRunningOut ? "bg-red-500 text-white" : "bg-slate-900 text-white"}`}
-        >
-          <TimerReset className="w-4 h-4 animate-pulse" />
-          <p className="text-xs font-bold tracking-widest uppercase">
-            Horários bloqueados para você por{" "}
-            <span className="font-black text-sm ml-1">{timeFormatted}</span>
+        {/* BANNER DO CRONÔMETRO NEUTRO */}
+        <div className="px-6 py-2.5 flex items-center justify-center gap-2 bg-slate-100 border-b border-slate-200">
+          <Clock className="w-4 h-4 text-slate-400" />
+          <p className="text-xs font-bold text-slate-500 tracking-widest uppercase">
+            Tempo restante para concluir:{" "}
+            <span className="font-black text-sm ml-1 text-slate-700">
+              {timeFormatted}
+            </span>
           </p>
         </div>
 
@@ -369,7 +362,7 @@ export function CheckoutModal({
               ) : (
                 <Button
                   onClick={() => onConfirm(paymentMethod)}
-                  disabled={loading || (isTimeRunningOut && timeLeft === 0)}
+                  disabled={loading || timeLeft === 0}
                   className="w-full h-14 rounded-xl font-black bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-md transition-all text-base disabled:opacity-50"
                 >
                   {loading ? (

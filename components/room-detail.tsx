@@ -122,15 +122,14 @@ export function RoomDetail(props: RoomDetailProps) {
 
   // ==========================================
   // O "CORAÇÃO" DO SISTEMA (HEARTBEAT)
-  // Força a tela a se atualizar a cada 10 segundos
-  // para remover os Ghost Locks instantaneamente
+  // Atualiza a cada 5 segundos para limpar Ghosts
   // ==========================================
   const [currentTime, setCurrentTime] = useState<number>(Date.now());
 
   useEffect(() => {
     const interval = setInterval(() => {
       setCurrentTime(Date.now());
-    }, 10000); // 10 segundos
+    }, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -495,7 +494,6 @@ export function RoomDetail(props: RoomDetailProps) {
       return roomBookings.some((b) => {
         if (b.status === "pending_payment" && b.created_at) {
           const lockTime = new Date(b.created_at).getTime();
-          // Aqui a mágica do Heartbeat garante a liberação sem F5
           const now = currentTime;
 
           if (!b.asaas_payment_id && now - lockTime > 6 * 60 * 1000) {
@@ -521,7 +519,7 @@ export function RoomDetail(props: RoomDetailProps) {
       const [dateStr, timeStr] = slotKey.split("|");
       const startSlotStr = timeStr.split(" - ")[0];
       const slotStart = parseSlotDate(dateStr, startSlotStr).getTime();
-      return slotStart < currentTime; // A tela atualiza sozinha usando o Heartbeat!
+      return slotStart < currentTime;
     } catch {
       return true;
     }
@@ -800,28 +798,35 @@ export function RoomDetail(props: RoomDetailProps) {
   };
 
   // ==========================================
-  // CORREÇÃO: Limpeza imediata ao fechar o Checkout
-  // (Solta a seleção e a trava de forma instantânea)
+  // PROTEÇÃO CONTRA LOOP INFINITO (useCallback com useRef)
+  // Desativa os botões instantaneamente ao clicar no "X"
   // ==========================================
+  const checkoutSummaryRef = useRef<any>(null);
+
+  useEffect(() => {
+    checkoutSummaryRef.current = checkoutSummary;
+  }, [checkoutSummary]);
+
   const handleCheckoutClose = useCallback(() => {
     setIsCheckoutOpen(false);
-    setSelectedSlots([]); // Libera os botões azuis que o usuário clicou
+    setSelectedSlots([]); // Libera os botões instantaneamente na tela atual!
 
-    setCheckoutSummary((prevSummary) => {
-      if (prevSummary && (prevSummary as any).lockIds) {
-        const lockIds = (prevSummary as any).lockIds;
+    const summary = checkoutSummaryRef.current;
+    if (summary && summary.lockIds) {
+      const lockIds = summary.lockIds;
 
-        // Remove da lista local para liberação visual instantânea!
-        setRoomBookings((prevBookings) =>
-          prevBookings.filter((b) => !lockIds.includes(b.id)),
-        );
+      // Remove visualmente da lista de reservas para ficar liberado na mesma hora
+      setRoomBookings((prevBookings) =>
+        prevBookings.filter((b) => !lockIds.includes(b.id)),
+      );
 
-        // Exclui do banco de dados silenciosamente
-        supabase.from("bookings").delete().in("id", lockIds).then();
-      }
-      return null;
-    });
-  }, [supabase]);
+      // Deleta do banco de forma silenciosa
+      const supabaseClient = createClient();
+      supabaseClient.from("bookings").delete().in("id", lockIds).then();
+    }
+
+    setCheckoutSummary(null);
+  }, []); // Sem dependências = Zero Loops Infinitos
 
   const handleFavoriteToggle = async () => {
     if (isFavoriteLoading || !roomData) return;
