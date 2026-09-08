@@ -5,11 +5,13 @@ import { Scanner } from "@yudiel/react-qr-scanner";
 import { useToast } from "@/hooks/use-toast";
 import { MapPin, X, Camera, AlertCircle } from "lucide-react";
 
+// 1. ADICIONADO O ONERROR AQUI NA TIPAGEM (O Contrato)
 interface QRScannerProps {
   expectedRoomId: string;
   onSuccess: () => void;
   onCancel: () => void;
   type: "checkin" | "checkout";
+  onError?: (err: any) => void;
 }
 
 export function RoomQRScanner({
@@ -17,6 +19,7 @@ export function RoomQRScanner({
   onSuccess,
   onCancel,
   type,
+  onError, // 2. RECEBENDO A FUNÇÃO AQUI
 }: QRScannerProps) {
   const { toast } = useToast();
   const [checkingLocation, setCheckingLocation] = useState(true);
@@ -124,6 +127,11 @@ export function RoomQRScanner({
             setCameraError(
               "Não foi possível acessar a câmera do seu dispositivo.",
             );
+
+            // 3. SE A CÂMERA FALHAR, AVISA A TELA DE RESERVAS IMEDIATAMENTE
+            if (onError) {
+              onError(error);
+            }
           }}
           constraints={{ facingMode: "environment" }}
           components={{

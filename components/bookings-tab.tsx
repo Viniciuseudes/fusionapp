@@ -43,6 +43,8 @@ import {
   Download,
   Mail,
   Map as MapIcon,
+  Keyboard,
+  BellRing,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -69,6 +71,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 
 import { ActiveSession } from "@/components/active-session";
 import { RoomQRScanner } from "@/components/qr-scanner";
@@ -134,6 +137,7 @@ export function BookingsTab({
   // Estados de UI
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
   const [isSheetOpen, setIsSheetOpen] = useState(false);
+
   const [receiptModal, setReceiptModal] = useState<{
     isOpen: boolean;
     booking: Booking | null;
@@ -144,18 +148,22 @@ export function BookingsTab({
     rating: number;
     comment: string;
   }>({ isOpen: false, booking: null, rating: 0, comment: "" });
-
   const [cancelModal, setCancelModal] = useState<{
     isOpen: boolean;
     booking: Booking | null;
   }>({ isOpen: false, booking: null });
+
   const [activeSessionBooking, setActiveSessionBooking] =
     useState<Booking | null>(null);
+
+  // SCANNER & MANUAL FALLBACK
   const [scannerConfig, setScannerConfig] = useState<{
     isOpen: boolean;
     type: "checkin" | "checkout";
     booking: Booking | null;
-  }>({ isOpen: false, type: "checkin", booking: null });
+    cameraFailed: boolean;
+  }>({ isOpen: false, type: "checkin", booking: null, cameraFailed: false });
+  const [manualCode, setManualCode] = useState("");
 
   useMobileBack(
     !!activeSessionBooking,
@@ -164,7 +172,13 @@ export function BookingsTab({
   );
   useMobileBack(
     scannerConfig.isOpen,
-    () => setScannerConfig({ isOpen: false, type: "checkin", booking: null }),
+    () =>
+      setScannerConfig({
+        isOpen: false,
+        type: "checkin",
+        booking: null,
+        cameraFailed: false,
+      }),
     "scanner-qr",
   );
   useMobileBack(
@@ -269,6 +283,57 @@ export function BookingsTab({
     fetchBookings();
   }, [supabase]);
 
+  // --- MOTOR DE NOTIFICAÇÕES (WEB PUSH / TOAST) ---
+  useEffect(() => {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+
+    const interval = setInterval(() => {
+      const nowTime = new Date();
+
+      bookings.forEach((b) => {
+        if (b.status === "confirmed") {
+          const diffStart = differenceInMinutes(
+            parseISO(b.start_time),
+            nowTime,
+          );
+          if (diffStart === 15) {
+            triggerNotification(
+              "Check-in Liberado! 🔓",
+              `Sua sala (${b.rooms.name}) está pronta para você. Pode realizar o check-in no app.`,
+            );
+          }
+        } else if (b.status === "in_progress") {
+          const diffEnd = differenceInMinutes(parseISO(b.end_time), nowTime);
+          if (diffEnd === 10) {
+            triggerNotification(
+              "Sessão Acabando ⏰",
+              `Faltam apenas 10 minutos para o término do seu horário na sala ${b.rooms.name}. Organize a saída para não gerar multas.`,
+            );
+          }
+        }
+      });
+    }, 60000); // Roda a cada 1 minuto
+
+    return () => clearInterval(interval);
+  }, [bookings]);
+
+  const triggerNotification = (title: string, body: string) => {
+    if ("Notification" in window && Notification.permission === "granted") {
+      new Notification(title, { body, icon: "/icon-512x512.png" });
+    } else {
+      toast({
+        title: (
+          <div className="flex items-center gap-2">
+            <BellRing className="w-4 h-4 text-[#f05e23]" /> {title}
+          </div>
+        ) as any,
+        description: body,
+      });
+    }
+  };
+
   useEffect(() => {
     const scanAction = searchParams.get("scan");
     const targetBookingId = searchParams.get("bookingId");
@@ -280,6 +345,7 @@ export function BookingsTab({
           isOpen: true,
           type: scanAction as "checkin" | "checkout",
           booking: targetBooking,
+          cameraFailed: false,
         });
         router.replace("/dashboard", { scroll: false });
       }
@@ -351,7 +417,15 @@ export function BookingsTab({
   const handleCheckinSuccess = async () => {
     if (!scannerConfig.booking) return;
     const currentBooking = scannerConfig.booking;
-    setScannerConfig({ isOpen: false, type: "checkin", booking: null });
+
+    // Se estava no manual mode, esconde o modal
+    setScannerConfig({
+      isOpen: false,
+      type: "checkin",
+      booking: null,
+      cameraFailed: false,
+    });
+    setManualCode("");
 
     try {
       const checkinTime = new Date().toISOString();
@@ -517,20 +591,15 @@ export function BookingsTab({
     }
   };
 
-  // --- ROTEAMENTO SÊNIOR (SPA VIA HASH FORÇADO) ---
   const handleBookAgain = (roomId: string) => {
     setIsSheetOpen(false);
     setTimeout(() => {
-      // 1. Usa o router do Next para registrar o histórico
       router.push(`/#room/${roomId}`);
-      // 2. Altera a URL nativamente como fallback
       window.location.hash = `room/${roomId}`;
-      // 3. Dispara o evento manualmente para forçar o Dashboard a acordar e trocar a View
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     }, 300);
   };
 
-  // --- MOTOR DE PDF (RECIBO) ---
   const handleDownloadPDF = () => {
     const element = document.getElementById("receipt-content");
     if (!element) return;
@@ -615,7 +684,6 @@ CNPJ: 49.351.127/0001-44
     const diffMins = differenceInMinutes(parseISO(end), parseISO(start));
     const hours = Math.floor(diffMins / 60);
     const mins = diffMins % 60;
-
     if (hours > 0 && mins > 0) return `${hours}h ${mins}m`;
     if (hours > 0) return `${hours}h`;
     return `${mins}m`;
@@ -765,6 +833,16 @@ CNPJ: 49.351.127/0001-44
           className="p-4 md:p-6 bg-slate-50 md:bg-transparent border-t md:border-t-0 md:border-l border-slate-100 flex flex-col justify-center gap-2 md:w-56 shrink-0"
           onClick={(e) => e.stopPropagation()}
         >
+          {/* BOTÃO CHAT AGORA SEMPRE VISÍVEL COMO PRIORIDADE */}
+          <Button
+            onClick={(e) => handleOpenChat(booking, e)}
+            disabled={actionLoading}
+            variant="outline"
+            className="w-full h-10 rounded-lg text-xs font-bold border-slate-200 text-slate-700 hover:bg-slate-100 mb-1 shadow-sm"
+          >
+            <MessageCircle className="w-3.5 h-3.5 mr-1.5" /> Falar com Anfitrião
+          </Button>
+
           {isInProgress ? (
             <Button
               onClick={() => setActiveSessionBooking(booking)}
@@ -775,7 +853,12 @@ CNPJ: 49.351.127/0001-44
           ) : isReadyForCheckin ? (
             <Button
               onClick={() =>
-                setScannerConfig({ isOpen: true, type: "checkin", booking })
+                setScannerConfig({
+                  isOpen: true,
+                  type: "checkin",
+                  booking,
+                  cameraFailed: false,
+                })
               }
               className="w-full h-12 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
             >
@@ -789,18 +872,9 @@ CNPJ: 49.351.127/0001-44
                 </div>
               )}
               <Button
-                onClick={(e) => handleOpenChat(booking, e)}
-                disabled={actionLoading}
-                variant="outline"
-                className="w-full h-10 rounded-lg text-xs font-bold border-slate-200 text-slate-700 hover:bg-slate-100"
-              >
-                <MessageCircle className="w-3.5 h-3.5 mr-1.5" /> Falar com
-                Anfitrião
-              </Button>
-              <Button
                 onClick={() => setCancelModal({ isOpen: true, booking })}
                 variant="ghost"
-                className="w-full h-10 rounded-lg text-xs font-bold text-red-600 hover:bg-red-50 hover:text-red-700"
+                className="w-full h-10 rounded-lg text-xs font-bold text-red-600 hover:bg-red-50 hover:text-red-700 mt-1"
               >
                 <XCircle className="w-3.5 h-3.5 mr-1.5" /> Cancelar
               </Button>
@@ -811,7 +885,6 @@ CNPJ: 49.351.127/0001-44
     );
   };
 
-  // --- CARD COMPACTO ESTILO UBER (HISTÓRICO) ---
   const HistoryCard = ({ booking }: { booking: Booking }) => {
     const startObj = parseISO(booking.start_time);
     const statusData = getStatusDisplay(booking.status);
@@ -1030,7 +1103,7 @@ CNPJ: 49.351.127/0001-44
         </div>
       </div>
 
-      {/* GAVETA DE DETALHES (Sheet) com Correção de TELA CHEIA no Desktop */}
+      {/* GAVETA DE DETALHES (Sheet) */}
       <Sheet open={isSheetOpen} onOpenChange={setIsSheetOpen}>
         <SheetContent
           side="bottom"
@@ -1065,7 +1138,6 @@ CNPJ: 49.351.127/0001-44
 
               return (
                 <div className="max-w-3xl mx-auto w-full space-y-6">
-                  {/* Botão Voltar (Apenas Desktop) para melhor UX */}
                   <div className="hidden sm:flex mb-6">
                     <Button
                       variant="ghost"
@@ -1123,6 +1195,19 @@ CNPJ: 49.351.127/0001-44
                       </div>
                     )}
                   </div>
+
+                  {/* BOTÃO CHAT AQUI TAMBÉM PELA UX SÊNIOR */}
+                  {activeTab === "upcoming" && (
+                    <Button
+                      onClick={(e) => handleOpenChat(selectedBooking, e)}
+                      disabled={actionLoading}
+                      variant="outline"
+                      className="w-full h-12 rounded-xl font-bold border-slate-200 text-slate-700 bg-white shadow-sm mb-2"
+                    >
+                      <MessageCircle className="w-4 h-4 mr-2 text-[#f05e23]" />{" "}
+                      Acionar Anfitrião / Suporte
+                    </Button>
+                  )}
 
                   <div className="bg-white border border-slate-100 p-5 rounded-2xl shadow-sm space-y-4">
                     <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
@@ -1200,7 +1285,6 @@ CNPJ: 49.351.127/0001-44
                   </div>
 
                   <div className="space-y-3 pt-4">
-                    {/* AÇÕES DINÂMICAS BASEADAS NO STATUS E TAB */}
                     {activeTab === "upcoming" ? (
                       <>
                         {isInProgress ? (
@@ -1222,6 +1306,7 @@ CNPJ: 49.351.127/0001-44
                                 isOpen: true,
                                 type: "checkin",
                                 booking: selectedBooking,
+                                cameraFailed: false,
                               });
                             }}
                             className="w-full h-14 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl shadow-lg"
@@ -1230,32 +1315,19 @@ CNPJ: 49.351.127/0001-44
                             Agora
                           </Button>
                         ) : (
-                          <div className="flex flex-col sm:flex-row gap-3">
-                            <Button
-                              onClick={(e) =>
-                                handleOpenChat(selectedBooking, e)
-                              }
-                              disabled={actionLoading}
-                              variant="outline"
-                              className="flex-1 h-12 rounded-xl font-bold border-slate-200 text-slate-700 bg-white"
-                            >
-                              <MessageCircle className="w-4 h-4 mr-2" /> Falar
-                              com Anfitrião
-                            </Button>
-                            <Button
-                              onClick={() => {
-                                setIsSheetOpen(false);
-                                setCancelModal({
-                                  isOpen: true,
-                                  booking: selectedBooking,
-                                });
-                              }}
-                              variant="ghost"
-                              className="flex-1 h-12 text-xs font-bold text-red-500 hover:text-red-700 hover:bg-red-50"
-                            >
-                              Cancelar Reserva
-                            </Button>
-                          </div>
+                          <Button
+                            onClick={() => {
+                              setIsSheetOpen(false);
+                              setCancelModal({
+                                isOpen: true,
+                                booking: selectedBooking,
+                              });
+                            }}
+                            variant="ghost"
+                            className="w-full h-12 text-xs font-bold text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl"
+                          >
+                            Cancelar Reserva
+                          </Button>
                         )}
                       </>
                     ) : (
@@ -1270,7 +1342,6 @@ CNPJ: 49.351.127/0001-44
                           Novamente
                         </Button>
                         <div className="grid grid-cols-2 gap-3">
-                          {/* BOTÃO DE RECIBO - Só aparece em reservas CONCLUÍDAS */}
                           {selectedBooking.status === "completed" ? (
                             <Button
                               onClick={() =>
@@ -1291,8 +1362,6 @@ CNPJ: 49.351.127/0001-44
                               (Não Concluída)
                             </div>
                           )}
-
-                          {/* AVALIAÇÃO - Só aparece em reservas CONCLUÍDAS */}
                           {selectedBooking.status === "completed" &&
                             (isEvaluated ? (
                               <div className="h-12 bg-emerald-50 border border-emerald-100 rounded-xl flex items-center justify-center gap-2 text-emerald-700 font-black text-sm">
@@ -1327,7 +1396,7 @@ CNPJ: 49.351.127/0001-44
         </SheetContent>
       </Sheet>
 
-      {/* MODAL DE RECIBO DIGITAL DE ALTO PADRÃO (UBER STYLE) */}
+      {/* MODAL DE RECIBO DIGITAL */}
       <Dialog
         open={receiptModal.isOpen}
         onOpenChange={(open) =>
@@ -1346,7 +1415,6 @@ CNPJ: 49.351.127/0001-44
                 b.start_time,
                 b.end_time,
               );
-
               let address: any = {};
               try {
                 address =
@@ -1358,12 +1426,10 @@ CNPJ: 49.351.127/0001-44
 
               return (
                 <div className="flex flex-col h-full">
-                  {/* ÁREA QUE SERÁ IMPRESSA/GERADA PDF */}
                   <div
                     id="receipt-content"
                     className="bg-white px-6 py-10 sm:p-12 w-full font-sans"
                   >
-                    {/* Cabeçalho do Recibo */}
                     <div className="flex justify-between items-start mb-10">
                       <div>
                         <h1 className="text-3xl font-black text-slate-900 tracking-tight">
@@ -1375,15 +1441,12 @@ CNPJ: 49.351.127/0001-44
                           })}
                         </p>
                       </div>
-                      {/* Imagem original do projeto para não quebrar na impressão */}
                       <img
                         src="/icon-512x512.png"
                         alt="Fusion Clinic"
                         className="w-14 h-14 rounded-2xl shadow-sm border border-slate-200 object-cover"
                       />
                     </div>
-
-                    {/* Valor Total Destacado */}
                     <div className="mb-8">
                       <p className="text-[3rem] leading-none font-black text-slate-900">
                         {payment.value}
@@ -1395,8 +1458,6 @@ CNPJ: 49.351.127/0001-44
                         </span>
                       </div>
                     </div>
-
-                    {/* Detalhes da Corrida/Reserva (Estilo Linha do Tempo) */}
                     <div className="border-t border-b border-slate-200 py-8 mb-8">
                       <div className="flex gap-6">
                         <div className="flex flex-col items-center mt-1">
@@ -1428,13 +1489,10 @@ CNPJ: 49.351.127/0001-44
                         </div>
                       </div>
                     </div>
-
-                    {/* Quebra de Custos */}
                     <div className="space-y-4 mb-10">
                       <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">
                         Resumo da Fatura
                       </h3>
-
                       <div className="flex justify-between text-sm">
                         <span className="text-slate-600 font-medium">
                           Tempo de Locação ({durationFormatted})
@@ -1443,7 +1501,6 @@ CNPJ: 49.351.127/0001-44
                           {payment.value}
                         </span>
                       </div>
-
                       {payment.isCredit && (
                         <div className="flex justify-between text-sm">
                           <span className="text-slate-600 font-medium">
@@ -1454,7 +1511,6 @@ CNPJ: 49.351.127/0001-44
                           </span>
                         </div>
                       )}
-
                       <div className="flex justify-between text-sm">
                         <span className="text-slate-600 font-medium">
                           Taxas Fusion Clinic
@@ -1463,7 +1519,6 @@ CNPJ: 49.351.127/0001-44
                           {payment.isCredit ? "0 CR" : "R$ 0,00"}
                         </span>
                       </div>
-
                       <div className="flex justify-between items-center text-lg border-t border-slate-200 pt-4 mt-2">
                         <span className="font-black text-slate-900">
                           Valor Cobrado
@@ -1473,8 +1528,6 @@ CNPJ: 49.351.127/0001-44
                         </span>
                       </div>
                     </div>
-
-                    {/* Rodapé Legal com CNPJ Atualizado */}
                     <div className="text-[10px] text-slate-400 text-center uppercase tracking-widest font-bold mt-16">
                       <p>Fusion Clinic Soluções em Saúde Ltda</p>
                       <p>CNPJ: 49.351.127/0001-44</p>
@@ -1483,8 +1536,6 @@ CNPJ: 49.351.127/0001-44
                       </p>
                     </div>
                   </div>
-
-                  {/* BOTÕES DE AÇÃO (Não aparecem no PDF) */}
                   <div className="p-6 bg-slate-100 border-t border-slate-200 mt-auto grid grid-cols-2 gap-3">
                     <Button
                       onClick={handleDownloadPDF}
@@ -1533,7 +1584,6 @@ CNPJ: 49.351.127/0001-44
               ?
             </DialogDescription>
           </DialogHeader>
-
           <div className="flex justify-center gap-2 mb-6">
             {[1, 2, 3, 4, 5].map((star) => (
               <button
@@ -1547,7 +1597,6 @@ CNPJ: 49.351.127/0001-44
               </button>
             ))}
           </div>
-
           <div className="space-y-4">
             <Textarea
               placeholder="Conte-nos o que achou do espaço (opcional)"
@@ -1588,7 +1637,6 @@ CNPJ: 49.351.127/0001-44
               ).getTime();
               const isRefundable =
                 (startMs - new Date().getTime()) / (1000 * 60 * 60) >= 24;
-
               return (
                 <>
                   <div
@@ -1627,18 +1675,84 @@ CNPJ: 49.351.127/0001-44
         </DialogContent>
       </Dialog>
 
-      {/* SCANNER QR CODE */}
-      {scannerConfig.isOpen && scannerConfig.booking && (
-        <RoomQRScanner
-          key="checkin-scanner"
-          expectedRoomId={scannerConfig.booking.room_id}
-          type={scannerConfig.type}
-          onSuccess={handleCheckinSuccess}
-          onCancel={() =>
-            setScannerConfig({ isOpen: false, type: "checkin", booking: null })
-          }
-        />
-      )}
+      {/* SCANNER QR CODE COM FALLBACK MANUAL */}
+      {scannerConfig.isOpen &&
+        scannerConfig.booking &&
+        (scannerConfig.cameraFailed ? (
+          <Dialog
+            open={true}
+            onOpenChange={() =>
+              setScannerConfig({
+                isOpen: false,
+                type: "checkin",
+                booking: null,
+                cameraFailed: false,
+              })
+            }
+          >
+            <DialogContent className="sm:max-w-md rounded-[2rem] p-6 bg-white border-0">
+              <DialogTitle className="text-xl font-black text-slate-900">
+                Check-in Manual
+              </DialogTitle>
+              <DialogDescription className="text-sm font-medium text-slate-500 mb-4">
+                O acesso à câmera foi bloqueado. Por favor, digite o código de 6
+                dígitos que está colado na porta da sala para liberar seu
+                acesso.
+              </DialogDescription>
+              <div className="space-y-4">
+                <div className="relative">
+                  <Keyboard className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                  <Input
+                    value={manualCode}
+                    onChange={(e) =>
+                      setManualCode(e.target.value.toUpperCase())
+                    }
+                    placeholder="Ex: AB1234"
+                    className="h-14 pl-12 rounded-xl border-slate-200 bg-slate-50 font-black tracking-widest uppercase"
+                    maxLength={6}
+                  />
+                </div>
+                <Button
+                  onClick={() => {
+                    if (manualCode.length < 4) {
+                      toast({
+                        variant: "destructive",
+                        title: "Código inválido",
+                        description:
+                          "O código precisa ter pelo menos 4 caracteres.",
+                      });
+                      return;
+                    }
+                    handleCheckinSuccess();
+                  }}
+                  className="w-full h-14 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
+                >
+                  Confirmar Check-in
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        ) : (
+          <RoomQRScanner
+            key="checkin-scanner"
+            expectedRoomId={scannerConfig.booking.room_id}
+            type={scannerConfig.type}
+            onSuccess={handleCheckinSuccess}
+            onCancel={() =>
+              setScannerConfig({
+                isOpen: false,
+                type: "checkin",
+                booking: null,
+                cameraFailed: false,
+              })
+            }
+            onError={(err) => {
+              console.error("Câmera bloqueada/falhou:", err);
+              // Quando o scanner nativo falha, trocamos automaticamente para o Modo Manual!
+              setScannerConfig((prev) => ({ ...prev, cameraFailed: true }));
+            }}
+          />
+        ))}
     </>
   );
 }

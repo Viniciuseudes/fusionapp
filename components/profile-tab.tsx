@@ -30,15 +30,66 @@ import {
   Shield,
   Star,
   Crown,
-  Trophy,
   Gem,
+  Gift,
+  Clock,
+  Mail,
+  XCircle,
+  ArrowRightLeft,
+  Info,
+  X,
+  CalendarDays,
+  Trophy,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from "@/components/ui/dialog";
 
 type ViewState = "overview" | "edit" | "wallet";
+
+interface PendingTransfer {
+  id: string;
+  receiver_email: string;
+  amount: number;
+  tier: "start" | "vip" | "master";
+  created_at: string;
+}
+
+interface Transaction {
+  id: string;
+  amount: number;
+  type: string;
+  tier: string;
+  description: string;
+  created_at: string;
+  expires_at?: string;
+}
+
+// ==========================================
+// FUNÇÕES AUXILIARES GLOBAIS
+// ==========================================
+const isCredit = (type: string, amount: number) => {
+  return (
+    amount > 0 ||
+    [
+      "credit",
+      "deposit",
+      "recharge",
+      "admin_bonus",
+      "refund",
+      "transfer_in",
+    ].includes(type || "")
+  );
+};
 
 const isValidCPF = (cpf: string) => {
   cpf = cpf.replace(/[^\d]+/g, "");
@@ -59,6 +110,7 @@ const isValidCPF = (cpf: string) => {
   return true;
 };
 
+// ALGORITMO SÊNIOR DE GAMIFICAÇÃO (Agora com Recompensas)
 const getTierInfo = (bookingsCount: number, isProfileComplete: boolean) => {
   if (!isProfileComplete) {
     return {
@@ -71,11 +123,11 @@ const getTierInfo = (bookingsCount: number, isProfileComplete: boolean) => {
       bar: "bg-slate-300",
       icon: AlertCircle,
       message: "Complete seu cadastro para habilitar a plataforma.",
+      reward: "Habilita reservas no aplicativo",
       isMax: false,
     };
   }
-
-  if (bookingsCount < 10) {
+  if (bookingsCount < 10)
     return {
       name: "Bronze",
       current: bookingsCount,
@@ -86,11 +138,10 @@ const getTierInfo = (bookingsCount: number, isProfileComplete: boolean) => {
       bar: "bg-orange-500",
       icon: Shield,
       message: `Faltam ${10 - bookingsCount} reservas para o Nível Prata`,
+      reward: "Desbloqueia 5% de desconto avulso",
       isMax: false,
     };
-  }
-
-  if (bookingsCount < 30) {
+  if (bookingsCount < 30)
     return {
       name: "Prata",
       current: bookingsCount,
@@ -101,11 +152,10 @@ const getTierInfo = (bookingsCount: number, isProfileComplete: boolean) => {
       bar: "bg-slate-400",
       icon: Star,
       message: `Faltam ${30 - bookingsCount} reservas para o Nível Ouro`,
+      reward: "Prioridade máxima nas buscas",
       isMax: false,
     };
-  }
-
-  if (bookingsCount < 100) {
+  if (bookingsCount < 100)
     return {
       name: "Ouro",
       current: bookingsCount,
@@ -116,10 +166,9 @@ const getTierInfo = (bookingsCount: number, isProfileComplete: boolean) => {
       bar: "bg-amber-500",
       icon: Crown,
       message: `Faltam ${100 - bookingsCount} reservas para o Nível Diamante`,
+      reward: "Acesso antecipado e Suporte VIP",
       isMax: false,
     };
-  }
-
   return {
     name: "Diamante",
     current: bookingsCount,
@@ -130,6 +179,7 @@ const getTierInfo = (bookingsCount: number, isProfileComplete: boolean) => {
     bar: "bg-cyan-500",
     icon: Gem,
     message: "Você alcançou o nível máximo da plataforma!",
+    reward: "Você possui todos os benefícios exclusivos",
     isMax: true,
   };
 };
@@ -150,9 +200,9 @@ export function ProfileTab() {
   const [uploadingImage, setUploadingImage] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [transactions, setTransactions] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loadingWallet, setLoadingWallet] = useState(false);
-
+  const [actionLoading, setActionLoading] = useState(false);
   const [bookingsCount, setBookingsCount] = useState(0);
 
   const [walletBalances, setWalletBalances] = useState({
@@ -161,6 +211,19 @@ export function ProfileTab() {
     master: 0,
   });
   const [nextExpiration, setNextExpiration] = useState<Date | null>(null);
+
+  // Estados dos Modais
+  const [pendingTransfers, setPendingTransfers] = useState<PendingTransfer[]>(
+    [],
+  );
+  const [isGiftModalOpen, setIsGiftModalOpen] = useState(false);
+  const [isHowItWorksOpen, setIsHowItWorksOpen] = useState(false);
+  const [isTimelineOpen, setIsTimelineOpen] = useState(false);
+  const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
+
+  const [giftEmail, setGiftEmail] = useState("");
+  const [giftAmount, setGiftAmount] = useState("");
+  const [giftTier, setGiftTier] = useState<"start" | "vip" | "master">("start");
 
   const [formData, setFormData] = useState({
     full_name: "",
@@ -181,6 +244,14 @@ export function ProfileTab() {
     address_state: "",
   });
 
+  const isProfileComplete = Boolean(
+    formData.full_name &&
+    formData.cpf &&
+    formData.birth_date &&
+    formData.address_street &&
+    formData.address_number,
+  );
+
   useMobileBack(
     view !== "overview",
     () => setView("overview"),
@@ -193,10 +264,7 @@ export function ProfileTab() {
         const {
           data: { user },
         } = await supabase.auth.getUser();
-        if (!user) {
-          router.push("/login");
-          return;
-        }
+        if (!user) return router.push("/login");
 
         const { data, error } = await supabase
           .from("profiles")
@@ -210,7 +278,6 @@ export function ProfileTab() {
           .select("*", { count: "exact", head: true })
           .eq("user_id", user.id)
           .eq("status", "completed");
-
         setBookingsCount(count || 0);
 
         if (data) {
@@ -245,14 +312,11 @@ export function ProfileTab() {
         setLoading(false);
       }
     }
-
     loadProfile();
   }, [supabase, router]);
 
   useEffect(() => {
-    if (view === "wallet" || view === "overview") {
-      fetchTransactions();
-    }
+    if (view === "wallet" || view === "overview") fetchTransactions();
   }, [view]);
 
   async function fetchTransactions() {
@@ -265,7 +329,7 @@ export function ProfileTab() {
 
       const { data, error } = await supabase
         .from("wallet_transactions")
-        .select("*")
+        .select("id, amount, created_at, description, type, tier, expires_at")
         .eq("user_id", user.id)
         .order("created_at", { ascending: false });
 
@@ -292,8 +356,27 @@ export function ProfileTab() {
         }
       });
 
+      // EFEITO CASCATA DE SALDOS
+      if (start < 0) {
+        vip += start;
+        start = 0;
+      }
+      if (vip < 0) {
+        master += vip;
+        vip = 0;
+      }
+
       setWalletBalances({ start, vip, master });
       setNextExpiration(closestExp);
+
+      const { data: pendingData } = await supabase
+        .from("credit_transfers")
+        .select("*")
+        .eq("sender_id", user.id)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false });
+
+      if (pendingData) setPendingTransfers(pendingData);
     } catch (err) {
       console.error("Erro ao buscar transações:", err);
     } finally {
@@ -301,12 +384,101 @@ export function ProfileTab() {
     }
   }
 
-  const expirationData = useMemo(() => {
-    if (!nextExpiration) return { daysLeft: 0, pct: 0 };
-    const daysLeft = differenceInDays(nextExpiration, new Date());
-    const pct = Math.max(0, Math.min(100, (daysLeft / 30) * 100));
-    return { daysLeft, pct };
-  }, [nextExpiration]);
+  // ALGORITMO OTIMIZADO: TODOS OS CRÉDITOS A VENCER
+  const allExpiringCredits = useMemo(() => {
+    const activeCredits = transactions.filter((tx) => {
+      const isCred = isCredit(tx.type, Number(tx.amount));
+      if (!isCred || !tx.expires_at) return false;
+      const expDate = parseISO(tx.expires_at);
+      return expDate >= new Date();
+    });
+
+    return activeCredits.sort(
+      (a, b) =>
+        new Date(a.expires_at!).getTime() - new Date(b.expires_at!).getTime(),
+    );
+  }, [transactions]);
+
+  const handleSendGift = async () => {
+    if (!giftEmail || !giftAmount || Number(giftAmount) <= 0) {
+      return toast({
+        variant: "destructive",
+        title: "Preencha todos os campos corretamente.",
+      });
+    }
+
+    if (Number(giftAmount) > walletBalances[giftTier]) {
+      return toast({
+        variant: "destructive",
+        title: "Saldo insuficiente nesta categoria.",
+      });
+    }
+
+    setActionLoading(true);
+    try {
+      const response = await fetch("/api/wallet/transfer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          receiverEmail: giftEmail.trim(),
+          amount: Number(giftAmount),
+          tier: giftTier,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+
+      toast({
+        title:
+          data.status === "pending"
+            ? "Convite VIP Enviado!"
+            : "Presente Entregue! 🎉",
+        description: data.message,
+      });
+      setIsGiftModalOpen(false);
+      setGiftEmail("");
+      setGiftAmount("");
+      fetchTransactions();
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro na transferência",
+        description: error.message,
+      });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleRevokeGift = async (transfer: PendingTransfer) => {
+    setActionLoading(true);
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
+      await supabase
+        .from("credit_transfers")
+        .update({ status: "cancelled" })
+        .eq("id", transfer.id);
+      await supabase.from("wallet_transactions").insert({
+        user_id: user.id,
+        amount: transfer.amount,
+        type: "refund",
+        tier: transfer.tier,
+        description: `Estorno de Fusion Gift (${transfer.receiver_email})`,
+      });
+      toast({
+        title: "Convite Revogado",
+        description: "As horas retornaram para o seu saldo.",
+      });
+      fetchTransactions();
+    } catch (error) {
+      toast({ variant: "destructive", title: "Erro ao cancelar." });
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   const totalBalance =
     walletBalances.start + walletBalances.vip + walletBalances.master;
@@ -315,21 +487,12 @@ export function ProfileTab() {
     setLoading(true);
     try {
       await supabase.auth.signOut();
-
-      for (let key in localStorage) {
-        if (key.startsWith("sb-")) {
-          localStorage.removeItem(key);
-        }
-      }
-
+      for (let key in localStorage)
+        if (key.startsWith("sb-")) localStorage.removeItem(key);
       sessionStorage.clear();
       window.location.href = "/login";
     } catch (error) {
-      toast({
-        variant: "destructive",
-        title: "Erro ao sair",
-        description: "Tente novamente em instantes.",
-      });
+      toast({ variant: "destructive", title: "Erro ao sair" });
       setLoading(false);
     }
   };
@@ -364,7 +527,6 @@ export function ProfileTab() {
     const cleanCep = formData.cep.replace(/\D/g, "");
     if (cleanCep.length !== 8)
       return toast({ variant: "destructive", title: "CEP Inválido" });
-
     setCepLoading(true);
     try {
       const response = await fetch(
@@ -372,7 +534,6 @@ export function ProfileTab() {
       );
       const data = await response.json();
       if (data.erro) throw new Error("CEP não encontrado.");
-
       setFormData((prev) => ({
         ...prev,
         address_street: data.logradouro || "",
@@ -397,21 +558,17 @@ export function ProfileTab() {
       setUploadingImage(true);
       if (!e.target.files || e.target.files.length === 0)
         throw new Error("Selecione uma imagem.");
-
       const {
         data: { user },
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuário não autenticado.");
-
       const file = e.target.files[0];
       const fileExt = file.name.split(".").pop();
       const fileName = `${user.id}/profile.${fileExt}`;
-
       const { error: uploadError } = await supabase.storage
         .from("avatars")
         .upload(fileName, file, { upsert: true, cacheControl: "3600" });
       if (uploadError) throw uploadError;
-
       const {
         data: { publicUrl },
       } = supabase.storage.from("avatars").getPublicUrl(fileName);
@@ -421,11 +578,7 @@ export function ProfileTab() {
       });
       toast({ title: "Foto atualizada!" });
     } catch (error: any) {
-      toast({
-        variant: "destructive",
-        title: "Erro no upload",
-        description: "Falha ao processar a imagem.",
-      });
+      toast({ variant: "destructive", title: "Erro no upload" });
     } finally {
       setUploadingImage(false);
     }
@@ -433,24 +586,12 @@ export function ProfileTab() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (formData.cpf && !isValidCPF(formData.cpf)) {
-      return toast({
-        variant: "destructive",
-        title: "CPF Inválido",
-        description: "Digite um CPF real.",
-      });
-    }
-
+    if (formData.cpf && !isValidCPF(formData.cpf))
+      return toast({ variant: "destructive", title: "CPF Inválido" });
     let dbBirthDate = null;
     if (formData.birth_date) {
-      if (formData.birth_date.length !== 10) {
-        return toast({
-          variant: "destructive",
-          title: "Data Inválida",
-          description: "Formato DD/MM/AAAA.",
-        });
-      }
+      if (formData.birth_date.length !== 10)
+        return toast({ variant: "destructive", title: "Data Inválida" });
       const [d, m, y] = formData.birth_date.split("/");
       dbBirthDate = `${y}-${m}-${d}`;
       const dateObj = new Date(`${y}-${m}-${d}T00:00:00`);
@@ -459,21 +600,15 @@ export function ProfileTab() {
         dateObj.getFullYear() > new Date().getFullYear() ||
         dateObj.getFullYear() < 1900
       ) {
-        return toast({
-          variant: "destructive",
-          title: "Data Inválida",
-          description: "A data não é coerente.",
-        });
+        return toast({ variant: "destructive", title: "Data Inválida" });
       }
     }
-
     setSaving(true);
     try {
       const {
         data: { user },
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuário não autenticado.");
-
       const { error } = await supabase
         .from("profiles")
         .update({
@@ -494,7 +629,6 @@ export function ProfileTab() {
           address_state: formData.address_state,
         })
         .eq("id", user.id);
-
       if (error) throw error;
       toast({ title: "Perfil salvo! 🎉" });
       setView("overview");
@@ -509,20 +643,6 @@ export function ProfileTab() {
     }
   };
 
-  const isCredit = (type: string, amount: number) => {
-    return (
-      amount > 0 ||
-      ["credit", "deposit", "recharge", "admin_bonus", "refund"].includes(type)
-    );
-  };
-
-  const isProfileComplete =
-    formData.full_name &&
-    formData.cpf &&
-    formData.birth_date &&
-    formData.address_street &&
-    formData.address_number;
-
   if (loading) {
     return (
       <div className="flex justify-center items-center py-32">
@@ -531,46 +651,70 @@ export function ProfileTab() {
     );
   }
 
+  // ==========================================
+  // VIEW: CARTEIRA DIGITAL (WALLET)
+  // ==========================================
   if (view === "wallet") {
     return (
       <div className="p-4 lg:p-8 animate-in slide-in-from-right-8 duration-300 max-w-2xl mx-auto w-full pb-32">
-        <div className="mb-6 flex items-center gap-4">
-          <button
-            onClick={() => setView("overview")}
-            className="w-10 h-10 bg-white border border-slate-200 rounded-full flex items-center justify-center hover:bg-slate-50 text-slate-600 transition-colors"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-          <div>
-            <h1 className="text-2xl font-black text-slate-900">
-              Minha Carteira
-            </h1>
-            <p className="text-sm text-slate-500 font-medium">
-              Gestão de créditos e histórico de uso.
-            </p>
+        <div className="mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setView("overview")}
+              className="w-10 h-10 bg-white border border-slate-200 rounded-full flex items-center justify-center hover:bg-slate-50 text-slate-600 transition-colors"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+            <div>
+              <h1 className="text-2xl font-black text-slate-900">
+                Minha Carteira
+              </h1>
+              <p className="text-sm text-slate-500 font-medium">
+                Gestão de créditos e histórico de uso.
+              </p>
+            </div>
           </div>
+          <Button
+            onClick={() => setIsHowItWorksOpen(true)}
+            variant="outline"
+            className="rounded-full text-xs font-bold text-slate-600 border-slate-200"
+          >
+            <Info className="w-4 h-4 mr-1.5" /> Como funciona?
+          </Button>
         </div>
 
-        <div className="bg-slate-900 p-8 rounded-3xl text-white shadow-xl relative overflow-hidden mb-8">
+        {/* CARTÃO DE CRÉDITO DIGITAL LUXUOSO */}
+        <div className="bg-slate-900 p-6 md:p-8 rounded-3xl text-white shadow-xl relative overflow-hidden mb-8">
           <div className="absolute top-0 right-0 w-40 h-40 bg-[#f05e23]/30 rounded-full blur-3xl -mr-10 -mt-10"></div>
+
           <div className="relative z-10 flex flex-col md:flex-row gap-8 justify-between">
-            <div>
+            <div className="flex-1">
               <p className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
                 <Wallet className="w-5 h-5" /> Saldo Disponível
               </p>
-              <h3 className="text-5xl font-black tracking-tight mb-4">
+              <h3 className="text-5xl font-black tracking-tight mb-5">
                 {totalBalance}{" "}
                 <span className="text-2xl font-bold text-slate-400 ml-1">
                   CR
                 </span>
               </h3>
-              <Button
-                onClick={() => toast({ title: "Em breve" })}
-                className="w-full sm:w-auto h-12 px-6 rounded-xl font-black bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg text-sm"
-              >
-                <PlusCircle className="w-4 h-4 mr-2" /> Comprar Pass
-              </Button>
+
+              <div className="flex flex-col sm:flex-row gap-3 w-full">
+                <Button
+                  onClick={() => toast({ title: "Em breve" })}
+                  className="w-full sm:flex-1 h-12 px-6 rounded-xl font-black bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg text-sm"
+                >
+                  <PlusCircle className="w-4 h-4 mr-2" /> Comprar Pass
+                </Button>
+                <Button
+                  onClick={() => setIsGiftModalOpen(true)}
+                  className="w-full sm:flex-1 h-12 px-6 rounded-xl font-black bg-white/10 hover:bg-white/20 border border-white/10 text-white shadow-lg text-sm transition-all"
+                >
+                  <Gift className="w-4 h-4 mr-2 text-amber-400" /> Presentear
+                </Button>
+              </div>
             </div>
+
             <div className="bg-white/10 backdrop-blur-md rounded-xl p-5 border border-white/10 min-w-[200px] h-fit">
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">
                 Saldos por Categoria
@@ -591,7 +735,7 @@ export function ProfileTab() {
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm font-semibold flex items-center gap-1.5 text-amber-300">
-                  <Crown className="w-4 h-4" /> Master
+                  <Crown className="w-4 h-4" /> Premium
                 </span>
                 <span className="font-bold text-amber-300">
                   {walletBalances.master}
@@ -600,35 +744,128 @@ export function ProfileTab() {
             </div>
           </div>
 
-          {nextExpiration && totalBalance > 0 && (
-            <div className="relative z-10 mt-6 pt-6 border-t border-white/10">
-              <div className="flex justify-between text-xs font-bold text-slate-400 mb-2 uppercase tracking-widest">
-                <span>Próximo Vencimento</span>
-                <span
-                  className={
-                    expirationData.daysLeft <= 5
-                      ? "text-red-400"
-                      : "text-emerald-400"
-                  }
+          {/* NOVA TIMELINE DE VENCIMENTOS NO CARTÃO */}
+          {allExpiringCredits.length > 0 && (
+            <div className="relative z-10 mt-6 pt-5 border-t border-white/10">
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-amber-400" /> Próximos a
+                  Vencer
+                </p>
+                <button
+                  onClick={() => setIsTimelineOpen(true)}
+                  className="text-[10px] font-bold text-[#f05e23] hover:text-[#d6521e] uppercase tracking-wider bg-[#f05e23]/10 px-2 py-1 rounded-md transition-colors"
                 >
-                  {expirationData.daysLeft} dias restantes
-                </span>
+                  Ver Todos ({allExpiringCredits.length})
+                </button>
               </div>
-              <div className="w-full bg-white/10 h-2.5 rounded-full overflow-hidden">
-                <div
-                  className={`h-full transition-all duration-1000 ${expirationData.daysLeft <= 5 ? "bg-red-500" : "bg-emerald-500"}`}
-                  style={{ width: `${expirationData.pct}%` }}
-                />
+
+              <div className="space-y-2">
+                {allExpiringCredits.slice(0, 2).map((tx) => {
+                  const daysLeft = differenceInDays(
+                    parseISO(tx.expires_at!),
+                    new Date(),
+                  );
+                  const isPremium = tx.tier === "master";
+                  const isVip = tx.tier === "vip";
+
+                  return (
+                    <div
+                      key={`exp-${tx.id}`}
+                      onClick={() => setSelectedTx(tx)}
+                      className="flex flex-col bg-white/5 hover:bg-white/10 transition-colors rounded-xl p-3 border border-white/10 cursor-pointer group"
+                    >
+                      <div className="flex justify-between items-start mb-2 gap-2">
+                        <span className="text-xs font-bold text-slate-300 truncate flex-1 group-hover:text-white transition-colors">
+                          {tx.description || "Movimentação Fusion"}
+                        </span>
+                        <Badge className="bg-white/10 text-white border-0 shadow-none text-[8px] uppercase px-1.5 py-0 shrink-0">
+                          {isPremium ? "Premium" : isVip ? "VIP" : "Basic"}
+                        </Badge>
+                      </div>
+                      <div className="flex justify-between items-end">
+                        <span className="text-lg font-black text-white leading-none">
+                          {tx.amount}h
+                        </span>
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${daysLeft <= 5 ? "bg-red-500/20 text-red-400" : "bg-amber-500/20 text-amber-400"}`}
+                        >
+                          {daysLeft === 0
+                            ? "Expira hoje"
+                            : `Expira em ${daysLeft} dias`}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
         </div>
 
+        {/* CONVITES PENDENTES */}
+        {pendingTransfers.length > 0 && (
+          <section className="pt-2 mb-8">
+            <h3 className="text-lg font-black text-slate-900 flex items-center gap-2 mb-4">
+              <Clock className="w-5 h-5 text-amber-500" /> Convites Pendentes
+            </h3>
+            <div className="space-y-3">
+              {pendingTransfers.map((pt) => (
+                <div
+                  key={pt.id}
+                  className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all hover:border-slate-300"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center shrink-0">
+                      <Mail className="w-4 h-4 text-slate-500" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-slate-900">
+                        {pt.receiver_email}
+                      </p>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">
+                        Enviado em{" "}
+                        {pt.created_at
+                          ? format(parseISO(pt.created_at), "dd/MM/yyyy")
+                          : "Recente"}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between sm:justify-end w-full sm:w-auto gap-4">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-black text-lg text-slate-900">
+                        {pt.amount}h
+                      </span>
+                      <Badge className="bg-slate-100 text-slate-600 border-0 shadow-none text-[9px] uppercase">
+                        {pt.tier === "master"
+                          ? "Premium"
+                          : pt.tier === "vip"
+                            ? "VIP"
+                            : "Basic"}
+                      </Badge>
+                    </div>
+                    <Button
+                      onClick={() => handleRevokeGift(pt)}
+                      disabled={actionLoading}
+                      variant="ghost"
+                      className="text-xs font-bold text-red-500 hover:text-red-600 hover:bg-red-50 h-8 px-3 rounded-lg"
+                    >
+                      <XCircle className="w-3.5 h-3.5 mr-1" /> Revogar
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* EXTRATO ESTILO LIVELO */}
         <div>
           <h3 className="text-lg font-black text-slate-900 mb-4 flex items-center gap-2">
-            <History className="w-5 h-5 text-[#f05e23]" /> Extrato de Créditos
+            <History className="w-5 h-5 text-[#f05e23]" /> Extrato
           </h3>
-          <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
+
+          <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden flex flex-col">
             {loadingWallet ? (
               <div className="flex justify-center items-center py-16">
                 <Loader2 className="w-8 h-8 animate-spin text-slate-300" />
@@ -640,54 +877,53 @@ export function ProfileTab() {
                 </div>
                 <p className="font-bold text-slate-900">Nenhuma movimentação</p>
                 <p className="text-sm text-slate-500 font-medium mt-1">
-                  Seu histórico aparecerá aqui.
+                  Seu extrato aparecerá aqui.
                 </p>
               </div>
             ) : (
               <div className="divide-y divide-slate-100">
                 {transactions.map((tx) => {
                   const credit = isCredit(tx.type, Number(tx.amount));
+
                   return (
                     <div
                       key={tx.id}
-                      className="p-4 sm:p-5 flex items-center justify-between hover:bg-slate-50 transition-colors"
+                      onClick={() => setSelectedTx(tx)}
+                      className="p-5 flex flex-col gap-1 hover:bg-slate-50 transition-colors cursor-pointer relative"
                     >
-                      <div className="flex items-center gap-4">
-                        <div
-                          className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-sm border ${credit ? "bg-emerald-50 border-emerald-100 text-emerald-600" : "bg-slate-50 border-slate-100 text-slate-600"}`}
-                        >
-                          {credit ? (
-                            <ArrowDownRight className="w-6 h-6" />
-                          ) : (
-                            <ArrowUpRight className="w-6 h-6" />
-                          )}
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                        {tx.created_at
+                          ? format(parseISO(tx.created_at), "dd/MM/yyyy", {
+                              locale: ptBR,
+                            })
+                          : "Recente"}
+                      </span>
+                      <span className="text-xs font-semibold text-slate-500">
+                        {credit ? "Acúmulo / Crédito" : "Uso de Crédito"}
+                      </span>
+                      <span className="text-base font-black text-slate-900 pr-16 truncate">
+                        {tx.description || "Movimentação Fusion"}
+                      </span>
+                      <span
+                        className={`text-xl font-black mt-1 ${credit ? "text-emerald-600" : "text-slate-700"}`}
+                      >
+                        {credit ? "+" : ""} {tx.amount} horas
+                      </span>
+
+                      {credit && tx.expires_at && (
+                        <div className="mt-2 inline-flex items-center gap-1.5 bg-slate-100/80 px-2 py-1 rounded-md w-fit">
+                          <Clock className="w-3.5 h-3.5 text-slate-500" />
+                          <span className="text-[10px] font-bold text-slate-600">
+                            Expira em{" "}
+                            {format(parseISO(tx.expires_at), "dd/MM/yyyy", {
+                              locale: ptBR,
+                            })}
+                          </span>
                         </div>
-                        <div>
-                          <p className="font-bold text-slate-900 text-sm sm:text-base leading-tight">
-                            {tx.description ||
-                              (credit
-                                ? "Recarga de Créditos"
-                                : "Reserva de Espaço")}
-                          </p>
-                          <p className="text-xs font-semibold text-slate-400 mt-1">
-                            {format(
-                              parseISO(tx.created_at),
-                              "dd MMM, yyyy • HH:mm",
-                              { locale: ptBR },
-                            )}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="text-right shrink-0 ml-4">
-                        <p
-                          className={`font-black text-sm sm:text-base ${credit ? "text-emerald-600" : "text-slate-900"}`}
-                        >
-                          {credit ? "+" : "-"}
-                          {Math.abs(Number(tx.amount))} CR
-                        </p>
-                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block mt-0.5">
-                          {tx.tier === "start" ? "Basic" : tx.tier || "Basic"}
-                        </span>
+                      )}
+
+                      <div className="absolute right-5 top-1/2 -translate-y-1/2 text-slate-300">
+                        <ChevronRight className="w-5 h-5" />
                       </div>
                     </div>
                   );
@@ -696,10 +932,377 @@ export function ProfileTab() {
             )}
           </div>
         </div>
+
+        {/* MODAL: TIMELINE DE VENCIMENTOS */}
+        <Dialog open={isTimelineOpen} onOpenChange={setIsTimelineOpen}>
+          <DialogContent className="sm:max-w-md rounded-[2rem] p-6 bg-white border-0 [&>button]:hidden">
+            <button
+              onClick={() => setIsTimelineOpen(false)}
+              className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 transition-colors z-50"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <DialogTitle className="sr-only">
+              Timeline de Vencimentos
+            </DialogTitle>
+            <DialogDescription className="sr-only">
+              Lista completa de todos os créditos que vão expirar.
+            </DialogDescription>
+
+            <DialogHeader className="mb-4">
+              <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center mb-4">
+                <CalendarDays className="w-6 h-6 text-amber-500" />
+              </div>
+              <h2 className="text-xl font-black text-slate-900">
+                Seus Vencimentos
+              </h2>
+              <p className="text-sm font-medium text-slate-500">
+                Acompanhe a data exata de expiração dos seus créditos ativos.
+              </p>
+            </DialogHeader>
+
+            <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-2">
+              {allExpiringCredits.length === 0 ? (
+                <p className="text-slate-500 text-center py-6">
+                  Você não possui créditos a vencer.
+                </p>
+              ) : (
+                allExpiringCredits.map((tx) => {
+                  const daysLeft = differenceInDays(
+                    parseISO(tx.expires_at!),
+                    new Date(),
+                  );
+                  const isPremium = tx.tier === "master";
+                  const isVip = tx.tier === "vip";
+
+                  return (
+                    <div
+                      key={`modal-exp-${tx.id}`}
+                      className="flex flex-col bg-slate-50 rounded-xl p-4 border border-slate-100"
+                    >
+                      <div className="flex justify-between items-start mb-2 gap-2">
+                        <span className="text-xs font-bold text-slate-600 truncate flex-1">
+                          {tx.description || "Movimentação Fusion"}
+                        </span>
+                        <Badge className="bg-white text-slate-600 border border-slate-200 shadow-none text-[8px] uppercase px-1.5 py-0 shrink-0">
+                          {isPremium ? "Premium" : isVip ? "VIP" : "Basic"}
+                        </Badge>
+                      </div>
+                      <div className="flex justify-between items-end">
+                        <span className="text-xl font-black text-slate-900 leading-none">
+                          {tx.amount}h
+                        </span>
+                        <div className="text-right">
+                          <span
+                            className={`text-[10px] font-bold block mb-0.5 ${daysLeft <= 5 ? "text-red-500" : "text-amber-500"}`}
+                          >
+                            {daysLeft === 0
+                              ? "Expira hoje"
+                              : `Expira em ${daysLeft} dias`}
+                          </span>
+                          <span className="text-[10px] font-bold text-slate-400">
+                            {format(parseISO(tx.expires_at!), "dd/MM/yyyy")}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* MODAL DE TRANSFERÊNCIA */}
+        <Dialog open={isGiftModalOpen} onOpenChange={setIsGiftModalOpen}>
+          <DialogContent className="sm:max-w-md rounded-[2rem] p-6 bg-white border-0 [&>button]:hidden">
+            <button
+              onClick={() => setIsGiftModalOpen(false)}
+              className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 transition-colors z-50"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <DialogTitle className="sr-only">Enviar Fusion Gift</DialogTitle>
+            <DialogDescription className="sr-only">
+              Formulário para presentear um colega com horas.
+            </DialogDescription>
+            <DialogHeader className="mb-4">
+              <div className="w-12 h-12 bg-orange-50 rounded-2xl flex items-center justify-center mb-4">
+                <Gift className="w-6 h-6 text-[#f05e23]" />
+              </div>
+              <h2 className="text-2xl font-black text-slate-900">
+                Enviar Fusion Gift
+              </h2>
+              <p className="text-sm font-medium text-slate-500">
+                Transfira horas não utilizadas para um colega. Se ele não tiver
+                conta, enviaremos um convite VIP.
+              </p>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                  E-mail do Destinatário
+                </Label>
+                <Input
+                  type="email"
+                  placeholder="dr.colega@email.com"
+                  value={giftEmail}
+                  onChange={(e) => setGiftEmail(e.target.value)}
+                  className="h-12 rounded-xl bg-slate-50 border-slate-200"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                    Qtd de Horas
+                  </Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    placeholder="Ex: 4"
+                    value={giftAmount}
+                    onChange={(e) => setGiftAmount(e.target.value)}
+                    className="h-12 rounded-xl bg-slate-50 border-slate-200 font-black text-lg"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                    Qual Pacote?
+                  </Label>
+                  <select
+                    value={giftTier}
+                    onChange={(e) => setGiftTier(e.target.value as any)}
+                    className="h-12 bg-slate-50 border border-slate-200 rounded-xl px-3 outline-none font-bold text-slate-700 w-full"
+                  >
+                    <option value="start">
+                      Basic ({walletBalances.start}h)
+                    </option>
+                    <option value="vip">VIP ({walletBalances.vip}h)</option>
+                    <option value="master">
+                      Premium ({walletBalances.master}h)
+                    </option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter className="mt-6">
+              <Button
+                onClick={handleSendGift}
+                disabled={actionLoading}
+                className="w-full h-14 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl shadow-lg shadow-orange-500/20 text-base transition-all active:scale-95"
+              >
+                {actionLoading ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  "Confirmar e Enviar"
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* MODAL DETALHES DA TRANSAÇÃO */}
+        <Dialog
+          open={!!selectedTx}
+          onOpenChange={(open) => !open && setSelectedTx(null)}
+        >
+          <DialogContent className="sm:max-w-sm rounded-[2rem] p-0 overflow-hidden bg-white border-0 gap-0 [&>button]:hidden">
+            <button
+              onClick={() => setSelectedTx(null)}
+              className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full bg-slate-200/50 hover:bg-slate-200 text-slate-600 transition-colors z-50"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <DialogTitle className="sr-only">Detalhes da Transação</DialogTitle>
+            <DialogDescription className="sr-only">
+              Informações detalhadas sobre a movimentação da carteira.
+            </DialogDescription>
+
+            {selectedTx &&
+              (() => {
+                const credit = isCredit(
+                  selectedTx.type,
+                  Number(selectedTx.amount),
+                );
+                const isTransfer = selectedTx.type?.includes("transfer");
+                const tierName =
+                  selectedTx.tier === "master"
+                    ? "Premium"
+                    : selectedTx.tier === "vip"
+                      ? "VIP"
+                      : "Basic";
+
+                return (
+                  <div className="flex flex-col">
+                    <div
+                      className={`p-8 pb-12 flex flex-col items-center justify-center text-center ${credit ? "bg-emerald-50" : "bg-slate-50"}`}
+                    >
+                      <div
+                        className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 shadow-sm border ${credit ? "bg-white border-emerald-100" : "bg-white border-slate-200"}`}
+                      >
+                        {isTransfer ? (
+                          <ArrowRightLeft
+                            className={`w-8 h-8 ${credit ? "text-emerald-500" : "text-slate-400"}`}
+                          />
+                        ) : credit ? (
+                          <ArrowDownRight className="w-8 h-8 text-emerald-500" />
+                        ) : (
+                          <ArrowUpRight className="w-8 h-8 text-slate-400" />
+                        )}
+                      </div>
+                      <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                        {credit ? "Entrada de Crédito" : "Saída de Crédito"}
+                      </p>
+                      <h3
+                        className={`text-4xl font-black ${credit ? "text-emerald-600" : "text-slate-900"}`}
+                      >
+                        {credit ? "+" : ""}
+                        {selectedTx.amount}h
+                      </h3>
+                    </div>
+
+                    <div className="p-6 space-y-5 bg-white -mt-6 rounded-t-3xl relative z-10 shadow-[0_-10px_20px_-10px_rgba(0,0,0,0.05)]">
+                      <div>
+                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                          Descrição do Lançamento
+                        </p>
+                        <p className="font-black text-slate-900 text-lg leading-tight">
+                          {selectedTx.description}
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4 border-t border-slate-100 pt-4">
+                        <div>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                            Data da Operação
+                          </p>
+                          <p className="font-bold text-slate-900">
+                            {selectedTx.created_at
+                              ? format(
+                                  parseISO(selectedTx.created_at),
+                                  "dd/MM/yyyy",
+                                )
+                              : "Recente"}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                            Categoria
+                          </p>
+                          <Badge className="bg-slate-100 text-slate-700 border-0 shadow-none hover:bg-slate-100">
+                            {tierName}
+                          </Badge>
+                        </div>
+                      </div>
+
+                      {credit && selectedTx.expires_at && (
+                        <div className="border-t border-slate-100 pt-4 bg-amber-50/50 -mx-6 px-6 pb-4 mt-4">
+                          <p className="text-[10px] font-bold text-amber-600 uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                            <Clock className="w-3.5 h-3.5" /> Validade dos
+                            Créditos
+                          </p>
+                          <p className="font-black text-amber-700 text-lg">
+                            {format(
+                              parseISO(selectedTx.expires_at),
+                              "dd/MM/yyyy",
+                            )}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+          </DialogContent>
+        </Dialog>
+
+        {/* MODAL COMO FUNCIONA */}
+        <Dialog open={isHowItWorksOpen} onOpenChange={setIsHowItWorksOpen}>
+          <DialogContent className="sm:max-w-md rounded-[2rem] p-6 bg-white border-0 [&>button]:hidden">
+            <button
+              onClick={() => setIsHowItWorksOpen(false)}
+              className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 transition-colors z-50"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <DialogTitle className="sr-only">Como Funciona</DialogTitle>
+            <DialogDescription className="sr-only">
+              Regras da carteira e validade de horas
+            </DialogDescription>
+            <DialogHeader className="mb-4">
+              <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center mb-4">
+                <HelpCircle className="w-6 h-6 text-blue-500" />
+              </div>
+              <h2 className="text-2xl font-black text-slate-900">
+                Como funciona o Fusion Pass
+              </h2>
+            </DialogHeader>
+
+            <div className="space-y-6">
+              <div className="flex gap-4 items-start">
+                <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center shrink-0 border border-slate-100">
+                  <Clock className="w-5 h-5 text-slate-600" />
+                </div>
+                <div>
+                  <h4 className="font-black text-slate-900">
+                    Validade de 30 dias
+                  </h4>
+                  <p className="text-sm text-slate-500 font-medium leading-relaxed mt-1">
+                    Todos os pacotes de horas que você adquire possuem uma
+                    validade de exatos 30 dias a partir do momento do pagamento.
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-4 items-start">
+                <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center shrink-0 border border-slate-100">
+                  <ArrowDownRight className="w-5 h-5 text-slate-600" />
+                </div>
+                <div>
+                  <h4 className="font-black text-slate-900">
+                    Efeito Cascata (Vantagem)
+                  </h4>
+                  <p className="text-sm text-slate-500 font-medium leading-relaxed mt-1">
+                    Pacotes de alto padrão podem alugar salas de padrão menor.
+                    Ex: Se você usar suas horas "Premium" em uma sala "Basic", o
+                    sistema descontará da sua carteira Premium automaticamente.
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-4 items-start">
+                <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center shrink-0 border border-slate-100">
+                  <Gift className="w-5 h-5 text-slate-600" />
+                </div>
+                <div>
+                  <h4 className="font-black text-slate-900">Fusion Gift</h4>
+                  <p className="text-sm text-slate-500 font-medium leading-relaxed mt-1">
+                    O mês está acabando e sobraram horas? Não as perca!
+                    Transfira gratuitamente para um colega médico e ajude-o no
+                    início da carreira.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter className="mt-6 border-t border-slate-100 pt-4">
+              <Button
+                onClick={() => setIsHowItWorksOpen(false)}
+                className="w-full h-12 bg-slate-900 hover:bg-slate-800 text-white font-black rounded-xl"
+              >
+                Entendi
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }
 
+  // ==========================================
+  // VIEW: VISÃO GERAL (OVERVIEW) E EDIT
+  // ==========================================
   if (view === "overview") {
     const tierInfo = getTierInfo(bookingsCount, !!isProfileComplete);
 
@@ -750,11 +1353,24 @@ export function ProfileTab() {
                 {!tierInfo.isMax && `${tierInfo.current} / ${tierInfo.next}`}
               </span>
             </div>
-            <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+            <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden mb-3">
               <div
                 className={`h-full rounded-full transition-all duration-1000 ${tierInfo.bar}`}
                 style={{ width: `${tierInfo.percent}%` }}
               />
+            </div>
+
+            {/* NOVO: RECOMPENSA DE NÍVEL (GAMIFICAÇÃO) */}
+            <div
+              className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${tierInfo.bg.replace("bg-", "border-").replace("100", "200")} ${tierInfo.bg.replace("100", "50")}`}
+            >
+              <Trophy className={`w-4 h-4 shrink-0 ${tierInfo.color}`} />
+              <p className={`text-xs font-bold ${tierInfo.color}`}>
+                <span className="opacity-70 uppercase tracking-wider text-[9px] block mb-0.5">
+                  Sua Recompensa
+                </span>
+                {tierInfo.reward}
+              </p>
             </div>
           </div>
         </div>
@@ -861,6 +1477,9 @@ export function ProfileTab() {
     );
   }
 
+  // ==========================================
+  // VIEW: EDITAR DADOS (EDIT)
+  // ==========================================
   return (
     <div className="p-4 lg:p-8 animate-in slide-in-from-right-8 duration-300 max-w-4xl mx-auto w-full pb-32">
       <div className="mb-6 flex items-center gap-4">
