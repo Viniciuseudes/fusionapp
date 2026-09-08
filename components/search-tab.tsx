@@ -78,7 +78,6 @@ interface PlanPackage {
   options: PlanOption[];
 }
 
-// ESTRUTURA DE PRECIFICAÇÃO COM CORES REFINADAS
 const BASE_PACKAGE_INFO = {
   start: {
     title: "Pass Basic",
@@ -380,22 +379,43 @@ export function SearchTab({
             .select("full_name")
             .eq("id", user.id)
             .single();
+
+          // SÊNIOR: Adicionado expires_at na query!
           const { data: txData } = await supabase
             .from("wallet_transactions")
-            .select("amount, created_at, description, type, tier")
+            .select("amount, created_at, description, type, tier, expires_at")
             .eq("user_id", user.id)
             .order("created_at", { ascending: false });
 
           let bStart = 0,
             bVip = 0,
             bMaster = 0;
+
+          const now = new Date();
+
           if (txData) {
             txData.forEach((tx) => {
-              if (tx.tier === "vip") bVip += Number(tx.amount);
-              else if (tx.tier === "master") bMaster += Number(tx.amount);
-              else bStart += Number(tx.amount);
+              // REGRA DE OURO: Ignorar créditos positivos expirados
+              if (
+                tx.amount > 0 &&
+                tx.expires_at &&
+                new Date(tx.expires_at) < now
+              )
+                return;
+
+              const amt = Number(tx.amount);
+              const txTier = tx.tier?.toLowerCase() || "start";
+
+              if (txTier === "master" || txTier === "premium") {
+                bMaster += amt;
+              } else if (txTier === "vip") {
+                bVip += amt;
+              } else {
+                bStart += amt;
+              }
             });
           }
+
           setWalletBalances({ start: bStart, vip: bVip, master: bMaster });
 
           const { data: favData } = await supabase
@@ -609,7 +629,6 @@ export function SearchTab({
   );
 
   const renderFusionPassBanner = () => {
-    // Se "Todas" estiver selecionado, NÃO exibe o banner para não poluir
     if (activeTier === "all") return null;
 
     let title,
@@ -806,7 +825,6 @@ export function SearchTab({
             </div>
           </div>
 
-          {/* TABELA DE PREÇOS REFINADA */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-12 items-start">
             {dynamicPackages.map((pkg) => {
               const Icon = pkg.icon;
@@ -840,7 +858,6 @@ export function SearchTab({
                     )}
                   </div>
 
-                  {/* Seletor de Horas Estilo Toggle Group */}
                   <div className="flex items-center gap-2 mb-6">
                     {pkg.options.map((opt) => (
                       <button
@@ -926,7 +943,6 @@ export function SearchTab({
             </div>
           </div>
 
-          {/* ORGANIZAÇÃO DOS FILTROS ELEGANTES (UX APRIMORADA) */}
           <div className="px-4 py-2 mx-auto max-w-5xl w-full mt-4 space-y-5">
             <div>
               <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-2 pl-1">
@@ -945,7 +961,6 @@ export function SearchTab({
               </div>
             </div>
 
-            {/* Aviso Informativo do Turno Mensal */}
             {rentalType === "turno" && (
               <div className="bg-blue-50/80 border border-blue-100 p-4 rounded-2xl flex items-start gap-3 mt-2 animate-in fade-in zoom-in-95">
                 <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
@@ -1044,7 +1059,6 @@ export function SearchTab({
             </div>
           ) : (
             <div className="px-4 max-w-5xl mx-auto w-full space-y-12 pb-12">
-              {/* SESSÃO PREMIUM (Renderiza independente da modalidade de aluguel) */}
               {(activeTier === "all" || activeTier === "master") &&
                 masterRooms.length > 0 && (
                   <section className="bg-zinc-900 -mx-4 px-4 py-8 lg:rounded-3xl lg:mx-0 border border-zinc-800 shadow-2xl">
@@ -1060,7 +1074,6 @@ export function SearchTab({
                       </div>
                     </div>
 
-                    {/* Banner promocional SÓ aparece se for hora e se a tag específica estiver clicada */}
                     {activeTier === "master" &&
                       rentalType === "hora" &&
                       renderFusionPassBanner()}
@@ -1089,7 +1102,6 @@ export function SearchTab({
                   </section>
                 )}
 
-              {/* SESSÃO VIP */}
               {(activeTier === "all" || activeTier === "vip") &&
                 vipRooms.length > 0 && (
                   <section className="pt-8">
@@ -1133,7 +1145,6 @@ export function SearchTab({
                   </section>
                 )}
 
-              {/* SESSÃO BASIC */}
               {(activeTier === "all" || activeTier === "start") &&
                 startRooms.length > 0 && (
                   <section className="border-t border-zinc-200 pt-8 pb-8 mt-8">
@@ -1305,7 +1316,6 @@ function RoomCard({
   const isBasic = room.tier === "start";
 
   const isHourly = room.selectedModality === "hora";
-  // Regra de UX: O desconto âncora SÓ APARECE se o filtro estiver setado em uma categoria específica (não na 'Todos')
   const showDiscount =
     isHourly &&
     activeTier !== "all" &&
