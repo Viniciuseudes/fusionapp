@@ -47,13 +47,12 @@ import {
   Check,
   Crown,
   TrendingUp,
-  BadgePercent,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { CheckoutModal, CheckoutSummary } from "@/components/checkout-modal";
 import { useMobileBack } from "@/hooks/use-mobile-back";
-import { Badge } from "@/components/ui/badge";
 
 const AMENITIES_LIST = [
   { id: "wifi", label: "Wi-Fi de alta velocidade", icon: Wifi },
@@ -118,7 +117,6 @@ export function RoomDetail(props: RoomDetailProps) {
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
   const lightboxRef = useRef<HTMLDivElement>(null);
 
-  // Reviews e Pacotes
   const [reviews, setReviews] = useState<any[]>([]);
   const [loadingReviews, setLoadingReviews] = useState(true);
   const [reviewFilter, setReviewFilter] = useState<number>(0);
@@ -546,6 +544,9 @@ export function RoomDetail(props: RoomDetailProps) {
     }
   };
 
+  // ==========================================
+  // LÓGICA DE AÇÃO & EFEITO CASCATA (INTELIGÊNCIA DA CARTEIRA)
+  // ==========================================
   const handleAction = async () => {
     if (activeTab === "hora" && selectedSlots.length === 0) {
       return toast({
@@ -674,8 +675,48 @@ export function RoomDetail(props: RoomDetailProps) {
         if (!response.ok)
           throw new Error(summaryData.error || "Erro ao calcular valores.");
 
+        // === CÁLCULO DO EFEITO CASCATA (DESCOBRIR A CARTEIRA USADA) ===
+        const { data: txs } = await supabase
+          .from("wallet_transactions")
+          .select("amount, tier, expires_at")
+          .eq("user_id", user.id);
+
+        let masterBal = 0;
+        let vipBal = 0;
+        let startBal = 0;
+        const now = new Date();
+
+        if (txs) {
+          txs.forEach((tx) => {
+            if (tx.amount > 0 && tx.expires_at && new Date(tx.expires_at) < now)
+              return;
+            const amt = Number(tx.amount);
+            if (tx.tier === "master") masterBal += amt;
+            else if (tx.tier === "vip") vipBal += amt;
+            else startBal += amt;
+          });
+        }
+
+        const roomTier = roomData.tier || "start";
+        let calcUsedTier = roomTier;
+        const required = summaryData.creditsRequired;
+
+        // Efeito Cascata: Se não tiver saldo da sala certa, tenta puxar do nível acima
+        if (roomTier === "start") {
+          if (startBal >= required) calcUsedTier = "start";
+          else if (vipBal >= required) calcUsedTier = "vip";
+          else if (masterBal >= required) calcUsedTier = "master";
+        } else if (roomTier === "vip") {
+          if (vipBal >= required) calcUsedTier = "vip";
+          else if (masterBal >= required) calcUsedTier = "master";
+        } else {
+          calcUsedTier = "master";
+        }
+        // ==========================================================
+
         setCheckoutSummary({
           ...summaryData,
+          usedTier: calcUsedTier,
           lockIds: lockedData.map((d: any) => d.id),
         });
         setIsCheckoutOpen(true);
@@ -728,7 +769,9 @@ export function RoomDetail(props: RoomDetailProps) {
     }
   };
 
-  // SÊNIOR: Função reescrita para receber e processar o cupom (Desconto Real)
+  // ==========================================
+  // CONFIRMAÇÃO DO CHECKOUT COM CUPOM E CASCATA
+  // ==========================================
   const handleConfirmCheckout = async (
     method: "wallet" | "pix" | "card",
     appliedCoupon?: any,
@@ -744,11 +787,9 @@ export function RoomDetail(props: RoomDetailProps) {
 
       const lockIds = (checkoutSummary as any).lockIds;
 
-      // ==========================================
-      // LÓGICA DO MOTOR DE CUPONS (Desconto no Backend)
-      // ==========================================
+      // Desconto no Backend
       let finalCreditsRequired = checkoutSummary.creditsRequired;
-      let finalHourlyCost = totalHourlyCost; // Base BRL da soma das horas
+      let finalHourlyCost = totalHourlyCost;
 
       if (appliedCoupon) {
         if (appliedCoupon.type === "percentage") {
@@ -768,10 +809,10 @@ export function RoomDetail(props: RoomDetailProps) {
         finalCreditsRequired = Math.max(0, finalCreditsRequired);
         finalHourlyCost = Math.max(0, finalHourlyCost);
       }
-      // ==========================================
 
       if (method === "wallet") {
         const creditCostPerHour = finalCreditsRequired / selectedSlots.length;
+        const usedTier = checkoutSummary.usedTier || roomData.tier || "start"; // Pegando o nível correto
 
         const { error: updateError } = await supabase
           .from("bookings")
@@ -787,14 +828,13 @@ export function RoomDetail(props: RoomDetailProps) {
           .from("wallet_transactions")
           .insert({
             user_id: user.id,
-            amount: -finalCreditsRequired, // Abate o valor JÁ COM DESCONTO
+            amount: -finalCreditsRequired,
             type: "usage",
-            tier: roomData.tier || "start",
-            description: `Reserva em Créditos: ${roomData.name}`,
+            tier: usedTier, // Debita da carteira que bancou
+            description: `Reserva em Créditos (${usedTier.toUpperCase()}): ${roomData.name}`,
           });
         if (walletError) throw walletError;
 
-        // Se usou cupom na carteira, incrementa e salva a rastreabilidade
         if (appliedCoupon) {
           await supabase
             .from("coupons")
@@ -835,7 +875,6 @@ export function RoomDetail(props: RoomDetailProps) {
 
         if (updateError) throw updateError;
 
-        // Se usou cupom no Pix/Card, salva a intenção e a rastreabilidade
         if (appliedCoupon) {
           await supabase
             .from("coupons")
@@ -854,7 +893,7 @@ export function RoomDetail(props: RoomDetailProps) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             checkoutType: "booking",
-            price: finalHourlyCost, // Manda o valor JÁ COM DESCONTO para o gateway
+            price: finalHourlyCost,
             paymentRef: paymentRef,
           }),
         });
@@ -1228,8 +1267,8 @@ export function RoomDetail(props: RoomDetailProps) {
           </div>
         </div>
 
-        {/* LADO ESQUERDO DA TELA: INFORMAÇÕES DA SALA E FUSION PASS */}
         <div className="px-5 py-6 max-w-5xl mx-auto flex flex-col lg:grid lg:grid-cols-12 gap-10">
+          {/* LADO ESQUERDO DA TELA: INFORMAÇÕES DA SALA E FUSION PASS */}
           <div className="order-1 lg:order-1 lg:col-span-8 space-y-10">
             <section>
               <h2 className="text-lg font-black text-slate-900 mb-3">
@@ -1322,7 +1361,7 @@ export function RoomDetail(props: RoomDetailProps) {
               </div>
             </section>
 
-            {/* SÊNIOR: FUSION PASS REPOSICIONADO AQUI COMO UPSELL NATURAL E CLEAN */}
+            {/* SÊNIOR: FUSION PASS COMO UPSELL CLEAN */}
             {packages.length > 0 && activeTab === "hora" && (
               <section className="mt-10 animate-in fade-in slide-in-from-bottom-4">
                 <div className="bg-white rounded-3xl p-6 md:p-8 shadow-sm border border-slate-200 relative overflow-hidden group">
@@ -1442,7 +1481,7 @@ export function RoomDetail(props: RoomDetailProps) {
             <div className="w-full h-px bg-slate-100 hidden lg:block mt-10" />
           </div>
 
-          {/* LADO DIREITO (BARRA LATERAL LIMPA E FOCADA NO AGENDAMENTO) */}
+          {/* LADO DIREITO (BARRA LATERAL FOCADA NO AGENDAMENTO) */}
           <div className="order-2 lg:order-2 lg:col-span-4 flex flex-col gap-6">
             <div className="bg-white md:p-6 md:border md:border-slate-200 md:rounded-2xl md:shadow-lg md:h-fit md:sticky md:top-24 flex flex-col">
               <div className="flex bg-slate-100 p-1.5 rounded-xl mb-6">
@@ -2118,7 +2157,6 @@ export function RoomDetail(props: RoomDetailProps) {
         </div>
       )}
 
-      {/* SÊNIOR: Modal de Checkout Repassando o Cupom para Gravação */}
       <CheckoutModal
         isOpen={isCheckoutOpen}
         onClose={handleCheckoutClose}
