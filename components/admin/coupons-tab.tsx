@@ -35,7 +35,8 @@ export function AdminCouponsTab() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [coupons, setCoupons] = useState<any[]>([]);
-  const [rooms, setRooms] = useState<any[]>([]); // Estado para guardar as salas
+  const [rooms, setRooms] = useState<any[]>([]);
+  const [roomSearch, setRoomSearch] = useState(""); // <-- NOVO: Estado para busca de salas
   const [view, setView] = useState<"list" | "create" | "details">("list");
 
   // Para a visão detalhada de quem usou
@@ -43,7 +44,7 @@ export function AdminCouponsTab() {
   const [couponUses, setCouponUses] = useState<any[]>([]);
 
   // Formulário de Criação
-  const [isAllRooms, setIsAllRooms] = useState(true); // Controle se vale para todas as salas
+  const [isAllRooms, setIsAllRooms] = useState(true);
   const [formData, setFormData] = useState({
     code: "",
     type: "percentage", // percentage, fixed, bogo
@@ -51,7 +52,7 @@ export function AdminCouponsTab() {
     max_uses: "",
     valid_until: "",
     affiliate_id: "",
-    valid_room_ids: [] as string[], // Lista de IDs das salas selecionadas
+    valid_room_ids: [] as string[],
   });
 
   const [profSearch, setProfSearch] = useState("");
@@ -60,7 +61,7 @@ export function AdminCouponsTab() {
 
   useEffect(() => {
     fetchCoupons();
-    loadRooms(); // Carrega as salas logo na abertura
+    loadRooms();
   }, []);
 
   const fetchCoupons = async () => {
@@ -80,10 +81,10 @@ export function AdminCouponsTab() {
   };
 
   const loadRooms = async () => {
-    // Busca apenas salas ativas para mostrar no checklist
+    // SÊNIOR: Agora buscamos também o nome do anfitrião fazendo um JOIN na tabela profiles!
     const { data, error } = await supabase
       .from("rooms")
-      .select("id, name, tier")
+      .select("id, name, tier, profiles:host_id(full_name)")
       .eq("is_active", true)
       .order("name");
 
@@ -140,7 +141,7 @@ export function AdminCouponsTab() {
           ? new Date(`${formData.valid_until}T23:59:59`).toISOString()
           : null,
         affiliate_id: selectedAffiliate ? selectedAffiliate.id : null,
-        valid_room_ids: isAllRooms ? null : formData.valid_room_ids, // Salva os IDs ou null
+        valid_room_ids: isAllRooms ? null : formData.valid_room_ids,
         is_active: true,
       });
 
@@ -160,6 +161,7 @@ export function AdminCouponsTab() {
       });
       setSelectedAffiliate(null);
       setIsAllRooms(true);
+      setRoomSearch(""); // Limpa a busca de salas
     } catch (error: any) {
       toast({
         variant: "destructive",
@@ -229,6 +231,16 @@ export function AdminCouponsTab() {
       );
     return null;
   };
+
+  // Lógica de filtro para a busca de salas (SÊNIOR: Filtra por nome da sala OU nome do anfitrião)
+  const filteredRooms = rooms.filter((room) => {
+    const searchLower = roomSearch.toLowerCase();
+    const matchName = room.name?.toLowerCase().includes(searchLower);
+    const matchHost = room.profiles?.full_name
+      ?.toLowerCase()
+      .includes(searchLower);
+    return matchName || matchHost;
+  });
 
   if (loading)
     return (
@@ -356,7 +368,7 @@ export function AdminCouponsTab() {
               </div>
             </div>
 
-            {/* NOVA SESSÃO: LIMITAÇÃO POR SALAS */}
+            {/* SESSÃO DE LIMITAÇÃO POR SALAS COM BUSCA SÊNIOR */}
             <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100 space-y-4">
               <div className="flex items-start justify-between">
                 <div>
@@ -379,6 +391,7 @@ export function AdminCouponsTab() {
                     onChange={() => {
                       setIsAllRooms(true);
                       setFormData({ ...formData, valid_room_ids: [] });
+                      setRoomSearch("");
                     }}
                     className="w-4 h-4 text-indigo-600"
                   />
@@ -417,34 +430,47 @@ export function AdminCouponsTab() {
               </div>
 
               {!isAllRooms && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-60 overflow-y-auto p-4 bg-white border border-slate-200 rounded-xl shadow-inner animate-in fade-in zoom-in-95">
-                  {rooms.length === 0 ? (
-                    <p className="text-sm text-slate-500 col-span-2 text-center py-4">
-                      Nenhuma sala ativa encontrada.
-                    </p>
-                  ) : (
-                    rooms.map((room) => (
-                      <label
-                        key={room.id}
-                        className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${formData.valid_room_ids.includes(room.id) ? "bg-indigo-50 border-indigo-200" : "bg-slate-50 border-slate-100 hover:bg-slate-100"}`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={formData.valid_room_ids.includes(room.id)}
-                          onChange={() => handleToggleRoom(room.id)}
-                          className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-bold text-slate-900 truncate">
-                            {room.name}
-                          </p>
-                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                            {room.tier}
-                          </p>
-                        </div>
-                      </label>
-                    ))
-                  )}
+                <div className="space-y-3 animate-in fade-in zoom-in-95">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <Input
+                      placeholder="Buscar por nome da sala ou anfitrião..."
+                      value={roomSearch}
+                      onChange={(e) => setRoomSearch(e.target.value)}
+                      className="h-10 pl-9 bg-white border-slate-200 rounded-xl text-sm"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-60 overflow-y-auto p-4 bg-white border border-slate-200 rounded-xl shadow-inner">
+                    {filteredRooms.length === 0 ? (
+                      <p className="text-sm text-slate-500 col-span-2 text-center py-4">
+                        Nenhuma sala encontrada para esta busca.
+                      </p>
+                    ) : (
+                      filteredRooms.map((room) => (
+                        <label
+                          key={room.id}
+                          className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${formData.valid_room_ids.includes(room.id) ? "bg-indigo-50 border-indigo-200" : "bg-slate-50 border-slate-100 hover:bg-slate-100"}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={formData.valid_room_ids.includes(room.id)}
+                            onChange={() => handleToggleRoom(room.id)}
+                            className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-bold text-slate-900 truncate">
+                              {room.name}
+                            </p>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest truncate">
+                              {room.tier} •{" "}
+                              {room.profiles?.full_name || "Sem Anfitrião"}
+                            </p>
+                          </div>
+                        </label>
+                      ))
+                    )}
+                  </div>
                 </div>
               )}
             </div>
