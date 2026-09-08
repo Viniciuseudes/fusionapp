@@ -2,13 +2,15 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/utils/supabase/client";
+
+// Importações dos Módulos Admin
 import { PackagesAdminTab } from "@/components/admin/packages-admin-tab";
 import { AdminOverviewTab } from "@/components/admin/overview-tab";
 import { AdminSpecialistsTab } from "@/components/admin/specialists-tab";
 import { AdminPartnersTab } from "@/components/admin/partners-tab";
 import { AdminBookingsTab } from "@/components/admin/bookings-tab";
-// Importando o nosso novo motor de campanhas!
 import { PushCampaignManager } from "@/components/admin/PushCampaignManager";
+import { AdminCouponsTab } from "@/components/admin/coupons-tab"; // <-- Motor de Cupons Injetado!
 
 import {
   Users,
@@ -44,8 +46,10 @@ import {
   CreditCard,
   Banknote,
   UserCheck,
-  Megaphone, // <-- Ícone novo adicionado
+  Megaphone,
+  Ticket, // <-- Ícone do Cupom adicionado!
 } from "lucide-react";
+
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -69,13 +73,13 @@ import { ptBR } from "date-fns/locale";
 export default function AdminDashboardPage() {
   const [activeTab, setActiveTab] = useState("dashboard");
 
-  // Adicionamos a nova aba de Campanhas aqui
   const menuItems = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "especialistas", label: "Especialistas", icon: Users },
     { id: "parceiros", label: "Parceiros", icon: ShieldCheck },
     { id: "salas", label: "Gestão de Salas", icon: Building2 },
     { id: "pacotes", label: "Precificação (Pacotes)", icon: Tags },
+    { id: "cupons", label: "Motor de Cupons", icon: Ticket }, // <-- Nova aba no menu!
     { id: "agendamentos", label: "Agendamentos", icon: CalendarDays },
     { id: "campanhas", label: "Campanhas Push", icon: Megaphone },
   ];
@@ -143,27 +147,29 @@ export default function AdminDashboardPage() {
           </div>
         </header>
         <div className="flex-1 overflow-y-auto relative bg-slate-50">
+          {/* Renderização Condicional das Abas */}
           {activeTab === "dashboard" && <AdminOverviewTab />}
           {activeTab === "especialistas" && <AdminSpecialistsTab />}
           {activeTab === "parceiros" && <AdminPartnersTab />}
           {activeTab === "salas" && <AdminRoomsTab />}
           {activeTab === "pacotes" && <PackagesAdminTab />}
           {activeTab === "agendamentos" && <AdminBookingsTab />}
-
-          {/* Renderizando o novo motor de Campanhas */}
+          {activeTab === "cupons" && <AdminCouponsTab />}{" "}
+          {/* <-- Motor de Cupons sendo renderizado! */}
           {activeTab === "campanhas" && (
             <div className="p-8 flex justify-center items-start animate-in fade-in slide-in-from-bottom-4">
               <PushCampaignManager />
             </div>
           )}
-
+          {/* Fallback caso a aba não exista ou esteja em construção */}
           {activeTab !== "salas" &&
             activeTab !== "pacotes" &&
             activeTab !== "dashboard" &&
             activeTab !== "especialistas" &&
             activeTab !== "parceiros" &&
             activeTab !== "agendamentos" &&
-            activeTab !== "campanhas" && ( // Blindagem para a nova aba
+            activeTab !== "campanhas" &&
+            activeTab !== "cupons" && (
               <div className="h-full flex flex-col items-center justify-center text-slate-400">
                 <Loader2 className="w-10 h-10 animate-spin mb-4 text-slate-300" />
                 <p className="font-bold">Módulo em construção...</p>
@@ -211,7 +217,6 @@ function AdminRoomsTab() {
   // ==========================================
   const [manualDate, setManualDate] = useState<Date>(new Date());
 
-  // ARQUITETURA SÊNIOR: Em vez de um slot (string), temos um carrinho de sessões
   const [selectedSlots, setSelectedSlots] = useState<
     { date: Date; slot: string }[]
   >([]);
@@ -224,7 +229,6 @@ function AdminRoomsTab() {
     "wallet" | "pix" | "card" | "cash"
   >("wallet");
 
-  // Toggle do Carrinho de Sessões
   const toggleSlot = (date: Date, slot: string) => {
     const dateStr = format(date, "yyyy-MM-dd");
     const existingIndex = selectedSlots.findIndex(
@@ -232,10 +236,8 @@ function AdminRoomsTab() {
     );
 
     if (existingIndex >= 0) {
-      // Remove se já existe
       setSelectedSlots((prev) => prev.filter((_, i) => i !== existingIndex));
     } else {
-      // Adiciona se não existe
       setSelectedSlots((prev) => [...prev, { date, slot }]);
     }
   };
@@ -445,7 +447,7 @@ function AdminRoomsTab() {
 
     setActionLoading(true);
     try {
-      const totalCost = selectedSlots.length; // 1 CR por slot
+      const totalCost = selectedSlots.length;
 
       if (manualPaymentMethod === "wallet") {
         const currentBalance = selectedProf.wallet_balance || 0;
@@ -472,7 +474,6 @@ function AdminRoomsTab() {
         });
       }
 
-      // Preparando o Bulk Insert (Inserção em Lote)
       const bookingsToInsert = selectedSlots.map((s) => {
         const [startStr, endStr] = s.slot.split("-");
         const startH = parseInt(startStr.replace("h", ""), 10);
@@ -494,7 +495,6 @@ function AdminRoomsTab() {
         };
       });
 
-      // Bulk Insert no Supabase
       const { error: bError } = await supabase
         .from("bookings")
         .insert(bookingsToInsert);
@@ -526,7 +526,7 @@ function AdminRoomsTab() {
     setEvaluatingRoom(room);
     setAuditTab("auditoria");
     setCurrentMonth(new Date());
-    setSelectedSlots([]); // Limpa carrinho
+    setSelectedSlots([]);
 
     let parsedPrice = "";
     try {
@@ -1138,7 +1138,7 @@ function AdminRoomsTab() {
                 </div>
               )}
 
-              {/* ABA: GERENCIAR AGENDA (BLOQUEIOS MANUAIS DO ADMIN) */}
+              {/* ABA: GERENCIAR AGENDA */}
               {auditTab === "agenda" && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
                   <div className="flex items-start justify-between bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
@@ -1207,10 +1207,7 @@ function AdminRoomsTab() {
                 </div>
               )}
 
-              {/* ==========================================
-                  NOVA INTERFACE SÊNIOR DE RESERVA MANUAL
-                  CARRINHO DE SESSÕES (MULTI-SLOT)
-                  ========================================== */}
+              {/* ABA: RESERVA MANUAL */}
               {auditTab === "reservar" && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
                   <div className="bg-white border border-slate-200 p-8 rounded-3xl shadow-sm">
@@ -1263,7 +1260,6 @@ function AdminRoomsTab() {
                             ) : (
                               availableSlots.map((slot) => {
                                 const isTaken = takenSlots.includes(slot);
-                                // Verifica se este slot nesta exata data já está no carrinho
                                 const currentDateStr = format(
                                   manualDate,
                                   "yyyy-MM-dd",
