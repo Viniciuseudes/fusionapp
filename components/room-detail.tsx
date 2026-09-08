@@ -18,7 +18,6 @@ import {
   isBefore,
   isSameMonth,
   parseISO,
-  differenceInMinutes,
 } from "date-fns";
 import {
   ArrowLeft,
@@ -48,11 +47,13 @@ import {
   Check,
   Crown,
   TrendingUp,
+  BadgePercent,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { CheckoutModal, CheckoutSummary } from "@/components/checkout-modal";
 import { useMobileBack } from "@/hooks/use-mobile-back";
+import { Badge } from "@/components/ui/badge";
 
 const AMENITIES_LIST = [
   { id: "wifi", label: "Wi-Fi de alta velocidade", icon: Wifi },
@@ -189,7 +190,6 @@ export function RoomDetail(props: RoomDetailProps) {
             setActiveTab(mods[0]);
           }
 
-          // Busca os pacotes para fazer a Ancoragem de Preço
           const roomTier = data.tier || "start";
           const { data: pkgs } = await supabase
             .from("packages")
@@ -200,7 +200,6 @@ export function RoomDetail(props: RoomDetailProps) {
 
           if (pkgs && pkgs.length > 0) {
             setPackages(pkgs);
-            // Seleciona o pacote do meio (ex: 16h)
             setSelectedPkgHours(pkgs[1]?.hours || pkgs[0]?.hours);
           }
         }
@@ -729,7 +728,11 @@ export function RoomDetail(props: RoomDetailProps) {
     }
   };
 
-  const handleConfirmCheckout = async (method: "wallet" | "pix" | "card") => {
+  // SÊNIOR: Função reescrita para receber e processar o cupom (Desconto Real)
+  const handleConfirmCheckout = async (
+    method: "wallet" | "pix" | "card",
+    appliedCoupon?: any,
+  ) => {
     if (!checkoutSummary) return;
     setActionLoading(true);
 
@@ -741,9 +744,34 @@ export function RoomDetail(props: RoomDetailProps) {
 
       const lockIds = (checkoutSummary as any).lockIds;
 
+      // ==========================================
+      // LÓGICA DO MOTOR DE CUPONS (Desconto no Backend)
+      // ==========================================
+      let finalCreditsRequired = checkoutSummary.creditsRequired;
+      let finalHourlyCost = totalHourlyCost; // Base BRL da soma das horas
+
+      if (appliedCoupon) {
+        if (appliedCoupon.type === "percentage") {
+          finalCreditsRequired -=
+            finalCreditsRequired * (appliedCoupon.discount_value / 100);
+          finalHourlyCost -=
+            finalHourlyCost * (appliedCoupon.discount_value / 100);
+        } else if (appliedCoupon.type === "fixed") {
+          finalCreditsRequired -= appliedCoupon.discount_value;
+          finalHourlyCost -=
+            (appliedCoupon.discount_value / checkoutSummary.creditsRequired) *
+            finalHourlyCost;
+        } else if (appliedCoupon.type === "bogo") {
+          finalCreditsRequired -= 1;
+          finalHourlyCost -= finalHourlyCost / checkoutSummary.creditsRequired;
+        }
+        finalCreditsRequired = Math.max(0, finalCreditsRequired);
+        finalHourlyCost = Math.max(0, finalHourlyCost);
+      }
+      // ==========================================
+
       if (method === "wallet") {
-        const creditCostPerHour =
-          checkoutSummary.creditsRequired / selectedSlots.length;
+        const creditCostPerHour = finalCreditsRequired / selectedSlots.length;
 
         const { error: updateError } = await supabase
           .from("bookings")
@@ -759,12 +787,27 @@ export function RoomDetail(props: RoomDetailProps) {
           .from("wallet_transactions")
           .insert({
             user_id: user.id,
-            amount: -checkoutSummary.creditsRequired,
+            amount: -finalCreditsRequired, // Abate o valor JÁ COM DESCONTO
             type: "usage",
             tier: roomData.tier || "start",
             description: `Reserva em Créditos: ${roomData.name}`,
           });
         if (walletError) throw walletError;
+
+        // Se usou cupom na carteira, incrementa e salva a rastreabilidade
+        if (appliedCoupon) {
+          await supabase
+            .from("coupons")
+            .update({ current_uses: appliedCoupon.current_uses + 1 })
+            .eq("id", appliedCoupon.id);
+          await supabase.from("coupon_uses").insert({
+            coupon_id: appliedCoupon.id,
+            user_id: user.id,
+            booking_id: lockIds[0],
+            discount_applied:
+              checkoutSummary.creditsRequired - finalCreditsRequired,
+          });
+        }
 
         toast({
           title: "Reserva Confirmada! 🎉",
@@ -792,12 +835,26 @@ export function RoomDetail(props: RoomDetailProps) {
 
         if (updateError) throw updateError;
 
+        // Se usou cupom no Pix/Card, salva a intenção e a rastreabilidade
+        if (appliedCoupon) {
+          await supabase
+            .from("coupons")
+            .update({ current_uses: appliedCoupon.current_uses + 1 })
+            .eq("id", appliedCoupon.id);
+          await supabase.from("coupon_uses").insert({
+            coupon_id: appliedCoupon.id,
+            user_id: user.id,
+            booking_id: lockIds[0],
+            discount_applied: totalHourlyCost - finalHourlyCost,
+          });
+        }
+
         const response = await fetch("/api/checkout", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             checkoutType: "booking",
-            price: totalHourlyCost,
+            price: finalHourlyCost, // Manda o valor JÁ COM DESCONTO para o gateway
             paymentRef: paymentRef,
           }),
         });
@@ -1171,6 +1228,7 @@ export function RoomDetail(props: RoomDetailProps) {
           </div>
         </div>
 
+        {/* LADO ESQUERDO DA TELA: INFORMAÇÕES DA SALA E FUSION PASS */}
         <div className="px-5 py-6 max-w-5xl mx-auto flex flex-col lg:grid lg:grid-cols-12 gap-10">
           <div className="order-1 lg:order-1 lg:col-span-8 space-y-10">
             <section>
@@ -1264,11 +1322,128 @@ export function RoomDetail(props: RoomDetailProps) {
               </div>
             </section>
 
-            <div className="w-full h-px bg-slate-100 hidden lg:block" />
+            {/* SÊNIOR: FUSION PASS REPOSICIONADO AQUI COMO UPSELL NATURAL E CLEAN */}
+            {packages.length > 0 && activeTab === "hora" && (
+              <section className="mt-10 animate-in fade-in slide-in-from-bottom-4">
+                <div className="bg-white rounded-3xl p-6 md:p-8 shadow-sm border border-slate-200 relative overflow-hidden group">
+                  <div
+                    className={`absolute -right-10 -top-10 w-40 h-40 rounded-full blur-3xl pointer-events-none transition-all duration-500 opacity-[0.08] group-hover:opacity-[0.15] ${roomData.tier === "master" ? "bg-amber-500" : roomData.tier === "vip" ? "bg-[#f05e23]" : "bg-blue-500"}`}
+                  />
+
+                  <div className="relative z-10 flex flex-col md:flex-row gap-8">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-3">
+                        {roomData.tier === "master" ? (
+                          <Crown className="w-6 h-6 text-amber-500" />
+                        ) : roomData.tier === "vip" ? (
+                          <Star className="w-6 h-6 text-[#f05e23]" />
+                        ) : (
+                          <Shield className="w-6 h-6 text-blue-500" />
+                        )}
+                        <h2 className="text-xl font-black text-slate-900 tracking-tight">
+                          Fusion Pass{" "}
+                          {roomData.tier === "master"
+                            ? "Premium"
+                            : roomData.tier === "vip"
+                              ? "VIP"
+                              : "Basic"}
+                        </h2>
+                        <Badge className="bg-indigo-50 text-indigo-600 border-0 text-[10px] uppercase tracking-widest ml-2">
+                          Recomendado
+                        </Badge>
+                      </div>
+
+                      <p className="text-sm font-medium text-slate-500 mb-6 leading-relaxed max-w-lg">
+                        Ao invés de pagar o valor avulso de R${" "}
+                        {getBasePrice().toFixed(2).replace(".", ",")}/h, garanta
+                        horas com desconto exclusivo comprando um pacote. O
+                        saldo fica na sua carteira para usar quando quiser.
+                      </p>
+
+                      <div className="flex flex-wrap gap-3 mb-2">
+                        {packages.map((pkg) => (
+                          <button
+                            key={pkg.id}
+                            onClick={() => setSelectedPkgHours(pkg.hours)}
+                            className={`px-6 py-3 text-sm font-bold rounded-xl transition-all border-2 ${selectedPkgHours === pkg.hours ? "bg-slate-900 text-white border-slate-900 shadow-md transform scale-105" : "bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:bg-slate-50"}`}
+                          >
+                            {pkg.hours} horas
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="md:w-64 shrink-0 flex flex-col justify-center border-t md:border-t-0 md:border-l border-slate-100 pt-6 md:pt-0 md:pl-8">
+                      {packages
+                        .filter((p) => p.hours === selectedPkgHours)
+                        .map((pkg) => {
+                          const hourlyRate = pkg.price / pkg.hours;
+                          const basePrice = getBasePrice();
+                          const savings = basePrice - hourlyRate;
+                          const savingsPercent =
+                            basePrice > 0
+                              ? Math.round((savings / basePrice) * 100)
+                              : 0;
+
+                          return (
+                            <div
+                              key={pkg.id}
+                              className="flex flex-col h-full justify-center"
+                            >
+                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+                                Preço da hora no passe
+                              </p>
+                              <div className="flex items-baseline gap-1 mb-2">
+                                <span className="text-4xl font-black text-slate-900 leading-none">
+                                  R$ {hourlyRate.toFixed(2).replace(".", ",")}
+                                </span>
+                                <span className="text-sm text-slate-500 font-bold">
+                                  /h
+                                </span>
+                              </div>
+
+                              {savings > 0 && (
+                                <div className="flex items-center gap-2 mb-6">
+                                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-md border border-emerald-100 flex items-center gap-1">
+                                    <TrendingUp className="w-3 h-3" /> Poupa R${" "}
+                                    {savings.toFixed(2).replace(".", ",")} /h
+                                  </span>
+                                  <span className="text-[10px] font-black text-white bg-emerald-500 px-1.5 py-1 rounded-md shadow-sm">
+                                    -{savingsPercent}% OFF
+                                  </span>
+                                </div>
+                              )}
+
+                              <Button
+                                onClick={() => {
+                                  toast({
+                                    title: "Iniciando assinatura",
+                                    description:
+                                      "Vá em 'Saldo Fusion' no painel principal para concluir.",
+                                  });
+                                  setTimeout(
+                                    () => router.push("/dashboard"),
+                                    1000,
+                                  );
+                                }}
+                                className="w-full h-12 bg-slate-900 hover:bg-slate-800 text-white font-black rounded-xl shadow-lg transition-all active:scale-95"
+                              >
+                                Assinar Pass
+                              </Button>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            <div className="w-full h-px bg-slate-100 hidden lg:block mt-10" />
           </div>
 
+          {/* LADO DIREITO (BARRA LATERAL LIMPA E FOCADA NO AGENDAMENTO) */}
           <div className="order-2 lg:order-2 lg:col-span-4 flex flex-col gap-6">
-            {/* INÍCIO DO COMPONENTE FIXO/STICKY PARA NAVEGAÇÃO E RESERVA */}
             <div className="bg-white md:p-6 md:border md:border-slate-200 md:rounded-2xl md:shadow-lg md:h-fit md:sticky md:top-24 flex flex-col">
               <div className="flex bg-slate-100 p-1.5 rounded-xl mb-6">
                 {roomModalities.includes("hora") && (
@@ -1296,116 +1471,6 @@ export function RoomDetail(props: RoomDetailProps) {
                   </button>
                 )}
               </div>
-
-              {/* BANNER DE CONVERSÃO DO FUSION PASS (ESCURO, ELEGANTE E COM ANCORAGEM DE DESCONTO) */}
-              {packages.length > 0 && activeTab === "hora" && (
-                <div className="mb-6 bg-zinc-950 rounded-[1.25rem] p-6 shadow-xl relative overflow-hidden group border border-zinc-800 animate-in fade-in zoom-in-95">
-                  <div
-                    className={`absolute -right-10 -top-10 w-40 h-40 rounded-full blur-3xl pointer-events-none transition-all duration-500 opacity-20 group-hover:opacity-30 ${roomData.tier === "master" ? "bg-amber-500" : roomData.tier === "vip" ? "bg-[#f05e23]" : "bg-blue-500"}`}
-                  />
-
-                  <div className="relative z-10">
-                    <div className="flex items-center gap-2 mb-2">
-                      {roomData.tier === "master" ? (
-                        <Crown className="w-5 h-5 text-amber-400" />
-                      ) : roomData.tier === "vip" ? (
-                        <Star className="w-5 h-5 text-[#f05e23]" />
-                      ) : (
-                        <Shield className="w-5 h-5 text-blue-400" />
-                      )}
-                      <h3 className="text-base font-black text-white tracking-tight">
-                        Fusion Pass{" "}
-                        {roomData.tier === "master"
-                          ? "Premium"
-                          : roomData.tier === "vip"
-                            ? "VIP"
-                            : "Basic"}
-                      </h3>
-                    </div>
-                    <p className="text-xs font-medium text-zinc-400 mb-5 leading-relaxed">
-                      Ao invés de pagar o valor avulso de R${" "}
-                      {getBasePrice().toFixed(2).replace(".", ",")}/h, garanta
-                      horas com desconto exclusivo comprando um pacote.
-                    </p>
-
-                    <div className="flex gap-2 mb-5">
-                      {packages.map((pkg) => (
-                        <button
-                          key={pkg.id}
-                          onClick={() => setSelectedPkgHours(pkg.hours)}
-                          className={`flex-1 py-2 text-xs font-bold rounded-xl transition-all border ${selectedPkgHours === pkg.hours ? "bg-[#f05e23] text-white border-[#f05e23] shadow-md" : "bg-zinc-900 text-zinc-400 border-zinc-700 hover:bg-zinc-800"}`}
-                        >
-                          {pkg.hours}h
-                        </button>
-                      ))}
-                    </div>
-
-                    {packages
-                      .filter((p) => p.hours === selectedPkgHours)
-                      .map((pkg) => {
-                        const hourlyRate = pkg.price / pkg.hours;
-                        const basePrice = getBasePrice();
-                        const savings = basePrice - hourlyRate;
-                        const savingsPercent =
-                          basePrice > 0
-                            ? Math.round((savings / basePrice) * 100)
-                            : 0;
-
-                        return (
-                          <div
-                            key={pkg.id}
-                            className="flex flex-col sm:flex-row sm:items-end justify-between mt-4 gap-4 border-t border-zinc-800 pt-5"
-                          >
-                            <div>
-                              <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500 mb-2">
-                                Preço da hora no passe
-                              </p>
-                              <div className="flex flex-col gap-2">
-                                <div className="flex items-baseline gap-1">
-                                  <span className="text-3xl font-black text-white leading-none">
-                                    R$ {hourlyRate.toFixed(2).replace(".", ",")}
-                                  </span>
-                                  <span className="text-xs text-zinc-500 font-bold">
-                                    /h
-                                  </span>
-                                </div>
-                                {savings > 0 && (
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-bold text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded-md whitespace-nowrap border border-emerald-400/20 flex items-center gap-1">
-                                      <TrendingUp className="w-3 h-3" /> Poupa
-                                      R$ {savings.toFixed(2).replace(".", ",")}
-                                      /h
-                                    </span>
-                                    <span className="text-[10px] font-black text-emerald-950 bg-emerald-400 px-1.5 py-1 rounded-md whitespace-nowrap shadow-[0_0_10px_rgba(52,211,153,0.3)]">
-                                      -{savingsPercent}% OFF
-                                    </span>
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-
-                            <Button
-                              onClick={() => {
-                                toast({
-                                  title: "Iniciando assinatura",
-                                  description:
-                                    "Vá em 'Saldo Fusion' no painel principal para concluir.",
-                                });
-                                setTimeout(
-                                  () => router.push("/dashboard"),
-                                  1000,
-                                );
-                              }}
-                              className="bg-white hover:bg-zinc-200 text-zinc-950 font-black rounded-xl h-12 px-6 shadow-xl w-full sm:w-auto transition-all active:scale-95"
-                            >
-                              Assinar Pass
-                            </Button>
-                          </div>
-                        );
-                      })}
-                  </div>
-                </div>
-              )}
 
               {activeTab === "hora" && (
                 <section className="animate-in fade-in">
@@ -1703,6 +1768,7 @@ export function RoomDetail(props: RoomDetailProps) {
             </div>
           </div>
 
+          {/* AVALIAÇÕES */}
           <div className="order-3 lg:order-3 lg:col-span-8 lg:col-start-1 pt-8 border-t border-slate-100 lg:border-none lg:pt-0">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-black text-slate-900">Avaliações</h2>
@@ -1717,7 +1783,6 @@ export function RoomDetail(props: RoomDetailProps) {
               </div>
             </div>
 
-            {/* Filtro de Avaliações UX Sênior */}
             {reviews.length > 0 && (
               <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide mb-6 pb-1">
                 <button
@@ -1728,7 +1793,7 @@ export function RoomDetail(props: RoomDetailProps) {
                 </button>
                 {[5, 4, 3, 2, 1].map((star) => {
                   const count = reviews.filter((r) => r.rating === star).length;
-                  if (count === 0) return null; // Esconde se não tiver nota
+                  if (count === 0) return null;
                   return (
                     <button
                       key={star}
@@ -1771,7 +1836,6 @@ export function RoomDetail(props: RoomDetailProps) {
             ) : (
               <div className="space-y-6">
                 {filteredReviews.map((review) => {
-                  // Lógica Limpa para exibição de comentário
                   const hasComment =
                     review.comment && review.comment.trim().length > 0;
 
@@ -1851,6 +1915,7 @@ export function RoomDetail(props: RoomDetailProps) {
         </div>
       </div>
 
+      {/* RODAPÉ MOBILE */}
       <div className="md:hidden flex-none bg-white border-t border-slate-200 p-4 pb-safe flex items-center justify-between shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)] z-50">
         <div>
           <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5">
@@ -2053,11 +2118,12 @@ export function RoomDetail(props: RoomDetailProps) {
         </div>
       )}
 
+      {/* SÊNIOR: Modal de Checkout Repassando o Cupom para Gravação */}
       <CheckoutModal
         isOpen={isCheckoutOpen}
         onClose={handleCheckoutClose}
-        onConfirm={(method) => {
-          handleConfirmCheckout(method);
+        onConfirm={(method, appliedCoupon) => {
+          handleConfirmCheckout(method, appliedCoupon);
         }}
         loading={actionLoading}
         summary={checkoutSummary}
