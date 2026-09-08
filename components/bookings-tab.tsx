@@ -5,7 +5,18 @@ import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { format, isSameDay, addDays } from "date-fns";
+import {
+  format,
+  isSameDay,
+  addDays,
+  isAfter,
+  isBefore,
+  subDays,
+  startOfMonth,
+  endOfMonth,
+  parseISO,
+  differenceInMinutes,
+} from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useMobileBack } from "@/hooks/use-mobile-back";
 import {
@@ -15,21 +26,49 @@ import {
   CheckCircle2,
   Navigation,
   MessageCircle,
-  Key,
-  Wifi,
   Loader2,
   XCircle,
   AlertTriangle,
-  RefreshCcw,
   QrCode,
   Timer,
   ArrowLeft,
   LogOut,
   LogIn,
+  ChevronRight,
+  Receipt,
+  RotateCcw,
+  Star,
+  Building2,
+  Calendar as CalendarIcon,
+  Download,
+  Mail,
+  Map as MapIcon,
 } from "lucide-react";
+
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogHeader,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Calendar } from "@/components/ui/calendar";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 
 import { ActiveSession } from "@/components/active-session";
 import { RoomQRScanner } from "@/components/qr-scanner";
@@ -50,6 +89,7 @@ interface Booking {
   checkin_time?: string;
   checkout_time?: string;
   penalty_status?: string;
+  asaas_payment_id?: string | null;
   rooms: {
     id: string;
     name: string;
@@ -59,6 +99,7 @@ interface Booking {
     host_id: string;
     profiles?: { full_name: string; phone: string };
   };
+  reviews?: { id: string; rating: number }[];
 }
 
 interface BookingsTabProps {
@@ -78,31 +119,43 @@ export function BookingsTab({
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<"upcoming" | "past">("upcoming");
-  const [dateFilter, setDateFilter] = useState<"all" | "today" | "tomorrow">(
-    "all",
-  );
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [adjacentMap, setAdjacentMap] = useState<Record<string, boolean>>({});
+
+  // Filtros
+  const [upcomingFilter, setUpcomingFilter] = useState<
+    "all" | "today" | "tomorrow" | "custom"
+  >("all");
+  const [customDate, setCustomDate] = useState<Date | undefined>(new Date());
+  const [historyFilter, setHistoryFilter] = useState<
+    "7d" | "15d" | "30d" | "month" | "all"
+  >("30d");
+
+  // Estados de UI
+  const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
+  const [isSheetOpen, setIsSheetOpen] = useState(false);
+  const [receiptModal, setReceiptModal] = useState<{
+    isOpen: boolean;
+    booking: Booking | null;
+  }>({ isOpen: false, booking: null });
+  const [reviewModal, setReviewModal] = useState<{
+    isOpen: boolean;
+    booking: Booking | null;
+    rating: number;
+    comment: string;
+  }>({ isOpen: false, booking: null, rating: 0, comment: "" });
 
   const [cancelModal, setCancelModal] = useState<{
     isOpen: boolean;
     booking: Booking | null;
-  }>({
-    isOpen: false,
-    booking: null,
-  });
-
+  }>({ isOpen: false, booking: null });
   const [activeSessionBooking, setActiveSessionBooking] =
     useState<Booking | null>(null);
   const [scannerConfig, setScannerConfig] = useState<{
     isOpen: boolean;
     type: "checkin" | "checkout";
     booking: Booking | null;
-  }>({
-    isOpen: false,
-    type: "checkin",
-    booking: null,
-  });
+  }>({ isOpen: false, type: "checkin", booking: null });
 
   useMobileBack(
     !!activeSessionBooking,
@@ -119,6 +172,12 @@ export function BookingsTab({
     () => setCancelModal({ isOpen: false, booking: null }),
     "modal-cancelamento",
   );
+  useMobileBack(isSheetOpen, () => setIsSheetOpen(false), "sheet-detalhes");
+  useMobileBack(
+    receiptModal.isOpen,
+    () => setReceiptModal({ isOpen: false, booking: null }),
+    "modal-recibo",
+  );
 
   const fetchBookings = async () => {
     setLoading(true);
@@ -132,8 +191,9 @@ export function BookingsTab({
         .from("bookings")
         .select(
           `
-          id, room_id, start_time, end_time, status, total_cost, checkin_time, checkout_time, penalty_status,
-          rooms ( id, name, tier, image_url, address_details, host_id, profiles (full_name, phone) )
+          id, room_id, start_time, end_time, status, total_cost, checkin_time, checkout_time, penalty_status, asaas_payment_id,
+          rooms ( id, name, tier, image_url, address_details, host_id, profiles (full_name, phone) ),
+          reviews ( id, rating )
         `,
         )
         .eq("user_id", user.id)
@@ -168,7 +228,6 @@ export function BookingsTab({
             return;
           }
         }
-
         mergedBookings.push({ ...b, original_ids: [b.id] });
       });
 
@@ -216,23 +275,82 @@ export function BookingsTab({
 
     if (scanAction && targetBookingId && bookings.length > 0) {
       const targetBooking = bookings.find((b) => b.id === targetBookingId);
-
       if (targetBooking) {
         setScannerConfig({
           isOpen: true,
           type: scanAction as "checkin" | "checkout",
           booking: targetBooking,
         });
-
         router.replace("/dashboard", { scroll: false });
       }
     }
   }, [searchParams, bookings, router]);
 
+  // --- FILTRAGEM INTELIGENTE ---
+  const now = new Date();
+  const nowTime = now.getTime();
+
+  let upcomingBookings = bookings.filter((b) => {
+    if (b.status === "in_progress") return true;
+    const endTime = new Date(b.end_time).getTime();
+    return (
+      ["confirmed", "pending_payment"].includes(b.status) && endTime > nowTime
+    );
+  });
+
+  if (upcomingFilter === "today") {
+    upcomingBookings = upcomingBookings.filter((b) =>
+      isSameDay(parseISO(b.start_time), now),
+    );
+  } else if (upcomingFilter === "tomorrow") {
+    upcomingBookings = upcomingBookings.filter((b) =>
+      isSameDay(parseISO(b.start_time), addDays(now, 1)),
+    );
+  } else if (upcomingFilter === "custom" && customDate) {
+    upcomingBookings = upcomingBookings.filter((b) =>
+      isSameDay(parseISO(b.start_time), customDate),
+    );
+  }
+
+  let pastBookings = bookings.filter((b) => {
+    if (b.status === "in_progress") return false;
+    const endTime = new Date(b.end_time).getTime();
+    return (
+      ["completed", "cancelled", "no_show"].includes(b.status) ||
+      endTime <= nowTime
+    );
+  });
+
+  if (historyFilter === "7d") {
+    pastBookings = pastBookings.filter((b) =>
+      isAfter(parseISO(b.start_time), subDays(now, 7)),
+    );
+  } else if (historyFilter === "15d") {
+    pastBookings = pastBookings.filter((b) =>
+      isAfter(parseISO(b.start_time), subDays(now, 15)),
+    );
+  } else if (historyFilter === "30d") {
+    pastBookings = pastBookings.filter((b) =>
+      isAfter(parseISO(b.start_time), subDays(now, 30)),
+    );
+  } else if (historyFilter === "month") {
+    pastBookings = pastBookings.filter((b) => {
+      const d = parseISO(b.start_time);
+      return isAfter(d, startOfMonth(now)) && isBefore(d, endOfMonth(now));
+    });
+  }
+  pastBookings.sort(
+    (a, b) =>
+      parseISO(b.start_time).getTime() - parseISO(a.start_time).getTime(),
+  );
+
+  const displayBookings =
+    activeTab === "upcoming" ? upcomingBookings : pastBookings;
+
+  // --- MÉTODOS DE AÇÃO ---
   const handleCheckinSuccess = async () => {
     if (!scannerConfig.booking) return;
     const currentBooking = scannerConfig.booking;
-
     setScannerConfig({ isOpen: false, type: "checkin", booking: null });
 
     try {
@@ -250,23 +368,6 @@ export function BookingsTab({
         title: "Check-in Realizado! 🔓",
         description: "Sessão liberada com sucesso.",
       });
-
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (user) {
-        await fetch("/api/push", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userId: user.id,
-            title: "Check-in Confirmado! ✅",
-            body: `Sua sessão na ${currentBooking.rooms.name} começou. Excelente atendimento!`,
-            url: "/dashboard",
-          }),
-        }).catch((err) => console.error("Erro ao enviar push:", err));
-      }
-
       setActiveSessionBooking({
         ...currentBooking,
         status: "in_progress",
@@ -282,7 +383,8 @@ export function BookingsTab({
     }
   };
 
-  const handleOpenChat = async (booking: Booking) => {
+  const handleOpenChat = async (booking: Booking, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     setActionLoading(true);
     try {
       const {
@@ -299,7 +401,7 @@ export function BookingsTab({
       if (searchError) throw searchError;
 
       if (!existingChat) {
-        const { error: insertError } = await supabase.from("chats").insert({
+        await supabase.from("chats").insert({
           type: "booking",
           status: "open",
           room_id: booking.room_id,
@@ -307,9 +409,7 @@ export function BookingsTab({
           host_id: booking.rooms.host_id,
           booking_id: booking.id,
         });
-        if (insertError) throw insertError;
       }
-
       if (onNavigateToChat) onNavigateToChat();
     } catch (err: any) {
       toast({
@@ -346,21 +446,18 @@ export function BookingsTab({
         .in("id", idsToUpdate);
       if (updateError) throw updateError;
 
-      if (isRefundable) {
+      if (isRefundable && !booking.asaas_payment_id) {
         const expiresAt = new Date();
         expiresAt.setDate(expiresAt.getDate() + 30);
 
-        const { error: refundError } = await supabase
-          .from("wallet_transactions")
-          .insert({
-            user_id: user.id,
-            amount: booking.total_cost,
-            type: "refund",
-            tier: booking.rooms.tier || "start",
-            description: `Estorno (Cancelamento): ${booking.rooms.name}`,
-            expires_at: expiresAt.toISOString(),
-          });
-        if (refundError) throw refundError;
+        await supabase.from("wallet_transactions").insert({
+          user_id: user.id,
+          amount: booking.total_cost,
+          type: "refund",
+          tier: booking.rooms.tier || "start",
+          description: `Estorno (Cancelamento): ${booking.rooms.name}`,
+          expires_at: expiresAt.toISOString(),
+        });
       }
 
       toast({
@@ -368,8 +465,8 @@ export function BookingsTab({
           ? "Reserva Cancelada e Reembolsada"
           : "Reserva Cancelada",
         description: isRefundable
-          ? `O valor de ${booking.total_cost} CR foi devolvido à sua carteira.`
-          : "Como faltavam menos de 24h, não houve estorno.",
+          ? `O valor foi devolvido à sua origem de pagamento.`
+          : "Cancelado com menos de 24h, sem estorno.",
       });
 
       setCancelModal({ isOpen: false, booking: null });
@@ -385,35 +482,395 @@ export function BookingsTab({
     }
   };
 
-  const now = new Date();
-  const nowTime = now.getTime();
+  const submitReview = async () => {
+    if (!reviewModal.booking || reviewModal.rating === 0) return;
+    setActionLoading(true);
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("Não autenticado");
 
-  const upcomingBookings = bookings
-    .filter((b) => {
-      if (b.status === "in_progress") return true;
-      const endTime = new Date(b.end_time).getTime();
-      const isValidStatus = ["confirmed", "pending_payment"].includes(b.status);
-      return isValidStatus && endTime > nowTime;
-    })
-    .filter((b) => {
-      const startObj = new Date(b.start_time);
-      if (dateFilter === "today") return isSameDay(startObj, now);
-      if (dateFilter === "tomorrow")
-        return isSameDay(startObj, addDays(now, 1));
-      return true;
-    });
+      const { error } = await supabase.from("reviews").insert({
+        booking_id: reviewModal.booking.id,
+        room_id: reviewModal.booking.room_id,
+        guest_id: user.id,
+        rating: reviewModal.rating,
+        comment: reviewModal.comment,
+      });
+      if (error) throw error;
 
-  const pastBookings = bookings.filter((b) => {
-    if (b.status === "in_progress") return false;
-    const endTime = new Date(b.end_time).getTime();
-    return (
-      ["completed", "cancelled", "no_show"].includes(b.status) ||
-      endTime <= nowTime
+      toast({
+        title: "Avaliação Enviada",
+        description: "Obrigado pelo seu feedback!",
+      });
+      setReviewModal({ isOpen: false, booking: null, rating: 0, comment: "" });
+      fetchBookings();
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro",
+        description: "Não foi possível enviar a avaliação.",
+      });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // --- ROTEAMENTO SÊNIOR (SPA VIA HASH FORÇADO) ---
+  const handleBookAgain = (roomId: string) => {
+    setIsSheetOpen(false);
+    setTimeout(() => {
+      // 1. Usa o router do Next para registrar o histórico
+      router.push(`/#room/${roomId}`);
+      // 2. Altera a URL nativamente como fallback
+      window.location.hash = `room/${roomId}`;
+      // 3. Dispara o evento manualmente para forçar o Dashboard a acordar e trocar a View
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    }, 300);
+  };
+
+  // --- MOTOR DE PDF (RECIBO) ---
+  const handleDownloadPDF = () => {
+    const element = document.getElementById("receipt-content");
+    if (!element) return;
+
+    const printWindow = window.open("", "", "width=800,height=900");
+    if (!printWindow) return;
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Recibo - Fusion Clinic</title>
+          <script src="https://cdn.tailwindcss.com"></script>
+        </head>
+        <body class="bg-slate-50 p-8 antialiased flex justify-center items-start min-h-screen">
+          <div class="w-full max-w-2xl bg-white border border-slate-200 rounded-[2rem] p-10 shadow-lg">
+            ${element.innerHTML}
+          </div>
+          <script>
+            setTimeout(() => {
+              window.print();
+              window.close();
+            }, 1000);
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
+  const handleSendEmail = (booking: Booking, payment: any) => {
+    const subject = encodeURIComponent(
+      `Recibo Fusion Clinic - ${booking.rooms.name}`,
     );
-  });
+    const body = encodeURIComponent(`
+Olá! Aqui está o resumo da sua locação na Fusion Clinic:
 
-  const displayBookings =
-    activeTab === "upcoming" ? upcomingBookings : pastBookings;
+ID da Transação: ${booking.id.toUpperCase()}
+Espaço: ${booking.rooms.name}
+Data: ${format(parseISO(booking.start_time), "dd/MM/yyyy")}
+Horário: ${format(parseISO(booking.start_time), "HH:mm")} às ${format(parseISO(booking.end_time), "HH:mm")}
+
+Valor Total: ${payment.value}
+Método de Pagamento: ${payment.method}
+${payment.isCredit ? `(Equivalente a ${payment.equivalentBrl})` : ""}
+
+Obrigado por utilizar a Fusion Clinic!
+CNPJ: 49.351.127/0001-44
+    `);
+    window.location.href = `mailto:?subject=${subject}&body=${body}`;
+  };
+
+  // --- FUNÇÕES DE EXIBIÇÃO INTELIGENTE (UX) ---
+  const getPaymentDisplay = (booking: Booking) => {
+    const taxaHora = 45;
+
+    if (booking.asaas_payment_id) {
+      const amount =
+        booking.total_cost < 10
+          ? booking.total_cost * taxaHora
+          : booking.total_cost;
+      return {
+        value: `R$ ${amount.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`,
+        method: "Cartão / PIX",
+        isCredit: false,
+        equivalentBrl: null,
+      };
+    } else {
+      const tier = booking.rooms?.tier
+        ? booking.rooms.tier.toUpperCase()
+        : "START";
+      const equivalentValue = booking.total_cost * taxaHora;
+      return {
+        value: `${booking.total_cost} CR`,
+        method: `Crédito (${tier})`,
+        isCredit: true,
+        equivalentBrl: `R$ ${equivalentValue.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`,
+      };
+    }
+  };
+
+  const formatDuration = (start: string, end: string) => {
+    const diffMins = differenceInMinutes(parseISO(end), parseISO(start));
+    const hours = Math.floor(diffMins / 60);
+    const mins = diffMins % 60;
+
+    if (hours > 0 && mins > 0) return `${hours}h ${mins}m`;
+    if (hours > 0) return `${hours}h`;
+    return `${mins}m`;
+  };
+
+  const getStatusDisplay = (status: string) => {
+    switch (status) {
+      case "confirmed":
+        return {
+          label: "Confirmada",
+          color: "bg-emerald-100 text-emerald-700",
+        };
+      case "in_progress":
+        return { label: "Em andamento", color: "bg-amber-100 text-amber-700" };
+      case "completed":
+        return { label: "Concluída", color: "bg-slate-100 text-slate-700" };
+      case "cancelled":
+        return { label: "Cancelada", color: "bg-red-100 text-red-700" };
+      case "pending_payment":
+        return { label: "Pendente", color: "bg-orange-100 text-orange-700" };
+      default:
+        return { label: status, color: "bg-slate-100 text-slate-700" };
+    }
+  };
+
+  const openDetails = (booking: Booking) => {
+    setSelectedBooking(booking);
+    setIsSheetOpen(true);
+  };
+
+  // --- CARD: PRÓXIMAS (DETALHADO E CLICÁVEL) ---
+  const UpcomingCard = ({ booking }: { booking: Booking }) => {
+    const startObj = new Date(booking.start_time);
+    const endObj = new Date(booking.end_time);
+    const startTimeMs = startObj.getTime();
+
+    let address: any = {};
+    try {
+      address =
+        typeof booking.rooms.address_details === "string"
+          ? JSON.parse(booking.rooms.address_details)
+          : booking.rooms.address_details;
+    } catch (e) {}
+    const fullAddress = `${address.street || ""}, ${address.number || ""} ${address.complement ? `- ${address.complement}` : ""}`;
+
+    const hasBackToBack = adjacentMap[booking.id] || false;
+    const checkInWindowMs = hasBackToBack ? 0 : 15 * 60 * 1000;
+    const isReadyForCheckin =
+      booking.status === "confirmed" &&
+      startTimeMs - nowTime <= checkInWindowMs &&
+      nowTime < endObj.getTime();
+    const isInProgress = booking.status === "in_progress";
+    const isMerged = booking.original_ids && booking.original_ids.length > 1;
+
+    return (
+      <div
+        onClick={() => openDetails(booking)}
+        className={`bg-white rounded-[2rem] border shadow-sm overflow-hidden flex flex-col md:flex-row group transition-all cursor-pointer hover:shadow-md active:scale-[0.99] ${isInProgress ? "border-amber-400 ring-2 ring-amber-400/20" : isReadyForCheckin ? "border-[#f05e23]/50 hover:border-[#f05e23]" : "border-slate-200"}`}
+      >
+        <div
+          className={`md:w-48 p-6 flex flex-col justify-center border-b md:border-b-0 md:border-r border-slate-100 border-dashed relative ${isSameDay(startObj, now) ? "bg-orange-50/50" : "bg-slate-50/50"}`}
+        >
+          <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1 text-center md:text-left">
+            {format(startObj, "MMMM", { locale: ptBR })}
+          </p>
+          <p className="text-4xl font-black text-slate-900 tracking-tighter text-center md:text-left">
+            {format(startObj, "dd")}
+          </p>
+          <p className="text-sm font-bold text-slate-500 capitalize text-center md:text-left mb-4">
+            {format(startObj, "EEEE", { locale: ptBR })}
+          </p>
+          <div
+            className={`flex items-center justify-center md:justify-start gap-2 border py-2 px-3 rounded-lg shadow-sm ${isInProgress ? "bg-amber-50 border-amber-200" : "bg-white border-slate-200"}`}
+          >
+            <Clock
+              className={`w-4 h-4 ${isInProgress ? "text-amber-500" : "text-[#f05e23]"}`}
+            />
+            <span
+              className={`text-xs font-black ${isInProgress ? "text-amber-800" : "text-slate-800"}`}
+            >
+              {format(startObj, "HH:mm")} - {format(endObj, "HH:mm")}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex-1 p-6 flex flex-col">
+          <div className="flex items-start justify-between gap-4 mb-4">
+            <div>
+              {isInProgress && (
+                <Badge className="bg-amber-100 text-amber-800 border-0 mb-2 font-black px-2 py-0.5 animate-pulse uppercase tracking-widest mr-2">
+                  Sessão em Andamento
+                </Badge>
+              )}
+              {isReadyForCheckin && !isInProgress && (
+                <Badge className="bg-[#f05e23] text-white border-0 mb-2 font-bold px-2 py-0.5 animate-pulse mr-2">
+                  Liberada para Check-in
+                </Badge>
+              )}
+              {isMerged && (
+                <Badge className="bg-indigo-100 text-indigo-800 border-0 mb-2 font-bold px-2 py-0.5 uppercase tracking-widest">
+                  {booking.original_ids?.length} Sessões Contíguas
+                </Badge>
+              )}
+
+              <h3 className="text-xl font-black text-slate-900 leading-tight group-hover:text-[#f05e23] transition-colors">
+                {booking.rooms.name}
+              </h3>
+              <p className="text-sm font-semibold text-slate-500 mt-1">
+                Anfitrião: {booking.rooms.profiles?.full_name}
+              </p>
+            </div>
+          </div>
+
+          <div
+            className="mt-auto bg-slate-900 rounded-2xl p-5 text-white shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center shrink-0">
+                  <MapPin className="w-4 h-4 text-emerald-400" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">
+                    Endereço Exato Liberado
+                  </p>
+                  <p className="font-bold text-sm leading-tight">
+                    {fullAddress}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() =>
+                  window.open(
+                    `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${address.street}, ${address.number}, ${address.city}`)}`,
+                  )
+                }
+                className="w-10 h-10 rounded-full bg-[#f05e23] hover:bg-[#d6521e] flex items-center justify-center shrink-0 transition-colors shadow-lg"
+              >
+                <Navigation className="w-4 h-4 fill-white" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div
+          className="p-4 md:p-6 bg-slate-50 md:bg-transparent border-t md:border-t-0 md:border-l border-slate-100 flex flex-col justify-center gap-2 md:w-56 shrink-0"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {isInProgress ? (
+            <Button
+              onClick={() => setActiveSessionBooking(booking)}
+              className="w-full h-12 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl shadow-lg shadow-amber-500/20"
+            >
+              <Timer className="w-4 h-4 mr-2" /> Sessão Ativa
+            </Button>
+          ) : isReadyForCheckin ? (
+            <Button
+              onClick={() =>
+                setScannerConfig({ isOpen: true, type: "checkin", booking })
+              }
+              className="w-full h-12 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
+            >
+              <QrCode className="w-4 h-4 mr-2" /> Fazer Check-in
+            </Button>
+          ) : (
+            <>
+              {hasBackToBack && startTimeMs > nowTime && (
+                <div className="w-full text-center bg-amber-50 text-amber-700 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest border border-amber-100 mb-1">
+                  Sala Ocupada (Aguarde ⏰)
+                </div>
+              )}
+              <Button
+                onClick={(e) => handleOpenChat(booking, e)}
+                disabled={actionLoading}
+                variant="outline"
+                className="w-full h-10 rounded-lg text-xs font-bold border-slate-200 text-slate-700 hover:bg-slate-100"
+              >
+                <MessageCircle className="w-3.5 h-3.5 mr-1.5" /> Falar com
+                Anfitrião
+              </Button>
+              <Button
+                onClick={() => setCancelModal({ isOpen: true, booking })}
+                variant="ghost"
+                className="w-full h-10 rounded-lg text-xs font-bold text-red-600 hover:bg-red-50 hover:text-red-700"
+              >
+                <XCircle className="w-3.5 h-3.5 mr-1.5" /> Cancelar
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // --- CARD COMPACTO ESTILO UBER (HISTÓRICO) ---
+  const HistoryCard = ({ booking }: { booking: Booking }) => {
+    const startObj = parseISO(booking.start_time);
+    const statusData = getStatusDisplay(booking.status);
+    const paymentData = getPaymentDisplay(booking);
+    const isMerged = booking.original_ids && booking.original_ids.length > 1;
+
+    return (
+      <div
+        onClick={() => openDetails(booking)}
+        className="flex items-center justify-between p-4 bg-white border border-slate-200 hover:border-[#f05e23]/50 rounded-2xl cursor-pointer transition-all active:scale-[0.98] shadow-sm hover:shadow-md group"
+      >
+        <div className="flex items-center gap-4 min-w-0">
+          <div className="w-14 h-14 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0 overflow-hidden relative">
+            {booking.rooms?.image_url ? (
+              <Image
+                src={booking.rooms.image_url}
+                alt={booking.rooms.name}
+                fill
+                className="object-cover"
+              />
+            ) : (
+              <Building2 className="w-6 h-6 text-slate-400" />
+            )}
+          </div>
+          <div className="min-w-0">
+            <h4 className="font-black text-slate-900 truncate text-base group-hover:text-[#f05e23] transition-colors leading-tight">
+              {booking.rooms?.name || "Sala Indisponível"}
+            </h4>
+            <p className="text-xs font-bold text-slate-500 mt-1">
+              {format(startObj, "dd 'de' MMM", { locale: ptBR })} •{" "}
+              {format(startObj, "HH:mm")}
+            </p>
+            <div className="flex items-center gap-2 mt-1">
+              <Badge
+                className={`${statusData.color} border-0 shadow-none font-bold text-[9px] px-1.5 py-0 uppercase tracking-widest`}
+              >
+                {statusData.label}
+              </Badge>
+              {isMerged && (
+                <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-1.5 rounded-sm">
+                  {booking.original_ids?.length}h
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-col items-end gap-1 shrink-0 ml-2">
+          <div className="flex items-center text-slate-900 font-black text-sm">
+            {paymentData.value}
+            <ChevronRight className="w-4 h-4 ml-1 opacity-50 group-hover:opacity-100 group-hover:translate-x-1 group-hover:text-[#f05e23] transition-all" />
+          </div>
+          <span className="text-[10px] font-bold text-slate-400">
+            {paymentData.method}
+          </span>
+        </div>
+      </div>
+    );
+  };
 
   if (activeSessionBooking) {
     return (
@@ -421,7 +878,7 @@ export function BookingsTab({
         <Button
           variant="ghost"
           onClick={() => setActiveSessionBooking(null)}
-          className="mb-4 text-zinc-500 hover:text-zinc-900 font-bold"
+          className="mb-4 text-slate-500 hover:text-slate-900 font-bold"
         >
           <ArrowLeft className="w-4 h-4 mr-2" /> Voltar para as Reservas
         </Button>
@@ -446,358 +903,731 @@ export function BookingsTab({
 
   return (
     <>
-      <div className="space-y-6 max-w-4xl mx-auto animate-in fade-in pb-24 pt-10 px-4">
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-2 pr-16 md:pr-0">
-          <div>
-            <h2 className="text-2xl font-black text-zinc-950 tracking-tight flex items-center gap-2">
-              <CalendarDays className="w-6 h-6 text-[#f05e23]" /> Minhas
-              Reservas
-            </h2>
-            <p className="text-sm font-medium text-zinc-500 mt-1">
-              Gerencie seus atendimentos e faça o check-in das salas.
-            </p>
-          </div>
+      <div className="space-y-6 max-w-3xl mx-auto animate-in fade-in pb-24 pt-6 px-4">
+        {/* HEADER & TABS */}
+        <div className="sticky top-0 bg-slate-50 z-20 pb-4">
+          <h2 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2 mb-6">
+            <CalendarDays className="w-6 h-6 text-[#f05e23]" /> Suas Reservas
+          </h2>
 
-          <div className="bg-zinc-100 p-1.5 rounded-xl flex items-center shrink-0 w-full md:w-auto">
+          <div className="bg-slate-200/60 p-1 rounded-xl flex items-center mb-4">
             <button
-              onClick={() => setActiveTab("upcoming")}
-              className={`flex-1 md:px-8 py-2 text-sm font-bold rounded-lg transition-all ${activeTab === "upcoming" ? "bg-white text-zinc-950 shadow-sm border border-zinc-200" : "text-zinc-500 hover:text-zinc-800"}`}
+              onClick={() => {
+                setActiveTab("upcoming");
+                setUpcomingFilter("all");
+              }}
+              className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${activeTab === "upcoming" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
             >
               Próximas
             </button>
             <button
-              onClick={() => setActiveTab("past")}
-              className={`flex-1 md:px-8 py-2 text-sm font-bold rounded-lg transition-all ${activeTab === "past" ? "bg-white text-zinc-950 shadow-sm border border-zinc-200" : "text-zinc-500 hover:text-zinc-800"}`}
+              onClick={() => {
+                setActiveTab("past");
+                setHistoryFilter("30d");
+              }}
+              className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${activeTab === "past" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
             >
               Histórico
             </button>
           </div>
-        </div>
 
-        {activeTab === "upcoming" && (
-          <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-            <button
-              onClick={() => setDateFilter("all")}
-              className={`px-4 py-1.5 rounded-full text-xs font-bold border transition-colors whitespace-nowrap ${dateFilter === "all" ? "bg-zinc-900 text-white border-zinc-900" : "bg-white text-zinc-500 border-zinc-200 hover:bg-zinc-50"}`}
-            >
-              Todas as datas
-            </button>
-            <button
-              onClick={() => setDateFilter("today")}
-              className={`px-4 py-1.5 rounded-full text-xs font-bold border transition-colors whitespace-nowrap ${dateFilter === "today" ? "bg-[#f05e23] text-white border-[#f05e23]" : "bg-white text-zinc-500 border-zinc-200 hover:bg-zinc-50"}`}
-            >
-              Apenas Hoje
-            </button>
-            <button
-              onClick={() => setDateFilter("tomorrow")}
-              className={`px-4 py-1.5 rounded-full text-xs font-bold border transition-colors whitespace-nowrap ${dateFilter === "tomorrow" ? "bg-zinc-900 text-white border-zinc-900" : "bg-white text-zinc-500 border-zinc-200 hover:bg-zinc-50"}`}
-            >
-              Amanhã
-            </button>
-          </div>
-        )}
-
-        {displayBookings.length === 0 ? (
-          <div className="text-center py-20 bg-white rounded-[2rem] border border-zinc-200 shadow-sm flex flex-col items-center">
-            <div className="w-20 h-20 bg-zinc-50 rounded-full flex items-center justify-center mb-4">
-              <CalendarDays className="w-10 h-10 text-zinc-300" />
-            </div>
-            <h3 className="text-xl font-black text-zinc-900 mb-2">
-              Nenhuma reserva encontrada
-            </h3>
-            <p className="text-zinc-500 font-medium max-w-sm mb-8">
-              {activeTab === "upcoming"
-                ? "Você não tem agendamentos para o filtro selecionado."
-                : "Nenhum histórico disponível."}
-            </p>
-            {activeTab === "upcoming" && (
-              <Button
-                onClick={() => onNavigateToSearch && onNavigateToSearch()}
-                className="h-14 px-8 rounded-xl font-black bg-zinc-950 hover:bg-zinc-800 text-white shadow-lg"
+          {/* FILTERS */}
+          <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1">
+            {activeTab === "upcoming" ? (
+              <>
+                {["all", "today", "tomorrow"].map((f) => (
+                  <Badge
+                    key={f}
+                    onClick={() => setUpcomingFilter(f as any)}
+                    className={`cursor-pointer px-4 py-1.5 text-xs font-bold border-0 transition-colors ${upcomingFilter === f ? "bg-slate-900 text-white" : "bg-white text-slate-600 hover:bg-slate-100 shadow-sm"}`}
+                  >
+                    {f === "all" ? "Todas" : f === "today" ? "Hoje" : "Amanhã"}
+                  </Badge>
+                ))}
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Badge
+                      className={`cursor-pointer px-4 py-1.5 text-xs font-bold border-0 transition-colors flex items-center gap-1 ${upcomingFilter === "custom" ? "bg-[#f05e23] text-white" : "bg-white text-slate-600 hover:bg-slate-100 shadow-sm"}`}
+                    >
+                      <CalendarIcon className="w-3 h-3" />
+                      {upcomingFilter === "custom" && customDate
+                        ? format(customDate, "dd/MM")
+                        : "Data Específica"}
+                    </Badge>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <Calendar
+                      mode="single"
+                      selected={customDate}
+                      onSelect={(date) => {
+                        if (date) {
+                          setCustomDate(date);
+                          setUpcomingFilter("custom");
+                        }
+                      }}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
+              </>
+            ) : (
+              <Select
+                value={historyFilter}
+                onValueChange={(v: any) => setHistoryFilter(v)}
               >
-                Explorar Salas
-              </Button>
+                <SelectTrigger className="w-[180px] bg-white border-0 shadow-sm h-8 font-bold text-slate-700 rounded-full text-xs focus:ring-0">
+                  <SelectValue placeholder="Selecione o período" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="7d">Últimos 7 dias</SelectItem>
+                  <SelectItem value="15d">Últimos 15 dias</SelectItem>
+                  <SelectItem value="30d">Últimos 30 dias</SelectItem>
+                  <SelectItem value="month">Este Mês</SelectItem>
+                  <SelectItem value="all">Todo o Histórico</SelectItem>
+                </SelectContent>
+              </Select>
             )}
           </div>
-        ) : (
-          <div className="space-y-6">
-            {displayBookings.map((booking) => {
-              const startObj = new Date(booking.start_time);
-              const endObj = new Date(booking.end_time);
-              const startTimeMs = startObj.getTime();
-              const endTimeMs = endObj.getTime();
+        </div>
+
+        {/* LISTAGEM DE CARDS */}
+        <div className="space-y-3">
+          {displayBookings.length === 0 ? (
+            <div className="text-center py-20 bg-white rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center">
+              <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mb-4">
+                {activeTab === "upcoming" ? (
+                  <CalendarDays className="w-10 h-10 text-slate-300" />
+                ) : (
+                  <Clock className="w-10 h-10 text-slate-300" />
+                )}
+              </div>
+              <h3 className="text-xl font-black text-slate-900 mb-2">
+                Nenhum registro encontrado
+              </h3>
+              <p className="text-slate-500 font-medium max-w-sm mb-8">
+                {activeTab === "upcoming"
+                  ? "Você não possui agendamentos para esta data."
+                  : "Nenhum histórico disponível para este filtro."}
+              </p>
+              {activeTab === "upcoming" && (
+                <Button
+                  onClick={() => onNavigateToSearch && onNavigateToSearch()}
+                  className="h-14 px-8 rounded-xl font-black bg-slate-900 hover:bg-slate-800 text-white shadow-lg"
+                >
+                  Explorar Salas
+                </Button>
+              )}
+            </div>
+          ) : (
+            displayBookings.map((b) =>
+              activeTab === "upcoming" ? (
+                <UpcomingCard key={b.id} booking={b} />
+              ) : (
+                <HistoryCard key={b.id} booking={b} />
+              ),
+            )
+          )}
+        </div>
+      </div>
+
+      {/* GAVETA DE DETALHES (Sheet) com Correção de TELA CHEIA no Desktop */}
+      <Sheet open={isSheetOpen} onOpenChange={setIsSheetOpen}>
+        <SheetContent
+          side="bottom"
+          className="h-[92vh] sm:h-[100dvh] sm:max-h-screen sm:max-w-full sm:w-full sm:inset-0 rounded-t-[2rem] sm:rounded-none px-6 pt-8 pb-6 sm:p-12 overflow-y-auto bg-slate-50"
+        >
+          <SheetTitle className="sr-only">Detalhes da Reserva</SheetTitle>
+          {selectedBooking &&
+            (() => {
+              const startObj = parseISO(selectedBooking.start_time);
+              const endObj = parseISO(selectedBooking.end_time);
+              const statusData = getStatusDisplay(selectedBooking.status);
+              const paymentData = getPaymentDisplay(selectedBooking);
 
               let address: any = {};
               try {
                 address =
-                  typeof booking.rooms.address_details === "string"
-                    ? JSON.parse(booking.rooms.address_details)
-                    : booking.rooms.address_details;
+                  typeof selectedBooking.rooms.address_details === "string"
+                    ? JSON.parse(selectedBooking.rooms.address_details)
+                    : selectedBooking.rooms.address_details;
               } catch (e) {}
               const fullAddress = `${address.street || ""}, ${address.number || ""} ${address.complement ? `- ${address.complement}` : ""}`;
 
-              const hasBackToBack = adjacentMap[booking.id] || false;
+              const hasBackToBack = adjacentMap[selectedBooking.id] || false;
               const checkInWindowMs = hasBackToBack ? 0 : 15 * 60 * 1000;
-
               const isReadyForCheckin =
-                booking.status === "confirmed" &&
-                startTimeMs - nowTime <= checkInWindowMs &&
-                nowTime < endTimeMs;
-
-              const isInProgress = booking.status === "in_progress";
-
-              const isMerged =
-                booking.original_ids && booking.original_ids.length > 1;
+                selectedBooking.status === "confirmed" &&
+                startObj.getTime() - nowTime <= checkInWindowMs &&
+                nowTime < endObj.getTime();
+              const isInProgress = selectedBooking.status === "in_progress";
+              const isEvaluated =
+                selectedBooking.reviews && selectedBooking.reviews.length > 0;
 
               return (
-                <div
-                  key={booking.id}
-                  className={`bg-white rounded-[2rem] border shadow-sm overflow-hidden flex flex-col md:flex-row group transition-all ${isInProgress ? "border-amber-400 ring-2 ring-amber-400/20" : isReadyForCheckin ? "border-[#f05e23]/50 hover:border-[#f05e23]" : "border-zinc-200 hover:shadow-md"}`}
-                >
-                  <div
-                    className={`md:w-48 p-6 flex flex-col justify-center border-b md:border-b-0 md:border-r border-zinc-100 border-dashed relative ${isSameDay(startObj, now) ? "bg-orange-50/50" : "bg-zinc-50/50"}`}
-                  >
-                    <p className="text-xs font-black text-zinc-400 uppercase tracking-widest mb-1 text-center md:text-left">
-                      {format(startObj, "MMMM", { locale: ptBR })}
-                    </p>
-                    <p className="text-4xl font-black text-zinc-950 tracking-tighter text-center md:text-left">
-                      {format(startObj, "dd")}
-                    </p>
-                    <p className="text-sm font-bold text-zinc-500 capitalize text-center md:text-left mb-4">
-                      {format(startObj, "EEEE", { locale: ptBR })}
-                    </p>
-                    <div
-                      className={`flex items-center justify-center md:justify-start gap-2 border py-2 px-3 rounded-lg shadow-sm ${isInProgress ? "bg-amber-50 border-amber-200" : "bg-white border-zinc-200"}`}
+                <div className="max-w-3xl mx-auto w-full space-y-6">
+                  {/* Botão Voltar (Apenas Desktop) para melhor UX */}
+                  <div className="hidden sm:flex mb-6">
+                    <Button
+                      variant="ghost"
+                      onClick={() => setIsSheetOpen(false)}
+                      className="text-slate-500 hover:text-slate-900 font-bold -ml-4"
                     >
-                      <Clock
-                        className={`w-4 h-4 ${isInProgress ? "text-amber-500" : "text-[#f05e23]"}`}
-                      />
-                      <span
-                        className={`text-xs font-black ${isInProgress ? "text-amber-800" : "text-zinc-800"}`}
+                      <ArrowLeft className="w-4 h-4 mr-2" /> Fechar Detalhes
+                    </Button>
+                  </div>
+
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <Badge
+                        className={`${statusData.color} mb-3 shadow-none border-0 uppercase tracking-widest font-black text-[10px]`}
                       >
-                        {format(startObj, "HH:mm")} - {format(endObj, "HH:mm")}
-                      </span>
+                        {statusData.label}
+                      </Badge>
+                      <h2 className="text-2xl sm:text-3xl font-black text-slate-900 leading-tight">
+                        {selectedBooking.rooms?.name}
+                      </h2>
+                      <p className="text-sm font-bold text-slate-500 mt-1 flex items-center gap-1.5">
+                        <MapPin className="w-4 h-4" />{" "}
+                        {address.neighborhood || "Localização"},{" "}
+                        {address.city || "Cidade"}
+                      </p>
                     </div>
                   </div>
 
-                  <div className="flex-1 p-6 flex flex-col">
-                    <div className="flex items-start justify-between gap-4 mb-4">
-                      <div>
-                        {isInProgress && (
-                          <Badge className="bg-amber-100 text-amber-800 border-0 mb-2 font-black px-2 py-0.5 animate-pulse uppercase tracking-widest mr-2">
-                            Sessão em Andamento
-                          </Badge>
-                        )}
-                        {isReadyForCheckin && !isInProgress && (
-                          <Badge className="bg-[#f05e23] text-white border-0 mb-2 font-bold px-2 py-0.5 animate-pulse mr-2">
-                            Liberada para Check-in
-                          </Badge>
-                        )}
-                        {activeTab === "past" &&
-                          booking.status === "completed" && (
-                            <Badge className="bg-emerald-100 text-emerald-800 border-0 mb-2 font-bold px-2 py-0.5 mr-2">
-                              Concluída
-                            </Badge>
-                          )}
-                        {isMerged && (
-                          <Badge className="bg-indigo-100 text-indigo-800 border-0 mb-2 font-bold px-2 py-0.5 uppercase tracking-widest">
-                            {booking.original_ids?.length} Sessões Contíguas
-                          </Badge>
-                        )}
+                  <div className="w-full h-48 sm:h-64 bg-slate-200 rounded-2xl overflow-hidden relative border border-slate-200 shadow-inner">
+                    {selectedBooking.rooms?.image_url ? (
+                      <Image
+                        src={selectedBooking.rooms.image_url}
+                        alt="Sala"
+                        fill
+                        className="object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <MapIcon className="w-10 h-10 text-slate-400" />
+                      </div>
+                    )}
+                    {activeTab === "upcoming" && (
+                      <div className="absolute bottom-3 right-3">
+                        <button
+                          onClick={() =>
+                            window.open(
+                              `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fullAddress)}`,
+                            )
+                          }
+                          className="bg-white/90 backdrop-blur text-slate-900 text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-2 shadow-lg"
+                        >
+                          <Navigation className="w-3.5 h-3.5 text-[#f05e23]" />{" "}
+                          Ver no Mapa
+                        </button>
+                      </div>
+                    )}
+                  </div>
 
-                        <h3 className="text-xl font-black text-zinc-950 leading-tight">
-                          {booking.rooms.name}
-                        </h3>
-                        <p className="text-sm font-semibold text-zinc-500 mt-1">
-                          Anfitrião: {booking.rooms.profiles?.full_name}
+                  <div className="bg-white border border-slate-100 p-5 rounded-2xl shadow-sm space-y-4">
+                    <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                      Cronograma
+                    </h4>
+                    <div className="relative pl-6 space-y-6 before:absolute before:inset-y-2 before:left-2 before:w-0.5 before:bg-slate-100">
+                      <div className="relative">
+                        <div className="absolute -left-[1.6rem] top-1.5 w-2.5 h-2.5 rounded-full bg-slate-300 ring-4 ring-white" />
+                        <p className="text-xs font-bold text-slate-500 uppercase">
+                          Período Agendado
+                        </p>
+                        <p className="text-sm font-black text-slate-900">
+                          {format(startObj, "dd MMM yyyy", { locale: ptBR })} •{" "}
+                          {format(startObj, "HH:mm")} às{" "}
+                          {format(endObj, "HH:mm")}
                         </p>
                       </div>
-                    </div>
-
-                    {activeTab === "upcoming" &&
-                      booking.status !== "cancelled" && (
-                        <div className="mt-auto bg-zinc-950 rounded-2xl p-5 text-white shadow-xl">
-                          <div className="flex items-start justify-between gap-4 mb-4">
-                            <div className="flex items-start gap-3">
-                              <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center shrink-0">
-                                <MapPin className="w-4 h-4 text-emerald-400" />
-                              </div>
-                              <div>
-                                <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-0.5">
-                                  Endereço Exato Liberado
-                                </p>
-                                <p className="font-bold text-sm leading-tight">
-                                  {fullAddress}
-                                </p>
-                              </div>
-                            </div>
-                            <button
-                              onClick={() =>
-                                window.open(
-                                  `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${address.street}, ${address.number}, ${address.city}`)}`,
-                                )
-                              }
-                              className="w-10 h-10 rounded-full bg-[#f05e23] hover:bg-[#d6521e] flex items-center justify-center shrink-0 transition-colors shadow-lg"
-                            >
-                              <Navigation className="w-4 h-4 fill-white" />
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                    {activeTab === "past" &&
-                      (booking.checkin_time || booking.checkout_time) && (
-                        <div className="mt-4 pt-4 border-t border-zinc-100 flex flex-col gap-2">
-                          <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">
-                            Registro de Acesso
+                      {(selectedBooking.checkin_time ||
+                        selectedBooking.checkout_time) && (
+                        <div className="relative">
+                          <div className="absolute -left-[1.6rem] top-1.5 w-2.5 h-2.5 rounded-full bg-[#f05e23] ring-4 ring-white" />
+                          <p className="text-xs font-bold text-[#f05e23] uppercase">
+                            Uso Efetivo
                           </p>
-                          <div className="flex flex-wrap items-center gap-4">
-                            <div className="flex items-center gap-1.5">
-                              <LogIn className="w-4 h-4 text-emerald-500" />
-                              <span className="text-sm font-medium text-zinc-600">
-                                Check-in:{" "}
-                                <strong className="text-zinc-900">
-                                  {booking.checkin_time
-                                    ? format(
-                                        new Date(booking.checkin_time),
-                                        "HH:mm",
-                                      )
-                                    : "--:--"}
-                                </strong>
-                              </span>
+                          <div className="flex gap-6 mt-1">
+                            <div>
+                              <p className="text-xs font-medium text-slate-500 flex items-center gap-1">
+                                <LogIn className="w-3 h-3" /> Entrada
+                              </p>
+                              <p className="text-sm font-black text-slate-900">
+                                {selectedBooking.checkin_time
+                                  ? format(
+                                      parseISO(selectedBooking.checkin_time),
+                                      "HH:mm",
+                                    )
+                                  : "--:--"}
+                              </p>
                             </div>
-                            <div className="flex items-center gap-1.5">
-                              <LogOut className="w-4 h-4 text-blue-500" />
-                              <span className="text-sm font-medium text-zinc-600">
-                                Check-out:{" "}
-                                <strong className="text-zinc-900">
-                                  {booking.checkout_time
-                                    ? format(
-                                        new Date(booking.checkout_time),
-                                        "HH:mm",
-                                      )
-                                    : "--:--"}
-                                </strong>
-                              </span>
+                            <div>
+                              <p className="text-xs font-medium text-slate-500 flex items-center gap-1">
+                                <LogOut className="w-3 h-3" /> Saída
+                              </p>
+                              <p className="text-sm font-black text-slate-900">
+                                {selectedBooking.checkout_time
+                                  ? format(
+                                      parseISO(selectedBooking.checkout_time),
+                                      "HH:mm",
+                                    )
+                                  : "--:--"}
+                              </p>
                             </div>
                           </div>
                         </div>
                       )}
+                    </div>
                   </div>
 
-                  {activeTab === "upcoming" &&
-                    booking.status !== "cancelled" && (
-                      <div className="p-4 md:p-6 bg-zinc-50 md:bg-transparent border-t md:border-t-0 md:border-l border-zinc-100 flex flex-col justify-center gap-2 md:w-56 shrink-0">
+                  <div className="bg-white border border-slate-100 p-5 rounded-2xl shadow-sm flex justify-between items-center">
+                    <div>
+                      <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                        Resumo Financeiro
+                      </h4>
+                      <p className="text-xs font-bold text-slate-500 mt-1">
+                        Via {paymentData.method}
+                      </p>
+                      {paymentData.isCredit && (
+                        <p className="text-[10px] font-medium text-slate-400 mt-0.5">
+                          {paymentData.equivalentBrl}
+                        </p>
+                      )}
+                    </div>
+                    <span className="text-2xl font-black text-slate-900">
+                      {paymentData.value}
+                    </span>
+                  </div>
+
+                  <div className="space-y-3 pt-4">
+                    {/* AÇÕES DINÂMICAS BASEADAS NO STATUS E TAB */}
+                    {activeTab === "upcoming" ? (
+                      <>
                         {isInProgress ? (
                           <Button
-                            onClick={() => setActiveSessionBooking(booking)}
-                            className="w-full h-12 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl shadow-lg shadow-amber-500/20"
+                            onClick={() => {
+                              setIsSheetOpen(false);
+                              setActiveSessionBooking(selectedBooking);
+                            }}
+                            className="w-full h-14 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl shadow-lg"
                           >
-                            <Timer className="w-4 h-4 mr-2" /> Sessão Ativa
+                            <Timer className="w-5 h-5 mr-2" /> Visualizar Sessão
+                            Ativa
                           </Button>
                         ) : isReadyForCheckin ? (
                           <Button
-                            onClick={() =>
+                            onClick={() => {
+                              setIsSheetOpen(false);
                               setScannerConfig({
                                 isOpen: true,
                                 type: "checkin",
-                                booking,
-                              })
-                            }
-                            className="w-full h-12 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
+                                booking: selectedBooking,
+                              });
+                            }}
+                            className="w-full h-14 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl shadow-lg"
                           >
-                            <QrCode className="w-4 h-4 mr-2" /> Fazer Check-in
+                            <QrCode className="w-5 h-5 mr-2" /> Fazer Check-in
+                            Agora
                           </Button>
                         ) : (
-                          <>
-                            {hasBackToBack && startTimeMs > nowTime && (
-                              <div className="w-full text-center bg-amber-50 text-amber-700 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest border border-amber-100 mb-1">
-                                Sala Ocupada (Aguarde ⏰)
-                              </div>
-                            )}
+                          <div className="flex flex-col sm:flex-row gap-3">
                             <Button
-                              onClick={() => handleOpenChat(booking)}
+                              onClick={(e) =>
+                                handleOpenChat(selectedBooking, e)
+                              }
                               disabled={actionLoading}
                               variant="outline"
-                              className="w-full h-10 rounded-lg text-xs font-bold border-zinc-200 text-zinc-700 hover:bg-zinc-100"
+                              className="flex-1 h-12 rounded-xl font-bold border-slate-200 text-slate-700 bg-white"
                             >
-                              <MessageCircle className="w-3.5 h-3.5 mr-1.5" />{" "}
-                              Falar com Anfitrião
+                              <MessageCircle className="w-4 h-4 mr-2" /> Falar
+                              com Anfitrião
                             </Button>
                             <Button
-                              onClick={() =>
-                                setCancelModal({ isOpen: true, booking })
-                              }
+                              onClick={() => {
+                                setIsSheetOpen(false);
+                                setCancelModal({
+                                  isOpen: true,
+                                  booking: selectedBooking,
+                                });
+                              }}
                               variant="ghost"
-                              className="w-full h-10 rounded-lg text-xs font-bold text-red-600 hover:bg-red-50 hover:text-red-700"
+                              className="flex-1 h-12 text-xs font-bold text-red-500 hover:text-red-700 hover:bg-red-50"
                             >
-                              <XCircle className="w-3.5 h-3.5 mr-1.5" />{" "}
-                              Cancelar
+                              Cancelar Reserva
                             </Button>
-                          </>
+                          </div>
                         )}
-                      </div>
-                    )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        <Dialog
-          open={cancelModal.isOpen}
-          onOpenChange={(open) =>
-            !open && setCancelModal({ isOpen: false, booking: null })
-          }
-        >
-          <DialogContent className="sm:max-w-md rounded-[2rem] p-0 overflow-hidden border-0">
-            {cancelModal.booking &&
-              (() => {
-                const startMs = new Date(
-                  cancelModal.booking.start_time,
-                ).getTime();
-                const isRefundable =
-                  (startMs - new Date().getTime()) / (1000 * 60 * 60) >= 24;
-
-                return (
-                  <>
-                    <div
-                      className={`p-6 pb-8 text-center text-white ${isRefundable ? "bg-emerald-600" : "bg-red-600"}`}
-                    >
-                      <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4 backdrop-blur-md">
-                        <AlertTriangle className="w-8 h-8 text-white" />
-                      </div>
-                      <DialogTitle className="text-2xl font-black mb-1">
-                        Deseja cancelar a reserva?
-                      </DialogTitle>
-                    </div>
-                    <div className="p-6 bg-white space-y-6">
-                      <div className="flex gap-3 pt-2">
+                      </>
+                    ) : (
+                      <>
                         <Button
                           onClick={() =>
-                            setCancelModal({ isOpen: false, booking: null })
+                            handleBookAgain(selectedBooking.room_id)
                           }
-                          variant="outline"
-                          className="flex-1 h-12 rounded-xl font-bold text-zinc-700 border-zinc-200"
+                          className="w-full h-14 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
                         >
-                          Manter Reserva
+                          <RotateCcw className="w-5 h-5 mr-2" /> Reservar
+                          Novamente
                         </Button>
-                        <Button
-                          onClick={handleConfirmCancel}
-                          disabled={actionLoading}
-                          className={`flex-1 h-12 rounded-xl font-black text-white ${isRefundable ? "bg-emerald-600" : "bg-red-600"}`}
-                        >
-                          {actionLoading ? "Cancelando..." : "Confirmar"}
-                        </Button>
+                        <div className="grid grid-cols-2 gap-3">
+                          {/* BOTÃO DE RECIBO - Só aparece em reservas CONCLUÍDAS */}
+                          {selectedBooking.status === "completed" ? (
+                            <Button
+                              onClick={() =>
+                                setReceiptModal({
+                                  isOpen: true,
+                                  booking: selectedBooking,
+                                })
+                              }
+                              variant="outline"
+                              className="h-12 border-slate-200 bg-white text-slate-700 font-bold rounded-xl shadow-sm"
+                            >
+                              <Receipt className="w-4 h-4 mr-2" /> Recibo
+                            </Button>
+                          ) : (
+                            <div className="flex items-center justify-center h-12 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center bg-white border border-slate-100 rounded-xl">
+                              Sem Recibo
+                              <br />
+                              (Não Concluída)
+                            </div>
+                          )}
+
+                          {/* AVALIAÇÃO - Só aparece em reservas CONCLUÍDAS */}
+                          {selectedBooking.status === "completed" &&
+                            (isEvaluated ? (
+                              <div className="h-12 bg-emerald-50 border border-emerald-100 rounded-xl flex items-center justify-center gap-2 text-emerald-700 font-black text-sm">
+                                <CheckCircle2 className="w-4 h-4" /> Avaliado (
+                                {selectedBooking.reviews?.[0]?.rating}{" "}
+                                <Star className="w-3 h-3 inline fill-current -mt-0.5" />
+                                )
+                              </div>
+                            ) : (
+                              <Button
+                                onClick={() =>
+                                  setReviewModal({
+                                    isOpen: true,
+                                    booking: selectedBooking,
+                                    rating: 0,
+                                    comment: "",
+                                  })
+                                }
+                                variant="outline"
+                                className="h-12 border-amber-200 bg-amber-50 text-amber-700 font-bold rounded-xl shadow-sm hover:bg-amber-100"
+                              >
+                                <Star className="w-4 h-4 mr-2" /> Avaliar
+                              </Button>
+                            ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+        </SheetContent>
+      </Sheet>
+
+      {/* MODAL DE RECIBO DIGITAL DE ALTO PADRÃO (UBER STYLE) */}
+      <Dialog
+        open={receiptModal.isOpen}
+        onOpenChange={(open) =>
+          !open && setReceiptModal({ isOpen: false, booking: null })
+        }
+      >
+        <DialogContent className="max-w-2xl w-full h-[100dvh] sm:h-auto sm:max-h-[90vh] p-0 overflow-y-auto bg-slate-50 border-0 sm:rounded-[2rem]">
+          <DialogTitle className="sr-only">Recibo de Reserva</DialogTitle>
+          {receiptModal.booking &&
+            (() => {
+              const b = receiptModal.booking;
+              const payment = getPaymentDisplay(b);
+              const startObj = parseISO(b.start_time);
+              const endObj = parseISO(b.end_time);
+              const durationFormatted = formatDuration(
+                b.start_time,
+                b.end_time,
+              );
+
+              let address: any = {};
+              try {
+                address =
+                  typeof b.rooms.address_details === "string"
+                    ? JSON.parse(b.rooms.address_details)
+                    : b.rooms.address_details;
+              } catch (e) {}
+              const fullAddress = `${address.street || ""}, ${address.number || ""}`;
+
+              return (
+                <div className="flex flex-col h-full">
+                  {/* ÁREA QUE SERÁ IMPRESSA/GERADA PDF */}
+                  <div
+                    id="receipt-content"
+                    className="bg-white px-6 py-10 sm:p-12 w-full font-sans"
+                  >
+                    {/* Cabeçalho do Recibo */}
+                    <div className="flex justify-between items-start mb-10">
+                      <div>
+                        <h1 className="text-3xl font-black text-slate-900 tracking-tight">
+                          Recibo
+                        </h1>
+                        <p className="text-slate-500 font-medium mt-1">
+                          {format(endObj, "dd 'de' MMMM 'de' yyyy", {
+                            locale: ptBR,
+                          })}
+                        </p>
+                      </div>
+                      {/* Imagem original do projeto para não quebrar na impressão */}
+                      <img
+                        src="/icon-512x512.png"
+                        alt="Fusion Clinic"
+                        className="w-14 h-14 rounded-2xl shadow-sm border border-slate-200 object-cover"
+                      />
+                    </div>
+
+                    {/* Valor Total Destacado */}
+                    <div className="mb-8">
+                      <p className="text-[3rem] leading-none font-black text-slate-900">
+                        {payment.value}
+                      </p>
+                      <div className="flex items-center gap-2 mt-3">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                        <span className="text-emerald-700 font-bold bg-emerald-50 px-2 py-1 rounded-md text-xs uppercase tracking-widest">
+                          Pago com {payment.method}
+                        </span>
                       </div>
                     </div>
-                  </>
-                );
-              })()}
-          </DialogContent>
-        </Dialog>
-      </div>
 
+                    {/* Detalhes da Corrida/Reserva (Estilo Linha do Tempo) */}
+                    <div className="border-t border-b border-slate-200 py-8 mb-8">
+                      <div className="flex gap-6">
+                        <div className="flex flex-col items-center mt-1">
+                          <div className="w-3 h-3 bg-slate-900 rounded-full" />
+                          <div className="w-0.5 h-12 bg-slate-200" />
+                          <div className="w-3 h-3 border-[3px] border-slate-900 rounded-full bg-white" />
+                        </div>
+                        <div className="flex flex-col justify-between h-[4.5rem] flex-1">
+                          <div className="flex justify-between items-start w-full">
+                            <div>
+                              <p className="text-sm font-bold text-slate-900">
+                                {format(startObj, "HH:mm")}
+                              </p>
+                              <p className="text-xs font-medium text-slate-500 truncate max-w-[200px]">
+                                {b.rooms.name}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex justify-between items-end w-full">
+                            <div>
+                              <p className="text-sm font-bold text-slate-900">
+                                {format(endObj, "HH:mm")}
+                              </p>
+                              <p className="text-xs font-medium text-slate-500 truncate max-w-[200px]">
+                                {fullAddress}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Quebra de Custos */}
+                    <div className="space-y-4 mb-10">
+                      <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">
+                        Resumo da Fatura
+                      </h3>
+
+                      <div className="flex justify-between text-sm">
+                        <span className="text-slate-600 font-medium">
+                          Tempo de Locação ({durationFormatted})
+                        </span>
+                        <span className="font-bold text-slate-900">
+                          {payment.value}
+                        </span>
+                      </div>
+
+                      {payment.isCredit && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-slate-600 font-medium">
+                            Equivalência (R$)
+                          </span>
+                          <span className="font-bold text-slate-900">
+                            {payment.equivalentBrl}
+                          </span>
+                        </div>
+                      )}
+
+                      <div className="flex justify-between text-sm">
+                        <span className="text-slate-600 font-medium">
+                          Taxas Fusion Clinic
+                        </span>
+                        <span className="font-bold text-slate-900">
+                          {payment.isCredit ? "0 CR" : "R$ 0,00"}
+                        </span>
+                      </div>
+
+                      <div className="flex justify-between items-center text-lg border-t border-slate-200 pt-4 mt-2">
+                        <span className="font-black text-slate-900">
+                          Valor Cobrado
+                        </span>
+                        <span className="font-black text-slate-900">
+                          {payment.value}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Rodapé Legal com CNPJ Atualizado */}
+                    <div className="text-[10px] text-slate-400 text-center uppercase tracking-widest font-bold mt-16">
+                      <p>Fusion Clinic Soluções em Saúde Ltda</p>
+                      <p>CNPJ: 49.351.127/0001-44</p>
+                      <p className="mt-4 font-mono text-slate-300">
+                        ID: {b.id.toUpperCase()}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* BOTÕES DE AÇÃO (Não aparecem no PDF) */}
+                  <div className="p-6 bg-slate-100 border-t border-slate-200 mt-auto grid grid-cols-2 gap-3">
+                    <Button
+                      onClick={handleDownloadPDF}
+                      variant="outline"
+                      className="h-14 font-black rounded-xl text-slate-700 bg-white border-slate-200 shadow-sm"
+                    >
+                      <Download className="w-5 h-5 mr-2" /> Baixar PDF
+                    </Button>
+                    <Button
+                      onClick={() => handleSendEmail(b, payment)}
+                      className="h-14 font-black rounded-xl bg-slate-900 text-white hover:bg-slate-800 shadow-lg"
+                    >
+                      <Mail className="w-5 h-5 mr-2" /> Enviar p/ Mim
+                    </Button>
+                  </div>
+                </div>
+              );
+            })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL DE AVALIAÇÃO */}
+      <Dialog
+        open={reviewModal.isOpen}
+        onOpenChange={(open) =>
+          !open &&
+          setReviewModal({
+            isOpen: false,
+            booking: null,
+            rating: 0,
+            comment: "",
+          })
+        }
+      >
+        <DialogContent className="sm:max-w-md rounded-[2rem] border-0 p-6 bg-white">
+          <DialogTitle className="sr-only">Avaliar Experiência</DialogTitle>
+          <DialogHeader className="mb-4">
+            <h2 className="text-xl font-black text-slate-900">
+              Avalie sua experiência
+            </h2>
+            <DialogDescription className="text-slate-500 font-medium">
+              Como foi seu atendimento na sala{" "}
+              <strong className="text-slate-700">
+                {reviewModal.booking?.rooms.name}
+              </strong>
+              ?
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex justify-center gap-2 mb-6">
+            {[1, 2, 3, 4, 5].map((star) => (
+              <button
+                key={star}
+                onClick={() => setReviewModal((p) => ({ ...p, rating: star }))}
+                className="focus:outline-none transition-transform hover:scale-110"
+              >
+                <Star
+                  className={`w-10 h-10 ${reviewModal.rating >= star ? "fill-amber-400 text-amber-400" : "text-slate-200"}`}
+                />
+              </button>
+            ))}
+          </div>
+
+          <div className="space-y-4">
+            <Textarea
+              placeholder="Conte-nos o que achou do espaço (opcional)"
+              value={reviewModal.comment}
+              onChange={(e) =>
+                setReviewModal((p) => ({ ...p, comment: e.target.value }))
+              }
+              className="resize-none h-24 bg-slate-50 border-slate-200 rounded-xl"
+            />
+            <Button
+              onClick={submitReview}
+              disabled={reviewModal.rating === 0 || actionLoading}
+              className="w-full h-12 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-black shadow-lg"
+            >
+              {actionLoading ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                "Enviar Avaliação"
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL DE CANCELAMENTO */}
+      <Dialog
+        open={cancelModal.isOpen}
+        onOpenChange={(open) =>
+          !open && setCancelModal({ isOpen: false, booking: null })
+        }
+      >
+        <DialogContent className="sm:max-w-md rounded-[2rem] p-0 overflow-hidden border-0">
+          <DialogTitle className="sr-only">Cancelar Reserva</DialogTitle>
+          {cancelModal.booking &&
+            (() => {
+              const startMs = new Date(
+                cancelModal.booking.start_time,
+              ).getTime();
+              const isRefundable =
+                (startMs - new Date().getTime()) / (1000 * 60 * 60) >= 24;
+
+              return (
+                <>
+                  <div
+                    className={`p-6 pb-8 text-center text-white ${isRefundable ? "bg-emerald-600" : "bg-red-600"}`}
+                  >
+                    <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4 backdrop-blur-md">
+                      <AlertTriangle className="w-8 h-8 text-white" />
+                    </div>
+                    <h2 className="text-2xl font-black mb-1">
+                      Deseja cancelar a reserva?
+                    </h2>
+                  </div>
+                  <div className="p-6 bg-white space-y-6">
+                    <div className="flex gap-3 pt-2">
+                      <Button
+                        onClick={() =>
+                          setCancelModal({ isOpen: false, booking: null })
+                        }
+                        variant="outline"
+                        className="flex-1 h-12 rounded-xl font-bold text-slate-700 border-slate-200"
+                      >
+                        Manter Reserva
+                      </Button>
+                      <Button
+                        onClick={handleConfirmCancel}
+                        disabled={actionLoading}
+                        className={`flex-1 h-12 rounded-xl font-black text-white ${isRefundable ? "bg-emerald-600" : "bg-red-600"}`}
+                      >
+                        {actionLoading ? "Cancelando..." : "Confirmar"}
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* SCANNER QR CODE */}
       {scannerConfig.isOpen && scannerConfig.booking && (
         <RoomQRScanner
           key="checkin-scanner"
