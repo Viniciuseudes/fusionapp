@@ -18,6 +18,7 @@ import {
   isBefore,
   isSameMonth,
   parseISO,
+  differenceInMinutes,
 } from "date-fns";
 import {
   ArrowLeft,
@@ -46,6 +47,7 @@ import {
   User,
   Check,
   Crown,
+  TrendingUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -115,15 +117,15 @@ export function RoomDetail(props: RoomDetailProps) {
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
   const lightboxRef = useRef<HTMLDivElement>(null);
 
+  // Reviews e Pacotes
   const [reviews, setReviews] = useState<any[]>([]);
   const [loadingReviews, setLoadingReviews] = useState(true);
+  const [reviewFilter, setReviewFilter] = useState<number>(0);
+
+  const [packages, setPackages] = useState<any[]>([]);
+  const [selectedPkgHours, setSelectedPkgHours] = useState<number | null>(null);
 
   const [showProfileModal, setShowProfileModal] = useState(false);
-
-  // ==========================================
-  // O "CORAÇÃO" DO SISTEMA (HEARTBEAT)
-  // Atualiza a cada 5 segundos para limpar Ghosts
-  // ==========================================
   const [currentTime, setCurrentTime] = useState<number>(Date.now());
 
   useEffect(() => {
@@ -185,6 +187,21 @@ export function RoomDetail(props: RoomDetailProps) {
             setActiveTab("hora");
           } else if (mods.length > 0) {
             setActiveTab(mods[0]);
+          }
+
+          // Busca os pacotes para fazer a Ancoragem de Preço
+          const roomTier = data.tier || "start";
+          const { data: pkgs } = await supabase
+            .from("packages")
+            .select("*")
+            .eq("active", true)
+            .eq("tier", roomTier)
+            .order("hours", { ascending: true });
+
+          if (pkgs && pkgs.length > 0) {
+            setPackages(pkgs);
+            // Seleciona o pacote do meio (ex: 16h)
+            setSelectedPkgHours(pkgs[1]?.hours || pkgs[0]?.hours);
           }
         }
       } catch (err) {
@@ -296,6 +313,11 @@ export function RoomDetail(props: RoomDetailProps) {
           reviews.reduce((acc, curr) => acc + curr.rating, 0) / reviews.length
         ).toFixed(1)
       : "Novo";
+
+  const filteredReviews =
+    reviewFilter === 0
+      ? reviews
+      : reviews.filter((r) => r.rating === reviewFilter);
 
   const availableSlots = useMemo(() => {
     if (!roomData || activeTab !== "hora") return [];
@@ -797,10 +819,6 @@ export function RoomDetail(props: RoomDetailProps) {
     }
   };
 
-  // ==========================================
-  // PROTEÇÃO CONTRA LOOP INFINITO (useCallback com useRef)
-  // Desativa os botões instantaneamente ao clicar no "X"
-  // ==========================================
   const checkoutSummaryRef = useRef<any>(null);
 
   useEffect(() => {
@@ -809,24 +827,22 @@ export function RoomDetail(props: RoomDetailProps) {
 
   const handleCheckoutClose = useCallback(() => {
     setIsCheckoutOpen(false);
-    setSelectedSlots([]); // Libera os botões instantaneamente na tela atual!
+    setSelectedSlots([]);
 
     const summary = checkoutSummaryRef.current;
     if (summary && summary.lockIds) {
       const lockIds = summary.lockIds;
 
-      // Remove visualmente da lista de reservas para ficar liberado na mesma hora
       setRoomBookings((prevBookings) =>
         prevBookings.filter((b) => !lockIds.includes(b.id)),
       );
 
-      // Deleta do banco de forma silenciosa
       const supabaseClient = createClient();
       supabaseClient.from("bookings").delete().in("id", lockIds).then();
     }
 
     setCheckoutSummary(null);
-  }, []); // Sem dependências = Zero Loops Infinitos
+  }, []);
 
   const handleFavoriteToggle = async () => {
     if (isFavoriteLoading || !roomData) return;
@@ -1251,316 +1267,440 @@ export function RoomDetail(props: RoomDetailProps) {
             <div className="w-full h-px bg-slate-100 hidden lg:block" />
           </div>
 
-          <div className="order-2 lg:order-2 lg:col-span-4 bg-white md:p-6 md:border md:border-slate-200 md:rounded-2xl md:shadow-lg md:h-fit md:sticky md:top-24 flex flex-col">
-            <div className="flex bg-slate-100 p-1.5 rounded-xl mb-6">
-              {roomModalities.includes("hora") && (
-                <button
-                  onClick={() => setActiveTab("hora")}
-                  className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${activeTab === "hora" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
-                >
-                  Por Hora
-                </button>
-              )}
-              {roomModalities.includes("turno") && (
-                <button
-                  onClick={() => setActiveTab("turno")}
-                  className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${activeTab === "turno" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
-                >
-                  Por Turno
-                </button>
-              )}
-              {roomModalities.includes("fixo") && (
-                <button
-                  onClick={() => setActiveTab("fixo")}
-                  className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${activeTab === "fixo" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
-                >
-                  Mensal (Fixo)
-                </button>
-              )}
-            </div>
+          <div className="order-2 lg:order-2 lg:col-span-4 flex flex-col gap-6">
+            {/* INÍCIO DO COMPONENTE FIXO/STICKY PARA NAVEGAÇÃO E RESERVA */}
+            <div className="bg-white md:p-6 md:border md:border-slate-200 md:rounded-2xl md:shadow-lg md:h-fit md:sticky md:top-24 flex flex-col">
+              <div className="flex bg-slate-100 p-1.5 rounded-xl mb-6">
+                {roomModalities.includes("hora") && (
+                  <button
+                    onClick={() => setActiveTab("hora")}
+                    className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${activeTab === "hora" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
+                  >
+                    Por Hora
+                  </button>
+                )}
+                {roomModalities.includes("turno") && (
+                  <button
+                    onClick={() => setActiveTab("turno")}
+                    className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${activeTab === "turno" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
+                  >
+                    Por Turno
+                  </button>
+                )}
+                {roomModalities.includes("fixo") && (
+                  <button
+                    onClick={() => setActiveTab("fixo")}
+                    className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${activeTab === "fixo" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
+                  >
+                    Mensal (Fixo)
+                  </button>
+                )}
+              </div>
 
-            {activeTab === "hora" && (
-              <section className="animate-in fade-in">
-                <div className="flex items-center gap-2 mb-4">
-                  <CalendarIcon className="w-5 h-5 text-[#f05e23]" />
-                  <h2 className="text-lg font-black text-slate-900">
-                    Agendamento
-                  </h2>
+              {/* BANNER DE CONVERSÃO DO FUSION PASS (ESCURO, ELEGANTE E COM ANCORAGEM DE DESCONTO) */}
+              {packages.length > 0 && activeTab === "hora" && (
+                <div className="mb-6 bg-zinc-950 rounded-[1.25rem] p-6 shadow-xl relative overflow-hidden group border border-zinc-800 animate-in fade-in zoom-in-95">
+                  <div
+                    className={`absolute -right-10 -top-10 w-40 h-40 rounded-full blur-3xl pointer-events-none transition-all duration-500 opacity-20 group-hover:opacity-30 ${roomData.tier === "master" ? "bg-amber-500" : roomData.tier === "vip" ? "bg-[#f05e23]" : "bg-blue-500"}`}
+                  />
+
+                  <div className="relative z-10">
+                    <div className="flex items-center gap-2 mb-2">
+                      {roomData.tier === "master" ? (
+                        <Crown className="w-5 h-5 text-amber-400" />
+                      ) : roomData.tier === "vip" ? (
+                        <Star className="w-5 h-5 text-[#f05e23]" />
+                      ) : (
+                        <Shield className="w-5 h-5 text-blue-400" />
+                      )}
+                      <h3 className="text-base font-black text-white tracking-tight">
+                        Fusion Pass{" "}
+                        {roomData.tier === "master"
+                          ? "Premium"
+                          : roomData.tier === "vip"
+                            ? "VIP"
+                            : "Basic"}
+                      </h3>
+                    </div>
+                    <p className="text-xs font-medium text-zinc-400 mb-5 leading-relaxed">
+                      Ao invés de pagar o valor avulso de R${" "}
+                      {getBasePrice().toFixed(2).replace(".", ",")}/h, garanta
+                      horas com desconto exclusivo comprando um pacote.
+                    </p>
+
+                    <div className="flex gap-2 mb-5">
+                      {packages.map((pkg) => (
+                        <button
+                          key={pkg.id}
+                          onClick={() => setSelectedPkgHours(pkg.hours)}
+                          className={`flex-1 py-2 text-xs font-bold rounded-xl transition-all border ${selectedPkgHours === pkg.hours ? "bg-[#f05e23] text-white border-[#f05e23] shadow-md" : "bg-zinc-900 text-zinc-400 border-zinc-700 hover:bg-zinc-800"}`}
+                        >
+                          {pkg.hours}h
+                        </button>
+                      ))}
+                    </div>
+
+                    {packages
+                      .filter((p) => p.hours === selectedPkgHours)
+                      .map((pkg) => {
+                        const hourlyRate = pkg.price / pkg.hours;
+                        const basePrice = getBasePrice();
+                        const savings = basePrice - hourlyRate;
+                        const savingsPercent =
+                          basePrice > 0
+                            ? Math.round((savings / basePrice) * 100)
+                            : 0;
+
+                        return (
+                          <div
+                            key={pkg.id}
+                            className="flex flex-col sm:flex-row sm:items-end justify-between mt-4 gap-4 border-t border-zinc-800 pt-5"
+                          >
+                            <div>
+                              <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500 mb-2">
+                                Preço da hora no passe
+                              </p>
+                              <div className="flex flex-col gap-2">
+                                <div className="flex items-baseline gap-1">
+                                  <span className="text-3xl font-black text-white leading-none">
+                                    R$ {hourlyRate.toFixed(2).replace(".", ",")}
+                                  </span>
+                                  <span className="text-xs text-zinc-500 font-bold">
+                                    /h
+                                  </span>
+                                </div>
+                                {savings > 0 && (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[10px] font-bold text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded-md whitespace-nowrap border border-emerald-400/20 flex items-center gap-1">
+                                      <TrendingUp className="w-3 h-3" /> Poupa
+                                      R$ {savings.toFixed(2).replace(".", ",")}
+                                      /h
+                                    </span>
+                                    <span className="text-[10px] font-black text-emerald-950 bg-emerald-400 px-1.5 py-1 rounded-md whitespace-nowrap shadow-[0_0_10px_rgba(52,211,153,0.3)]">
+                                      -{savingsPercent}% OFF
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            <Button
+                              onClick={() => {
+                                toast({
+                                  title: "Iniciando assinatura",
+                                  description:
+                                    "Vá em 'Saldo Fusion' no painel principal para concluir.",
+                                });
+                                setTimeout(
+                                  () => router.push("/dashboard"),
+                                  1000,
+                                );
+                              }}
+                              className="bg-white hover:bg-zinc-200 text-zinc-950 font-black rounded-xl h-12 px-6 shadow-xl w-full sm:w-auto transition-all active:scale-95"
+                            >
+                              Assinar Pass
+                            </Button>
+                          </div>
+                        );
+                      })}
+                  </div>
                 </div>
+              )}
 
-                <div className="w-full bg-white rounded-2xl border border-slate-100 p-4 mb-6 shadow-sm">
-                  <div className="flex items-center justify-between mb-4">
-                    <button
-                      onClick={prevMonth}
-                      disabled={!canGoPrevMonth}
-                      className={`p-1.5 rounded-full transition-colors ${canGoPrevMonth ? "text-slate-500 hover:bg-slate-100 hover:text-[#f05e23]" : "text-slate-200 cursor-not-allowed"}`}
-                    >
-                      <ChevronLeft className="w-5 h-5" />
-                    </button>
-                    <div className="font-bold text-slate-800 capitalize text-sm">
-                      {format(currentMonthView, "MMMM 'de' yyyy", {
-                        locale: ptBR,
+              {activeTab === "hora" && (
+                <section className="animate-in fade-in">
+                  <div className="flex items-center gap-2 mb-4">
+                    <CalendarIcon className="w-5 h-5 text-[#f05e23]" />
+                    <h2 className="text-lg font-black text-slate-900">
+                      Agendamento
+                    </h2>
+                  </div>
+
+                  <div className="w-full bg-white rounded-2xl border border-slate-100 p-4 mb-6 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                      <button
+                        onClick={prevMonth}
+                        disabled={!canGoPrevMonth}
+                        className={`p-1.5 rounded-full transition-colors ${canGoPrevMonth ? "text-slate-500 hover:bg-slate-100 hover:text-[#f05e23]" : "text-slate-200 cursor-not-allowed"}`}
+                      >
+                        <ChevronLeft className="w-5 h-5" />
+                      </button>
+                      <div className="font-bold text-slate-800 capitalize text-sm">
+                        {format(currentMonthView, "MMMM 'de' yyyy", {
+                          locale: ptBR,
+                        })}
+                      </div>
+                      <button
+                        onClick={nextMonth}
+                        className="p-1.5 rounded-full text-slate-500 hover:bg-slate-100 hover:text-[#f05e23] transition-colors"
+                      >
+                        <ChevronRight className="w-5 h-5" />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-7 text-center mb-2">
+                      {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map(
+                        (d) => (
+                          <div
+                            key={d}
+                            className="text-[10px] font-bold text-slate-400 uppercase"
+                          >
+                            {d}
+                          </div>
+                        ),
+                      )}
+                    </div>
+                    <div className="grid grid-cols-7 gap-y-2 gap-x-1">
+                      {calendarDays.map((day) => {
+                        const dateStr = format(day, "yyyy-MM-dd");
+                        const isSelected = isSameDay(day, selectedDate);
+                        const isPast =
+                          isBefore(day, today) && !isSameDay(day, today);
+                        const isCurrentMonth = isSameMonth(
+                          day,
+                          currentMonthView,
+                        );
+                        const hasSelection = selectedSlots.some((slotKey) =>
+                          slotKey.startsWith(dateStr),
+                        );
+
+                        return (
+                          <button
+                            key={day.toISOString()}
+                            onClick={() => {
+                              if (!isPast) setSelectedDate(day);
+                            }}
+                            disabled={isPast || !isCurrentMonth}
+                            className={`relative h-9 w-full rounded-lg text-xs font-bold flex flex-col items-center justify-center transition-colors ${!isCurrentMonth ? "invisible" : ""} ${isPast ? "text-slate-200 cursor-not-allowed" : ""} ${isSelected ? "bg-[#f05e23] text-white shadow-md shadow-orange-500/30" : ""} ${!isSelected && !isPast && isCurrentMonth ? "text-slate-700 hover:bg-slate-100" : ""}`}
+                          >
+                            <span className="relative z-10">
+                              {format(day, "d")}
+                            </span>
+                            {hasSelection && (
+                              <span
+                                className={`absolute bottom-1 w-1 h-1 rounded-full ${isSelected ? "bg-white" : "bg-[#f05e23]"}`}
+                              />
+                            )}
+                          </button>
+                        );
                       })}
                     </div>
-                    <button
-                      onClick={nextMonth}
-                      className="p-1.5 rounded-full text-slate-500 hover:bg-slate-100 hover:text-[#f05e23] transition-colors"
-                    >
-                      <ChevronRight className="w-5 h-5" />
-                    </button>
                   </div>
-                  <div className="grid grid-cols-7 text-center mb-2">
-                    {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map(
-                      (d) => (
-                        <div
-                          key={d}
-                          className="text-[10px] font-bold text-slate-400 uppercase"
-                        >
-                          {d}
-                        </div>
-                      ),
-                    )}
+
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-bold text-slate-800 capitalize">
+                      Horários disponíveis{" "}
+                      <span className="font-medium text-slate-500 lowercase">
+                        (
+                        {format(selectedDate, "EEE, dd 'de' MMM", {
+                          locale: ptBR,
+                        })}
+                        )
+                      </span>
+                    </h3>
                   </div>
-                  <div className="grid grid-cols-7 gap-y-2 gap-x-1">
-                    {calendarDays.map((day) => {
-                      const dateStr = format(day, "yyyy-MM-dd");
-                      const isSelected = isSameDay(day, selectedDate);
-                      const isPast =
-                        isBefore(day, today) && !isSameDay(day, today);
-                      const isCurrentMonth = isSameMonth(day, currentMonthView);
-                      const hasSelection = selectedSlots.some((slotKey) =>
-                        slotKey.startsWith(dateStr),
-                      );
 
-                      return (
-                        <button
-                          key={day.toISOString()}
-                          onClick={() => {
-                            if (!isPast) setSelectedDate(day);
-                          }}
-                          disabled={isPast || !isCurrentMonth}
-                          className={`relative h-9 w-full rounded-lg text-xs font-bold flex flex-col items-center justify-center transition-colors ${!isCurrentMonth ? "invisible" : ""} ${isPast ? "text-slate-200 cursor-not-allowed" : ""} ${isSelected ? "bg-[#f05e23] text-white shadow-md shadow-orange-500/30" : ""} ${!isSelected && !isPast && isCurrentMonth ? "text-slate-700 hover:bg-slate-100" : ""}`}
-                        >
-                          <span className="relative z-10">
-                            {format(day, "d")}
-                          </span>
-                          {hasSelection && (
-                            <span
-                              className={`absolute bottom-1 w-1 h-1 rounded-full ${isSelected ? "bg-white" : "bg-[#f05e23]"}`}
-                            />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-bold text-slate-800 capitalize">
-                    Horários disponíveis{" "}
-                    <span className="font-medium text-slate-500 lowercase">
-                      (
-                      {format(selectedDate, "EEE, dd 'de' MMM", {
-                        locale: ptBR,
-                      })}
-                      )
-                    </span>
-                  </h3>
-                </div>
-
-                {availableSlots.length === 0 ? (
-                  <div className="text-center py-6 bg-slate-50 rounded-xl border border-slate-100">
-                    <AlertCircle className="w-6 h-6 text-slate-300 mx-auto mb-2" />
-                    <p className="text-slate-500 font-bold text-xs">
-                      Nenhum horário disponível para esta data.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 gap-2 max-h-[220px] overflow-y-auto pr-1 scrollbar-hide">
-                    {availableSlots.map((slotTime: string) => {
-                      const slotKey = `${format(selectedDate, "yyyy-MM-dd")}|${slotTime}`;
-                      const isBooked = isSlotBooked(slotKey);
-                      const isPastSlot = isSlotPast(slotKey);
-                      const isUnavailable = isBooked || isPastSlot;
-                      const isSelected = selectedSlots.includes(slotKey);
-                      const slotPrice = getSlotPrice(slotKey);
-
-                      return (
-                        <button
-                          key={slotKey}
-                          onClick={() => !isUnavailable && toggleSlot(slotKey)}
-                          disabled={isUnavailable}
-                          className={`h-14 rounded-xl flex flex-col items-center justify-center transition-all border-2 ${isUnavailable ? "border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed" : isSelected ? "border-[#f05e23] bg-orange-50" : "border-slate-100 bg-white hover:border-slate-300"}`}
-                        >
-                          <span
-                            className={`text-xs font-bold ${isUnavailable ? "text-slate-400 line-through" : isSelected ? "text-[#f05e23]" : "text-slate-700"}`}
-                          >
-                            {slotTime}
-                          </span>
-                          <span
-                            className={`text-[10px] font-semibold mt-0.5 ${isUnavailable ? "text-slate-400" : isSelected ? "text-[#f05e23]/80" : "text-slate-400"}`}
-                          >
-                            {isUnavailable
-                              ? "Indisponível"
-                              : `R$ ${slotPrice.toFixed(2).replace(".", ",")}`}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                <div className="hidden md:block pt-6 border-t border-slate-100 mt-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5">
-                        {selectedSlots.length > 0
-                          ? `Total (${selectedSlots.length} horas)`
-                          : "A partir de"}
+                  {availableSlots.length === 0 ? (
+                    <div className="text-center py-6 bg-slate-50 rounded-xl border border-slate-100">
+                      <AlertCircle className="w-6 h-6 text-slate-300 mx-auto mb-2" />
+                      <p className="text-slate-500 font-bold text-xs">
+                        Nenhum horário disponível para esta data.
                       </p>
-                      <div className="flex items-baseline gap-1">
-                        <span className="text-2xl font-black text-[#f05e23]">
-                          R${" "}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2 max-h-[220px] overflow-y-auto pr-1 scrollbar-hide">
+                      {availableSlots.map((slotTime: string) => {
+                        const slotKey = `${format(selectedDate, "yyyy-MM-dd")}|${slotTime}`;
+                        const isBooked = isSlotBooked(slotKey);
+                        const isPastSlot = isSlotPast(slotKey);
+                        const isUnavailable = isBooked || isPastSlot;
+                        const isSelected = selectedSlots.includes(slotKey);
+                        const slotPrice = getSlotPrice(slotKey);
+
+                        return (
+                          <button
+                            key={slotKey}
+                            onClick={() =>
+                              !isUnavailable && toggleSlot(slotKey)
+                            }
+                            disabled={isUnavailable}
+                            className={`h-14 rounded-xl flex flex-col items-center justify-center transition-all border-2 ${isUnavailable ? "border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed" : isSelected ? "border-[#f05e23] bg-orange-50" : "border-slate-100 bg-white hover:border-slate-300"}`}
+                          >
+                            <span
+                              className={`text-xs font-bold ${isUnavailable ? "text-slate-400 line-through" : isSelected ? "text-[#f05e23]" : "text-slate-700"}`}
+                            >
+                              {slotTime}
+                            </span>
+                            <span
+                              className={`text-[10px] font-semibold mt-0.5 ${isUnavailable ? "text-slate-400" : isSelected ? "text-[#f05e23]/80" : "text-slate-400"}`}
+                            >
+                              {isUnavailable
+                                ? "Indisponível"
+                                : `R$ ${slotPrice.toFixed(2).replace(".", ",")}`}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div className="hidden md:block pt-6 border-t border-slate-100 mt-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5">
                           {selectedSlots.length > 0
-                            ? totalHourlyCost
-                            : getBasePrice()}
-                        </span>
+                            ? `Total (${selectedSlots.length} horas)`
+                            : "A partir de"}
+                        </p>
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-2xl font-black text-[#f05e23]">
+                            R${" "}
+                            {selectedSlots.length > 0
+                              ? totalHourlyCost
+                              : getBasePrice()}
+                          </span>
+                        </div>
                       </div>
                     </div>
+                    <Button
+                      onClick={handleAction}
+                      disabled={actionLoading || selectedSlots.length === 0}
+                      className={`w-full h-14 rounded-xl font-black transition-all text-base ${selectedSlots.length > 0 ? "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/25 hover:scale-[1.02]" : "bg-slate-100 text-slate-400 shadow-none"}`}
+                    >
+                      {actionLoading ? "Processando..." : "Reservar Agora"}
+                    </Button>
                   </div>
-                  <Button
-                    onClick={handleAction}
-                    disabled={actionLoading || selectedSlots.length === 0}
-                    className={`w-full h-14 rounded-xl font-black transition-all text-base ${selectedSlots.length > 0 ? "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/25 hover:scale-[1.02]" : "bg-slate-100 text-slate-400 shadow-none"}`}
-                  >
-                    {actionLoading ? "Processando..." : "Reservar Agora"}
-                  </Button>
-                </div>
-              </section>
-            )}
+                </section>
+              )}
 
-            {activeTab === "turno" && (
-              <section className="animate-in fade-in space-y-6">
-                <div>
-                  <h2 className="text-sm font-black text-slate-900 mb-3">
-                    1. Qual turno deseja alugar?
-                  </h2>
-                  <div className="grid grid-cols-3 gap-3">
-                    {[
-                      {
-                        id: "morning",
-                        label: "Manhã",
-                        price: pricingData.morning,
-                      },
-                      {
-                        id: "afternoon",
-                        label: "Tarde",
-                        price: pricingData.afternoon,
-                      },
-                      { id: "night", label: "Noite", price: pricingData.night },
-                    ].map((t) => (
-                      <button
-                        key={t.id}
-                        onClick={() => setSelectedShift(t.id as any)}
-                        className={`flex flex-col items-center justify-center p-3.5 rounded-xl border-2 transition-all ${selectedShift === t.id ? "border-[#f05e23] bg-orange-50 text-[#f05e23]" : "border-slate-100 hover:border-slate-200 bg-white"}`}
-                      >
-                        <span className="text-xs font-black">{t.label}</span>
-                        <span
-                          className={`text-[10px] font-bold mt-1 ${selectedShift === t.id ? "text-[#f05e23]/70" : "text-slate-400"}`}
+              {activeTab === "turno" && (
+                <section className="animate-in fade-in space-y-6">
+                  <div>
+                    <h2 className="text-sm font-black text-slate-900 mb-3">
+                      1. Qual turno deseja alugar?
+                    </h2>
+                    <div className="grid grid-cols-3 gap-3">
+                      {[
+                        {
+                          id: "morning",
+                          label: "Manhã",
+                          price: pricingData.morning,
+                        },
+                        {
+                          id: "afternoon",
+                          label: "Tarde",
+                          price: pricingData.afternoon,
+                        },
+                        {
+                          id: "night",
+                          label: "Noite",
+                          price: pricingData.night,
+                        },
+                      ].map((t) => (
+                        <button
+                          key={t.id}
+                          onClick={() => setSelectedShift(t.id as any)}
+                          className={`flex flex-col items-center justify-center p-3.5 rounded-xl border-2 transition-all ${selectedShift === t.id ? "border-[#f05e23] bg-orange-50 text-[#f05e23]" : "border-slate-100 hover:border-slate-200 bg-white"}`}
                         >
-                          {t.price ? `R$ ${t.price}` : "--"}
-                        </span>
-                      </button>
-                    ))}
+                          <span className="text-xs font-black">{t.label}</span>
+                          <span
+                            className={`text-[10px] font-bold mt-1 ${selectedShift === t.id ? "text-[#f05e23]/70" : "text-slate-400"}`}
+                          >
+                            {t.price ? `R$ ${t.price}` : "--"}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <h2 className="text-sm font-black text-slate-900 mb-3">
-                    2. Quais dias da semana?
-                  </h2>
-                  <div className="flex gap-2 justify-between">
-                    {["D", "S", "T", "Q", "Q", "S", "S"].map((day, i) => (
-                      <button
-                        key={i}
-                        onClick={() => toggleDay(i)}
-                        className={`w-10 h-10 rounded-full text-xs font-black transition-all ${selectedDays.includes(i) ? "bg-slate-900 text-white shadow-md shadow-slate-900/20" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}
-                      >
-                        {day}
-                      </button>
-                    ))}
+                  <div>
+                    <h2 className="text-sm font-black text-slate-900 mb-3">
+                      2. Quais dias da semana?
+                    </h2>
+                    <div className="flex gap-2 justify-between">
+                      {["D", "S", "T", "Q", "Q", "S", "S"].map((day, i) => (
+                        <button
+                          key={i}
+                          onClick={() => toggleDay(i)}
+                          className={`w-10 h-10 rounded-full text-xs font-black transition-all ${selectedDays.includes(i) ? "bg-slate-900 text-white shadow-md shadow-slate-900/20" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}
+                        >
+                          {day}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div className="bg-blue-50/50 border border-blue-100 p-4 rounded-xl flex gap-3">
-                  <Shield className="w-5 h-5 text-blue-500 shrink-0" />
-                  <p className="text-xs text-blue-800 font-medium leading-relaxed">
-                    Aluguéis recorrentes são fechados através do nosso{" "}
-                    <strong className="font-black">Chat Seguro</strong>.
-                  </p>
-                </div>
-                <div className="hidden md:block pt-4 border-t border-slate-100">
-                  <div className="flex justify-between items-end mb-4">
-                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                      Estimativa Semanal
-                    </span>
-                    <span className="text-2xl font-black text-slate-900">
-                      R$ {totalShiftCost.toFixed(2)}
-                    </span>
+                  <div className="bg-blue-50/50 border border-blue-100 p-4 rounded-xl flex gap-3">
+                    <Shield className="w-5 h-5 text-blue-500 shrink-0" />
+                    <p className="text-xs text-blue-800 font-medium leading-relaxed">
+                      Aluguéis recorrentes são fechados através do nosso{" "}
+                      <strong className="font-black">Chat Seguro</strong>.
+                    </p>
                   </div>
-                  <Button
-                    onClick={handleAction}
-                    disabled={
-                      actionLoading ||
-                      !selectedShift ||
-                      selectedDays.length === 0
-                    }
-                    className="w-full h-14 rounded-xl font-black bg-slate-900 hover:bg-slate-800 text-white gap-2 transition-all"
-                  >
-                    {actionLoading ? (
-                      "Processando..."
-                    ) : (
-                      <>
-                        <MessageSquare className="w-4 h-4" /> Solicitar Proposta
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </section>
-            )}
+                  <div className="hidden md:block pt-4 border-t border-slate-100">
+                    <div className="flex justify-between items-end mb-4">
+                      <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        Estimativa Semanal
+                      </span>
+                      <span className="text-2xl font-black text-slate-900">
+                        R$ {totalShiftCost.toFixed(2)}
+                      </span>
+                    </div>
+                    <Button
+                      onClick={handleAction}
+                      disabled={
+                        actionLoading ||
+                        !selectedShift ||
+                        selectedDays.length === 0
+                      }
+                      className="w-full h-14 rounded-xl font-black bg-slate-900 hover:bg-slate-800 text-white gap-2 transition-all"
+                    >
+                      {actionLoading ? (
+                        "Processando..."
+                      ) : (
+                        <>
+                          <MessageSquare className="w-4 h-4" /> Solicitar
+                          Proposta
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </section>
+              )}
 
-            {activeTab === "fixo" && (
-              <section className="animate-in fade-in space-y-6">
-                <div className="text-center py-8 bg-slate-50 rounded-2xl border border-slate-200">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">
-                    Contrato Mensal (Exclusivo)
-                  </p>
-                  <h3 className="text-3xl font-black text-slate-900">
-                    {pricingData.monthly ? `R$ ${pricingData.monthly}` : "--"}
-                  </h3>
-                </div>
-                <div className="bg-emerald-50/50 border border-emerald-100 p-4 rounded-xl flex gap-3">
-                  <Shield className="w-5 h-5 text-emerald-600 shrink-0" />
-                  <p className="text-xs text-emerald-800 font-medium leading-relaxed">
-                    O aluguel fixo garante exclusividade total sobre a sala.
-                    Inicie uma negociação segura.
-                  </p>
-                </div>
-                <div className="hidden md:block pt-4 border-t border-slate-100">
-                  <Button
-                    onClick={handleAction}
-                    disabled={actionLoading}
-                    className="w-full h-14 rounded-xl font-black bg-slate-900 hover:bg-slate-800 text-white gap-2 shadow-xl shadow-slate-900/10 transition-all"
-                  >
-                    {actionLoading ? (
-                      "Processando..."
-                    ) : (
-                      <>
-                        <MessageSquare className="w-4 h-4" /> Iniciar Negociação
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </section>
-            )}
+              {activeTab === "fixo" && (
+                <section className="animate-in fade-in space-y-6">
+                  <div className="text-center py-8 bg-slate-50 rounded-2xl border border-slate-200">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">
+                      Contrato Mensal (Exclusivo)
+                    </p>
+                    <h3 className="text-3xl font-black text-slate-900">
+                      {pricingData.monthly ? `R$ ${pricingData.monthly}` : "--"}
+                    </h3>
+                  </div>
+                  <div className="bg-emerald-50/50 border border-emerald-100 p-4 rounded-xl flex gap-3">
+                    <Shield className="w-5 h-5 text-emerald-600 shrink-0" />
+                    <p className="text-xs text-emerald-800 font-medium leading-relaxed">
+                      O aluguel fixo garante exclusividade total sobre a sala.
+                      Inicie uma negociação segura.
+                    </p>
+                  </div>
+                  <div className="hidden md:block pt-4 border-t border-slate-100">
+                    <Button
+                      onClick={handleAction}
+                      disabled={actionLoading}
+                      className="w-full h-14 rounded-xl font-black bg-slate-900 hover:bg-slate-800 text-white gap-2 shadow-xl shadow-slate-900/10 transition-all"
+                    >
+                      {actionLoading ? (
+                        "Processando..."
+                      ) : (
+                        <>
+                          <MessageSquare className="w-4 h-4" /> Iniciar
+                          Negociação
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </section>
+              )}
+            </div>
           </div>
 
           <div className="order-3 lg:order-3 lg:col-span-8 lg:col-start-1 pt-8 border-t border-slate-100 lg:border-none lg:pt-0">
@@ -1576,6 +1716,37 @@ export function RoomDetail(props: RoomDetailProps) {
                 </span>
               </div>
             </div>
+
+            {/* Filtro de Avaliações UX Sênior */}
+            {reviews.length > 0 && (
+              <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide mb-6 pb-1">
+                <button
+                  onClick={() => setReviewFilter(0)}
+                  className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 border ${reviewFilter === 0 ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"}`}
+                >
+                  Todas
+                </button>
+                {[5, 4, 3, 2, 1].map((star) => {
+                  const count = reviews.filter((r) => r.rating === star).length;
+                  if (count === 0) return null; // Esconde se não tiver nota
+                  return (
+                    <button
+                      key={star}
+                      onClick={() => setReviewFilter(star)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 flex items-center gap-1 border ${reviewFilter === star ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"}`}
+                    >
+                      {star}{" "}
+                      <Star
+                        className={`w-3 h-3 ${reviewFilter === star ? "fill-amber-500 text-amber-500" : "text-slate-400"}`}
+                      />
+                      <span className="text-[10px] text-slate-400 ml-1">
+                        ({count})
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             {loadingReviews ? (
               <div className="flex justify-center py-10">
@@ -1593,64 +1764,80 @@ export function RoomDetail(props: RoomDetailProps) {
                   Seja o primeiro a avaliar este espaço após seu uso!
                 </p>
               </div>
+            ) : filteredReviews.length === 0 ? (
+              <div className="text-center py-10 text-slate-500 font-medium">
+                Nenhuma avaliação com essa nota.
+              </div>
             ) : (
               <div className="space-y-6">
-                {reviews.map((review) => (
-                  <div
-                    key={review.id}
-                    className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm"
-                  >
-                    <div className="flex items-center gap-4 mb-4">
-                      <div className="w-12 h-12 rounded-full overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
-                        {review.profiles?.avatar_url ? (
-                          <img
-                            src={review.profiles.avatar_url}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-slate-400">
-                            <User className="w-6 h-6" />
-                          </div>
-                        )}
+                {filteredReviews.map((review) => {
+                  // Lógica Limpa para exibição de comentário
+                  const hasComment =
+                    review.comment && review.comment.trim().length > 0;
+
+                  return (
+                    <div
+                      key={review.id}
+                      className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm"
+                    >
+                      <div className="flex items-center gap-4 mb-4">
+                        <div className="w-12 h-12 rounded-full overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
+                          {review.profiles?.avatar_url ? (
+                            <img
+                              src={review.profiles.avatar_url}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-slate-400">
+                              <User className="w-6 h-6" />
+                            </div>
+                          )}
+                        </div>
+                        <div>
+                          <p className="font-black text-slate-900">
+                            {review.profiles?.full_name ||
+                              "Profissional Verificado"}
+                          </p>
+                          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                            {format(
+                              parseISO(review.created_at),
+                              "dd MMM yyyy",
+                              {
+                                locale: ptBR,
+                              },
+                            )}
+                          </p>
+                        </div>
+                        <div className="ml-auto flex items-center gap-1 bg-amber-50 px-3 py-1.5 rounded-xl border border-amber-100">
+                          <Star className="w-4 h-4 fill-amber-500 text-amber-500" />
+                          <span className="font-black text-amber-700">
+                            {Number(review.rating).toFixed(1)}
+                          </span>
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-black text-slate-900">
-                          {review.profiles?.full_name ||
-                            "Profissional Verificado"}
+
+                      {hasComment && (
+                        <p className="text-slate-600 leading-relaxed font-medium">
+                          "{review.comment}"
                         </p>
-                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                          {format(parseISO(review.created_at), "dd MMM yyyy", {
-                            locale: ptBR,
-                          })}
-                        </p>
-                      </div>
-                      <div className="ml-auto flex items-center gap-1 bg-amber-50 px-3 py-1.5 rounded-xl border border-amber-100">
-                        <Star className="w-4 h-4 fill-amber-500 text-amber-500" />
-                        <span className="font-black text-amber-700">
-                          {Number(review.rating).toFixed(1)}
-                        </span>
-                      </div>
+                      )}
+
+                      {review.host_reply && (
+                        <div className="mt-5 p-5 bg-slate-50 rounded-2xl border border-slate-200 md:ml-12 relative">
+                          <div className="absolute top-0 left-6 -mt-2 w-4 h-4 bg-slate-50 border-t border-l border-slate-200 rotate-45"></div>
+                          <p className="text-xs font-black text-slate-900 mb-1 flex items-center gap-1">
+                            <Check className="w-3.5 h-3.5 text-[#f05e23]" />{" "}
+                            Resposta do Anfitrião
+                          </p>
+                          <p className="text-sm font-medium text-slate-600">
+                            {review.host_reply}
+                          </p>
+                        </div>
+                      )}
                     </div>
-
-                    <p className="text-slate-600 leading-relaxed font-medium">
-                      "{review.comment}"
-                    </p>
-
-                    {review.host_reply && (
-                      <div className="mt-5 p-5 bg-slate-50 rounded-2xl border border-slate-200 md:ml-12 relative">
-                        <div className="absolute top-0 left-6 -mt-2 w-4 h-4 bg-slate-50 border-t border-l border-slate-200 rotate-45"></div>
-                        <p className="text-xs font-black text-slate-900 mb-1 flex items-center gap-1">
-                          <Check className="w-3.5 h-3.5 text-[#f05e23]" />{" "}
-                          Resposta do Anfitrião
-                        </p>
-                        <p className="text-sm font-medium text-slate-600">
-                          {review.host_reply}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                ))}
-                {reviews.length > 3 && (
+                  );
+                })}
+                {filteredReviews.length > 3 && (
                   <Button
                     variant="outline"
                     className="w-full h-12 rounded-xl font-bold text-slate-700 border-slate-200"
