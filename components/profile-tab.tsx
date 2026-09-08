@@ -40,6 +40,7 @@ import {
   X,
   CalendarDays,
   Trophy,
+  AlertTriangle,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -110,7 +111,7 @@ const isValidCPF = (cpf: string) => {
   return true;
 };
 
-// ALGORITMO SÊNIOR DE GAMIFICAÇÃO (Agora com Recompensas)
+// ALGORITMO SÊNIOR DE GAMIFICAÇÃO
 const getTierInfo = (bookingsCount: number, isProfileComplete: boolean) => {
   if (!isProfileComplete) {
     return {
@@ -205,6 +206,10 @@ export function ProfileTab() {
   const [actionLoading, setActionLoading] = useState(false);
   const [bookingsCount, setBookingsCount] = useState(0);
 
+  // SÊNIOR: Estado da Assinatura
+  const [activeSub, setActiveSub] = useState<any>(null);
+  const [cancelingSub, setCancelingSub] = useState(false);
+
   const [walletBalances, setWalletBalances] = useState({
     start: 0,
     vip: 0,
@@ -272,6 +277,15 @@ export function ProfileTab() {
           .eq("id", user.id)
           .single();
         if (error) throw error;
+
+        // Busca assinatura ativa
+        const { data: subData } = await supabase
+          .from("subscriptions")
+          .select("*")
+          .eq("user_id", user.id)
+          .eq("status", "ACTIVE")
+          .maybeSingle();
+        setActiveSub(subData);
 
         const { count } = await supabase
           .from("bookings")
@@ -356,7 +370,7 @@ export function ProfileTab() {
         }
       });
 
-      // EFEITO CASCATA DE SALDOS
+      // EFEITO CASCATA DE SALDOS (Visual)
       if (start < 0) {
         vip += start;
         start = 0;
@@ -365,6 +379,10 @@ export function ProfileTab() {
         master += vip;
         vip = 0;
       }
+
+      start = Math.max(0, start);
+      vip = Math.max(0, vip);
+      master = Math.max(0, master);
 
       setWalletBalances({ start, vip, master });
       setNextExpiration(closestExp);
@@ -384,7 +402,41 @@ export function ProfileTab() {
     }
   }
 
-  // ALGORITMO OTIMIZADO: TODOS OS CRÉDITOS A VENCER
+  const handleCancelSubscription = async () => {
+    if (
+      !confirm(
+        "Tem certeza que deseja cancelar? Você perderá os descontos no próximo mês e a renovação não ocorrerá.",
+      )
+    )
+      return;
+    setCancelingSub(true);
+    try {
+      const res = await fetch("/api/subscriptions/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subscriptionId: activeSub.asaas_subscription_id,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      toast({
+        title: "Assinatura Cancelada",
+        description: "Sua renovação automática foi desativada com sucesso.",
+      });
+      setActiveSub(null);
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro",
+        description: err.message,
+      });
+    } finally {
+      setCancelingSub(false);
+    }
+  };
+
   const allExpiringCredits = useMemo(() => {
     const activeCredits = transactions.filter((tx) => {
       const isCred = isCredit(tx.type, Number(tx.amount));
@@ -701,7 +753,11 @@ export function ProfileTab() {
 
               <div className="flex flex-col sm:flex-row gap-3 w-full">
                 <Button
-                  onClick={() => toast({ title: "Em breve" })}
+                  onClick={() => {
+                    // Redireciona para a home, onde está a aba de compra
+                    window.location.hash = "search";
+                    window.dispatchEvent(new HashChangeEvent("hashchange"));
+                  }}
                   className="w-full sm:flex-1 h-12 px-6 rounded-xl font-black bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg text-sm"
                 >
                   <PlusCircle className="w-4 h-4 mr-2" /> Comprar Pass
@@ -1360,7 +1416,6 @@ export function ProfileTab() {
               />
             </div>
 
-            {/* NOVO: RECOMPENSA DE NÍVEL (GAMIFICAÇÃO) */}
             <div
               className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${tierInfo.bg.replace("bg-", "border-").replace("100", "200")} ${tierInfo.bg.replace("100", "50")}`}
             >
@@ -1393,6 +1448,42 @@ export function ProfileTab() {
             <ChevronRight className="w-6 h-6 text-white" />
           </div>
         </div>
+
+        {/* SÊNIOR: GESTÃO DA ASSINATURA (SÓ APARECE SE TIVER ASSINATURA ATIVA) */}
+        {activeSub && (
+          <div className="bg-slate-900 rounded-[2rem] p-6 text-white shadow-xl flex flex-col border border-slate-800">
+            <div className="flex justify-between items-start mb-6">
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-slate-400 font-black mb-1">
+                  Seu Plano Atual
+                </p>
+                <h3 className="text-xl font-black text-white flex items-center gap-2 capitalize">
+                  <Crown className="w-5 h-5 text-amber-500" /> Fusion Pass{" "}
+                  {activeSub.tier}
+                </h3>
+                <p className="text-sm font-medium text-slate-400 mt-1">
+                  Garante {activeSub.hours} horas mensais.
+                </p>
+              </div>
+              <Badge className="bg-emerald-500/20 text-emerald-400 px-3 py-1 rounded-full text-xs font-bold border border-emerald-500/30">
+                Ativo
+              </Badge>
+            </div>
+            <div className="pt-4 border-t border-slate-800 flex justify-between items-center">
+              <p className="text-xs text-slate-500 flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5" /> Renovação automática.
+              </p>
+              <Button
+                onClick={handleCancelSubscription}
+                disabled={cancelingSub}
+                variant="ghost"
+                className="text-red-400 hover:text-red-300 hover:bg-red-400/10 text-xs font-bold h-9"
+              >
+                {cancelingSub ? "Cancelando..." : "Cancelar Assinatura"}
+              </Button>
+            </div>
+          </div>
+        )}
 
         {!isProfileComplete && (
           <div className="bg-red-50 border border-red-200 p-4 rounded-[2rem] flex items-start gap-3">

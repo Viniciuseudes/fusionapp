@@ -193,6 +193,9 @@ export function SearchTab({
     master: 0,
   });
 
+  // SÊNIOR: Estado da Assinatura na busca
+  const [activeSub, setActiveSub] = useState<any>(null);
+
   const [bestHourlyRates, setBestHourlyRates] = useState<
     Record<string, number>
   >({});
@@ -380,6 +383,15 @@ export function SearchTab({
             .eq("id", user.id)
             .single();
 
+          // SÊNIOR: Busca assinatura ativa
+          const { data: subData } = await supabase
+            .from("subscriptions")
+            .select("tier, status")
+            .eq("user_id", user.id)
+            .eq("status", "ACTIVE")
+            .maybeSingle();
+          setActiveSub(subData);
+
           const { data: txData } = await supabase
             .from("wallet_transactions")
             .select("amount, created_at, description, type, tier, expires_at")
@@ -414,7 +426,7 @@ export function SearchTab({
             });
           }
 
-          // === SÊNIOR: EFEITO CASCATA VISUAL (Impede saldos negativos no display) ===
+          // SÊNIOR: EFEITO CASCATA VISUAL (Impede saldos negativos no display)
           if (bStart < 0) {
             bVip += bStart;
             bStart = 0;
@@ -424,11 +436,9 @@ export function SearchTab({
             bVip = 0;
           }
 
-          // Trava final de segurança para nunca exibir números negativos
           bStart = Math.max(0, bStart);
           bVip = Math.max(0, bVip);
           bMaster = Math.max(0, bMaster);
-          // =====================================================================
 
           setWalletBalances({ start: bStart, vip: bVip, master: bMaster });
 
@@ -839,98 +849,130 @@ export function SearchTab({
             </div>
           </div>
 
-          {/* TABELA DE PREÇOS REFINADA */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-12 items-start">
-            {dynamicPackages.map((pkg) => {
-              const Icon = pkg.icon;
-              const currentHours = selectedBundles[pkg.id];
-              const selectedOption =
-                pkg.options.find((o) => o.hours === currentHours) ||
-                pkg.options[0];
-
-              if (!selectedOption) return null;
-
-              return (
-                <div
-                  key={pkg.id}
-                  className={`rounded-3xl p-6 sm:p-8 flex flex-col border transition-all ${pkg.cardStyle}`}
+          {/* SÊNIOR: CHECK DE ASSINATURA ATIVA NO HEADER DA BUSCA */}
+          {activeSub ? (
+            <div className="bg-zinc-900 rounded-3xl p-8 text-white border border-zinc-800 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-6 mb-12">
+              <div>
+                <p className="text-xs text-amber-500 font-black uppercase tracking-widest mb-1">
+                  Pass Ativo
+                </p>
+                <h3 className="text-2xl font-black flex items-center gap-2 capitalize">
+                  <Crown className="w-6 h-6 text-amber-500" /> Fusion Pass{" "}
+                  {activeSub.tier}
+                </h3>
+                <p className="text-sm font-medium text-zinc-400 mt-2">
+                  Seus descontos exclusivos já estão sendo aplicados em todas as
+                  reservas.
+                </p>
+              </div>
+              <div className="text-right w-full md:w-auto">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    window.location.hash = "profile";
+                    window.dispatchEvent(new HashChangeEvent("hashchange"));
+                  }}
+                  className="w-full md:w-auto bg-transparent border-zinc-700 text-white hover:bg-zinc-800 hover:text-white font-bold h-12"
                 >
-                  <div className="flex justify-between items-start mb-6">
-                    <div className="flex items-center gap-3">
-                      <div
-                        className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-sm ${pkg.iconStyle}`}
-                      >
-                        <Icon className="w-6 h-6 fill-current" />
-                      </div>
-                      <h4 className={`text-xl font-black ${pkg.headerStyle}`}>
-                        {pkg.title}
-                      </h4>
-                    </div>
-                    {pkg.badge && (
-                      <span className="bg-[#f05e23] text-white text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-md shadow-sm">
-                        {pkg.badge}
-                      </span>
-                    )}
-                  </div>
+                  Gerenciar Assinatura
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-12 items-start">
+              {dynamicPackages.map((pkg) => {
+                const Icon = pkg.icon;
+                const currentHours = selectedBundles[pkg.id];
+                const selectedOption =
+                  pkg.options.find((o) => o.hours === currentHours) ||
+                  pkg.options[0];
 
-                  {/* Seletor de Horas Estilo Toggle Group */}
-                  <div className="flex items-center gap-2 mb-6">
-                    {pkg.options.map((opt) => (
-                      <button
-                        key={opt.hours}
-                        onClick={() =>
-                          setSelectedBundles({
-                            ...selectedBundles,
-                            [pkg.id]: opt.hours,
-                          })
-                        }
-                        data-state={
-                          currentHours === opt.hours ? "active" : "inactive"
-                        }
-                        className={`flex-1 py-2 text-sm font-bold rounded-xl transition-all border ${pkg.optionStyle}`}
-                      >
-                        {opt.hours}h
-                      </button>
-                    ))}
-                  </div>
+                if (!selectedOption) return null;
 
-                  <div className="mb-6 flex items-baseline gap-1">
-                    <span className={`text-4xl font-black ${pkg.headerStyle}`}>
-                      R$ {selectedOption.price}
-                    </span>
-                    <span className="text-sm font-bold opacity-50 uppercase tracking-widest">
-                      /pacote
-                    </span>
-                  </div>
-
-                  <div className="space-y-4 mb-8 flex-1">
-                    {pkg.benefits.map((benefit, i) => (
-                      <div key={i} className="flex items-start gap-3">
-                        <CheckCircle2 className="w-5 h-5 shrink-0 text-emerald-500" />
-                        <span
-                          className={`text-sm font-medium leading-tight ${pkg.headerStyle} opacity-90`}
-                        >
-                          {benefit}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <Button
-                    onClick={() => handleBuyPackage(pkg, selectedOption)}
-                    disabled={isProcessingCheckout === pkg.id}
-                    className={`w-full h-14 rounded-xl font-black flex items-center justify-center transition-all ${pkg.buttonStyle}`}
+                return (
+                  <div
+                    key={pkg.id}
+                    className={`rounded-3xl p-6 sm:p-8 flex flex-col border transition-all ${pkg.cardStyle}`}
                   >
-                    {isProcessingCheckout === pkg.id ? (
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                      "Assinar Agora"
-                    )}
-                  </Button>
-                </div>
-              );
-            })}
-          </div>
+                    <div className="flex justify-between items-start mb-6">
+                      <div className="flex items-center gap-3">
+                        <div
+                          className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-sm ${pkg.iconStyle}`}
+                        >
+                          <Icon className="w-6 h-6 fill-current" />
+                        </div>
+                        <h4 className={`text-xl font-black ${pkg.headerStyle}`}>
+                          {pkg.title}
+                        </h4>
+                      </div>
+                      {pkg.badge && (
+                        <span className="bg-[#f05e23] text-white text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-md shadow-sm">
+                          {pkg.badge}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Seletor de Horas Estilo Toggle Group */}
+                    <div className="flex items-center gap-2 mb-6">
+                      {pkg.options.map((opt) => (
+                        <button
+                          key={opt.hours}
+                          onClick={() =>
+                            setSelectedBundles({
+                              ...selectedBundles,
+                              [pkg.id]: opt.hours,
+                            })
+                          }
+                          data-state={
+                            currentHours === opt.hours ? "active" : "inactive"
+                          }
+                          className={`flex-1 py-2 text-sm font-bold rounded-xl transition-all border ${pkg.optionStyle}`}
+                        >
+                          {opt.hours}h
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="mb-6 flex items-baseline gap-1">
+                      <span
+                        className={`text-4xl font-black ${pkg.headerStyle}`}
+                      >
+                        R$ {selectedOption.price}
+                      </span>
+                      <span className="text-sm font-bold opacity-50 uppercase tracking-widest">
+                        /pacote
+                      </span>
+                    </div>
+
+                    <div className="space-y-4 mb-8 flex-1">
+                      {pkg.benefits.map((benefit, i) => (
+                        <div key={i} className="flex items-start gap-3">
+                          <CheckCircle2 className="w-5 h-5 shrink-0 text-emerald-500" />
+                          <span
+                            className={`text-sm font-medium leading-tight ${pkg.headerStyle} opacity-90`}
+                          >
+                            {benefit}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <Button
+                      onClick={() => handleBuyPackage(pkg, selectedOption)}
+                      disabled={isProcessingCheckout === pkg.id}
+                      className={`w-full h-14 rounded-xl font-black flex items-center justify-center transition-all ${pkg.buttonStyle}`}
+                    >
+                      {isProcessingCheckout === pkg.id ? (
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                      ) : (
+                        "Assinar Agora"
+                      )}
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       ) : (
         <>
