@@ -7,6 +7,9 @@ import { AdminOverviewTab } from "@/components/admin/overview-tab";
 import { AdminSpecialistsTab } from "@/components/admin/specialists-tab";
 import { AdminPartnersTab } from "@/components/admin/partners-tab";
 import { AdminBookingsTab } from "@/components/admin/bookings-tab";
+// Importando o nosso novo motor de campanhas!
+import { PushCampaignManager } from "@/components/admin/PushCampaignManager";
+
 import {
   Users,
   Building2,
@@ -41,6 +44,7 @@ import {
   CreditCard,
   Banknote,
   UserCheck,
+  Megaphone, // <-- Ícone novo adicionado
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -65,6 +69,7 @@ import { ptBR } from "date-fns/locale";
 export default function AdminDashboardPage() {
   const [activeTab, setActiveTab] = useState("dashboard");
 
+  // Adicionamos a nova aba de Campanhas aqui
   const menuItems = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "especialistas", label: "Especialistas", icon: Users },
@@ -72,6 +77,7 @@ export default function AdminDashboardPage() {
     { id: "salas", label: "Gestão de Salas", icon: Building2 },
     { id: "pacotes", label: "Precificação (Pacotes)", icon: Tags },
     { id: "agendamentos", label: "Agendamentos", icon: CalendarDays },
+    { id: "campanhas", label: "Campanhas Push", icon: Megaphone },
   ];
 
   return (
@@ -144,12 +150,20 @@ export default function AdminDashboardPage() {
           {activeTab === "pacotes" && <PackagesAdminTab />}
           {activeTab === "agendamentos" && <AdminBookingsTab />}
 
+          {/* Renderizando o novo motor de Campanhas */}
+          {activeTab === "campanhas" && (
+            <div className="p-8 flex justify-center items-start animate-in fade-in slide-in-from-bottom-4">
+              <PushCampaignManager />
+            </div>
+          )}
+
           {activeTab !== "salas" &&
             activeTab !== "pacotes" &&
             activeTab !== "dashboard" &&
             activeTab !== "especialistas" &&
             activeTab !== "parceiros" &&
-            activeTab !== "agendamentos" && (
+            activeTab !== "agendamentos" &&
+            activeTab !== "campanhas" && ( // Blindagem para a nova aba
               <div className="h-full flex flex-col items-center justify-center text-slate-400">
                 <Loader2 className="w-10 h-10 animate-spin mb-4 text-slate-300" />
                 <p className="font-bold">Módulo em construção...</p>
@@ -1250,6 +1264,10 @@ function AdminRoomsTab() {
                               availableSlots.map((slot) => {
                                 const isTaken = takenSlots.includes(slot);
                                 // Verifica se este slot nesta exata data já está no carrinho
+                                const currentDateStr = format(
+                                  manualDate,
+                                  "yyyy-MM-dd",
+                                );
                                 const isSelected = selectedSlots.some(
                                   (s) =>
                                     format(s.date, "yyyy-MM-dd") ===
