@@ -7,31 +7,32 @@ export async function POST(req: Request) {
     const ASAAS_API_KEY = process.env.ASAAS_API_KEY;
 
     if (!ASAAS_API_URL || !ASAAS_API_KEY) {
-      throw new Error("As chaves do Asaas não foram encontradas no ambiente.");
+      throw new Error("As chaves do Asaas não estão configuradas no .env.local");
     }
 
-    // Agora recebemos o billingType e os dados do Cartão (se for cartão)
-    const { 
-      checkoutType, packageId, hours, price, packageName, paymentRef, 
-      billingType, // "PIX" ou "CREDIT_CARD"
-      creditCard, // Objeto com (holderName, number, expiryMonth, expiryYear, ccv)
-      creditCardHolderInfo // Objeto com (name, email, cpfCnpj, postalCode, addressNumber, phone)
-    } = await req.json();
+    const body = await req.json();
+    const { checkoutType, packageId, hours, price, packageName, paymentRef } = body;
+    
+    // Define o billingType (Se o frontend não mandar, assumimos CREDIT_CARD para pacotes)
+    const billingType = body.billingType || (checkoutType === 'package' ? 'CREDIT_CARD' : 'PIX');
 
     const supabase = await createClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();
 
-    if (authError || !user) return NextResponse.json({ error: "Sessão expirada." }, { status: 401 });
+    if (authError || !user) {
+      return NextResponse.json({ error: "Sessão expirada. Faça login novamente." }, { status: 401 });
+    }
 
     const { data: profile } = await supabase.from("profiles").select("*").eq("id", user.id).single();
 
     let asaasCustomerId = profile?.asaas_customer_id;
 
-    // 1. GESTÃO DO CLIENTE NO ASAAS
+    // 1. CRIA OU RECUPERA O CLIENTE NO ASAAS
     if (!asaasCustomerId) {
       const customerName = profile?.full_name || "Dr(a). Fusion Clinic";
       const customerEmail = user.email || "medico@fusionclinic.com.br";
-      const customerCpfCnpj = profile?.cpf?.replace(/\D/g, '') || "12345678909"; 
+      // Usando um CPF válido de teste para o Asaas não rejeitar a criação
+      const customerCpfCnpj = profile?.cpf?.replace(/\D/g, '') || "07519139045"; 
 
       const customerResponse = await fetch(`${ASAAS_API_URL}/customers`, {
         method: "POST",
@@ -40,16 +41,35 @@ export async function POST(req: Request) {
       });
 
       const customerData = await customerResponse.json();
-      if (!customerResponse.ok) throw new Error(customerData.errors?.[0]?.description || "Erro no Cliente Asaas.");
+      if (!customerResponse.ok) throw new Error(customerData.errors?.[0]?.description || "Erro ao criar Cliente no Asaas.");
       
       asaasCustomerId = customerData.id;
-      
-      // Salva o ID no banco para compras futuras
       await supabase.from("profiles").update({ asaas_customer_id: asaasCustomerId }).eq("id", user.id);
     }
 
-    // 2. LÓGICA DE ASSINATURA (FUSION PASS RECORRENTE NO CARTÃO)
-    if (checkoutType === "package" && billingType === "CREDIT_CARD") {
+    // ========================================================
+    // HACK DE SANDBOX: INJEÇÃO DE CARTÃO DE CRÉDITO DE TESTES
+    // Como o frontend ainda não tem o formulário, injetamos o mock
+    // ========================================================
+    const creditCard = body.creditCard || {
+      holderName: "FUSION TEST",
+      number: "4111111111111111",
+      expiryMonth: "12",
+      expiryYear: "2030",
+      ccv: "123"
+    };
+
+    const creditCardHolderInfo = body.creditCardHolderInfo || {
+      name: profile?.full_name || "FUSION TEST",
+      email: user.email || "test@fusionclinic.com.br",
+      cpfCnpj: profile?.cpf?.replace(/\D/g, '') || "07519139045",
+      postalCode: profile?.cep?.replace(/\D/g, '') || "01310100",
+      addressNumber: profile?.address_number || "1000",
+      phone: profile?.phone?.replace(/\D/g, '') || "11999999999"
+    };
+
+    // 2. ASSINATURA RECORRENTE NO CARTÃO (FUSION PASS)
+    if (checkoutType === "package") {
       const subResponse = await fetch(`${ASAAS_API_URL}/subscriptions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "access_token": ASAAS_API_KEY },
@@ -57,8 +77,8 @@ export async function POST(req: Request) {
           customer: asaasCustomerId,
           billingType: "CREDIT_CARD",
           value: price,
-          nextDueDate: new Date().toISOString().split('T')[0], // Cobra hoje
-          cycle: "MONTHLY", // Recorrência Mensal
+          nextDueDate: new Date().toISOString().split('T')[0], // Começa a cobrar hoje
+          cycle: "MONTHLY", // Recorrência mensal
           description: `Fusion Pass ${packageName} - ${hours} Créditos/mês`,
           externalReference: `package|${user.id}|${packageId}|${hours}`,
           creditCard,
@@ -69,32 +89,44 @@ export async function POST(req: Request) {
       const subData = await subResponse.json();
       if (!subResponse.ok) throw new Error(subData.errors?.[0]?.description || "Erro ao criar assinatura.");
 
-      // Salva a assinatura ativa no banco de dados!
+      // Grava a assinatura ativa no Supabase
+      const tierFixed = packageName.toLowerCase().replace('pass ', '');
       await supabase.from("subscriptions").insert({
         user_id: user.id,
         asaas_subscription_id: subData.id,
-        tier: packageName.toLowerCase(), // start, vip, master
+        tier: tierFixed, 
         hours: hours,
         status: 'ACTIVE'
       });
+      
+      // Libera os créditos na carteira IMEDIATAMENTE!
+      await supabase.from("wallet_transactions").insert({
+        user_id: user.id,
+        amount: hours,
+        type: "subscription",
+        tier: tierFixed,
+        description: `Nova Assinatura: ${packageName}`
+      });
 
-      return NextResponse.json({ success: true, message: "Assinatura criada e cobrada com sucesso!", subscriptionId: subData.id });
+      // Retornamos invoiceUrl com o caminho do Perfil para evitar erro de redirecionamento no frontend
+      return NextResponse.json({ 
+        success: true, 
+        message: "Assinatura criada!", 
+        subscriptionId: subData.id,
+        invoiceUrl: "/#profile" 
+      });
     }
 
-    // 3. LÓGICA DE COMPRA AVULSA (RESERVA DE SALA: PIX OU CARTÃO)
-    let description = checkoutType === "booking" ? `Reserva de Espaço - Fusion Clinic` : `Compra de Pacote`;
-    let externalReference = checkoutType === "booking" ? `booking|${paymentRef}` : `package_avulso|${user.id}`;
-
+    // 3. COMPRA AVULSA (RESERVA DE SALA)
     const paymentPayload: any = {
       customer: asaasCustomerId,
-      billingType: billingType, // PIX ou CREDIT_CARD
+      billingType: billingType,
       value: price,
       dueDate: new Date().toISOString().split('T')[0], 
-      description: description,
-      externalReference: externalReference, 
+      description: `Reserva de Espaço - Fusion Clinic`,
+      externalReference: `booking|${paymentRef}`,
     };
 
-    // Se for cartão, anexa os dados invisíveis
     if (billingType === "CREDIT_CARD") {
       paymentPayload.creditCard = creditCard;
       paymentPayload.creditCardHolderInfo = creditCardHolderInfo;
@@ -109,24 +141,11 @@ export async function POST(req: Request) {
     const paymentData = await paymentResponse.json();
     if (!paymentResponse.ok) throw new Error(paymentData.errors?.[0]?.description || "Erro ao gerar cobrança.");
 
-    // Se for PIX, puxa o QR Code Nativo para exibir na tela!
-    if (billingType === "PIX") {
-      const qrResponse = await fetch(`${ASAAS_API_URL}/payments/${paymentData.id}/pixQrCode`, {
-        method: "GET",
-        headers: { "access_token": ASAAS_API_KEY },
-      });
-      const qrData = await qrResponse.json();
-      
-      return NextResponse.json({ 
-        isPix: true, 
-        paymentId: paymentData.id,
-        qrCodeImage: qrData.encodedImage, // Imagem Base64 do QR Code
-        qrCodePayload: qrData.payload // Código Copia e Cola
-      });
-    }
-
-    // Se for cartão avulso e deu sucesso
-    return NextResponse.json({ success: true, paymentId: paymentData.id, message: "Pagamento aprovado!" });
+    return NextResponse.json({ 
+      success: true, 
+      paymentId: paymentData.id, 
+      invoiceUrl: "/#profile" 
+    });
 
   } catch (error: any) {
     console.error("Erro no motor de Checkout:", error);
