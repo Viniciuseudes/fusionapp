@@ -148,7 +148,14 @@ export function BookingsTab({
     rating: number;
     comment: string;
   }>({ isOpen: false, booking: null, rating: 0, comment: "" });
+
   const [cancelModal, setCancelModal] = useState<{
+    isOpen: boolean;
+    booking: Booking | null;
+  }>({ isOpen: false, booking: null });
+
+  // NOVO: Modal de Extensão Automática (Overtime)
+  const [extendModal, setExtendModal] = useState<{
     isOpen: boolean;
     booking: Booking | null;
   }>({ isOpen: false, booking: null });
@@ -185,6 +192,11 @@ export function BookingsTab({
     cancelModal.isOpen,
     () => setCancelModal({ isOpen: false, booking: null }),
     "modal-cancelamento",
+  );
+  useMobileBack(
+    extendModal.isOpen,
+    () => setExtendModal({ isOpen: false, booking: null }),
+    "modal-extensao",
   );
   useMobileBack(isSheetOpen, () => setIsSheetOpen(false), "sheet-detalhes");
   useMobileBack(
@@ -283,7 +295,7 @@ export function BookingsTab({
     fetchBookings();
   }, [supabase]);
 
-  // --- MOTOR DE NOTIFICAÇÕES (WEB PUSH / TOAST) ---
+  // --- MOTOR DE NOTIFICAÇÕES E ESTEIRA DE OVERTIME (SÊNIOR) ---
   useEffect(() => {
     if ("Notification" in window && Notification.permission === "default") {
       Notification.requestPermission();
@@ -301,23 +313,45 @@ export function BookingsTab({
           if (diffStart === 15) {
             triggerNotification(
               "Check-in Liberado! 🔓",
-              `Sua sala (${b.rooms.name}) está pronta para você. Pode realizar o check-in no app.`,
+              `Sua sala (${b.rooms.name}) está pronta para você. Pode realizar o check-in antecipado.`,
             );
           }
         } else if (b.status === "in_progress") {
+          // Calcula diferença de minutos a partir do fim da reserva
+          // Ex: se end_time = 14:50 e nowTime = 14:55 -> diffEnd = -5
           const diffEnd = differenceInMinutes(parseISO(b.end_time), nowTime);
-          if (diffEnd === 10) {
+
+          if (diffEnd === 0) {
+            // 14:50 (0 mins)
             triggerNotification(
-              "Sessão Acabando ⏰",
-              `Faltam apenas 10 minutos para o término do seu horário na sala ${b.rooms.name}. Organize a saída para não gerar multas.`,
+              "Horário Esgotado ⏰",
+              `Seu horário na sala ${b.rooms.name} acabou. Por favor, realize o checkout no app.`,
             );
+          } else if (diffEnd === -5) {
+            // 14:55 (+5 mins atrasado)
+            triggerNotification(
+              "⚠️ Advertência!",
+              "Você já ultrapassou 5 minutos do seu horário limite. Libere a sala imediatamente para não gerar multas.",
+            );
+          } else if (diffEnd === -10) {
+            // 15:00 (+10 mins atrasado) - Janela de Pergunta
+            triggerNotification(
+              "Deseja estender? ⏳",
+              "Não identificamos seu checkout. Caso queira, você pode estender por mais 1 hora.",
+            );
+            if (!extendModal.isOpen) {
+              setExtendModal({ isOpen: true, booking: b });
+            }
+          } else if (diffEnd === -15) {
+            // 15:05 (+15 mins atrasado) - Marreta do Overtime
+            handleAutoExtend(b);
           }
         }
       });
     }, 60000); // Roda a cada 1 minuto
 
     return () => clearInterval(interval);
-  }, [bookings]);
+  }, [bookings, extendModal.isOpen]);
 
   const triggerNotification = (title: string, body: string) => {
     if ("Notification" in window && Notification.permission === "granted") {
@@ -331,6 +365,52 @@ export function BookingsTab({
         ) as any,
         description: body,
       });
+    }
+  };
+
+  // --- LÓGICA DE OVERTIME AUTOMÁTICO (NOVA HORA) ---
+  const handleAutoExtend = async (booking: Booking) => {
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const tier = booking.rooms.tier || "start";
+
+      // 1. Debita 1 Crédito da carteira compulsoriamente
+      await supabase.from("wallet_transactions").insert({
+        user_id: user.id,
+        amount: -1,
+        type: "usage",
+        tier: tier,
+        description: `Extensão Automática (Overtime): ${booking.rooms.name}`,
+      });
+
+      // 2. Adiciona +1 hora no end_time
+      const oldEndTime = new Date(booking.end_time);
+      const newEndTime = new Date(
+        oldEndTime.getTime() + 60 * 60 * 1000,
+      ).toISOString();
+
+      await supabase
+        .from("bookings")
+        .update({
+          end_time: newEndTime,
+          total_cost: booking.total_cost + 1,
+        })
+        .eq("id", booking.id);
+
+      toast({
+        title: "Extensão Automática 🔄",
+        description:
+          "Como o checkout não foi realizado no prazo, 1 hora foi debitada da sua carteira e sua sessão foi estendida.",
+      });
+
+      setExtendModal({ isOpen: false, booking: null });
+      fetchBookings();
+    } catch (e) {
+      console.error("Erro na extensão automática:", e);
     }
   };
 
@@ -418,7 +498,6 @@ export function BookingsTab({
     if (!scannerConfig.booking) return;
     const currentBooking = scannerConfig.booking;
 
-    // Se estava no manual mode, esconde o modal
     setScannerConfig({
       isOpen: false,
       type: "checkin",
@@ -1196,7 +1275,6 @@ CNPJ: 49.351.127/0001-44
                     )}
                   </div>
 
-                  {/* BOTÃO CHAT AQUI TAMBÉM PELA UX SÊNIOR */}
                   {activeTab === "upcoming" && (
                     <Button
                       onClick={(e) => handleOpenChat(selectedBooking, e)}
@@ -1395,6 +1473,48 @@ CNPJ: 49.351.127/0001-44
             })()}
         </SheetContent>
       </Sheet>
+
+      {/* MODAL DE EXTENSÃO AUTOMÁTICA (OVERTIME) */}
+      <Dialog
+        open={extendModal.isOpen}
+        onOpenChange={(open) =>
+          !open && setExtendModal({ isOpen: false, booking: null })
+        }
+      >
+        <DialogContent className="sm:max-w-md rounded-[2rem] p-6 bg-white border-0">
+          <DialogTitle className="text-xl font-black text-slate-900 flex items-center gap-2">
+            <Timer className="w-6 h-6 text-[#f05e23]" /> Estender Sessão?
+          </DialogTitle>
+          <DialogDescription className="text-sm font-medium text-slate-500 mb-6">
+            O seu horário já acabou e notamos que você ainda não fez o checkout.
+            A sala está livre no próximo horário. Deseja estender sua
+            permanência por mais 1 hora?
+            <br />
+            <br />
+            <span className="text-red-500 font-bold">
+              Atenção: Se você não confirmar sua saída (checkout) em 5 minutos,
+              o sistema fará a renovação e cobrará 1 hora automaticamente.
+            </span>
+          </DialogDescription>
+          <div className="flex gap-3">
+            <Button
+              onClick={() => setExtendModal({ isOpen: false, booking: null })}
+              variant="outline"
+              className="flex-1 h-12 rounded-xl font-bold border-slate-200 text-slate-700"
+            >
+              Vou fazer Checkout
+            </Button>
+            <Button
+              onClick={() => {
+                if (extendModal.booking) handleAutoExtend(extendModal.booking);
+              }}
+              className="flex-1 h-12 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl"
+            >
+              Estender (+1 CR)
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* MODAL DE RECIBO DIGITAL */}
       <Dialog
@@ -1621,7 +1741,7 @@ CNPJ: 49.351.127/0001-44
         </DialogContent>
       </Dialog>
 
-      {/* MODAL DE CANCELAMENTO */}
+      {/* SÊNIOR: MODAL DE CANCELAMENTO CLARO E TRANSPARENTE */}
       <Dialog
         open={cancelModal.isOpen}
         onOpenChange={(open) =>
@@ -1637,10 +1757,11 @@ CNPJ: 49.351.127/0001-44
               ).getTime();
               const isRefundable =
                 (startMs - new Date().getTime()) / (1000 * 60 * 60) >= 24;
+
               return (
                 <>
                   <div
-                    className={`p-6 pb-8 text-center text-white ${isRefundable ? "bg-emerald-600" : "bg-red-600"}`}
+                    className={`p-6 pb-8 text-center text-white ${isRefundable ? "bg-amber-500" : "bg-red-600"}`}
                   >
                     <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4 backdrop-blur-md">
                       <AlertTriangle className="w-8 h-8 text-white" />
@@ -1650,6 +1771,31 @@ CNPJ: 49.351.127/0001-44
                     </h2>
                   </div>
                   <div className="p-6 bg-white space-y-6">
+                    {/* EXPLICAÇÃO DE REEMBOLSO (UX SÊNIOR) */}
+                    <div
+                      className={`p-4 rounded-xl border ${isRefundable ? "bg-emerald-50 border-emerald-100" : "bg-red-50 border-red-100"}`}
+                    >
+                      {isRefundable ? (
+                        <p className="text-sm text-emerald-800 font-medium leading-relaxed">
+                          Como você está cancelando com{" "}
+                          <b className="font-black">
+                            mais de 24 horas de antecedência
+                          </b>
+                          , o valor desta reserva será integralmente devolvido à
+                          sua carteira. Você terá <b>30 dias</b> para utilizar
+                          este crédito em uma nova locação.
+                        </p>
+                      ) : (
+                        <p className="text-sm text-red-800 font-medium leading-relaxed">
+                          Como falta{" "}
+                          <b className="font-black">menos de 24 horas</b> para o
+                          início da sua reserva, a janela gratuita expirou. Este
+                          cancelamento <b>não é reembolsável</b> e o
+                          crédito/valor não retornará para sua conta.
+                        </p>
+                      )}
+                    </div>
+
                     <div className="flex gap-3 pt-2">
                       <Button
                         onClick={() =>
@@ -1658,14 +1804,14 @@ CNPJ: 49.351.127/0001-44
                         variant="outline"
                         className="flex-1 h-12 rounded-xl font-bold text-slate-700 border-slate-200"
                       >
-                        Manter Reserva
+                        Não, voltar
                       </Button>
                       <Button
                         onClick={handleConfirmCancel}
                         disabled={actionLoading}
-                        className={`flex-1 h-12 rounded-xl font-black text-white ${isRefundable ? "bg-emerald-600" : "bg-red-600"}`}
+                        className={`flex-1 h-12 rounded-xl font-black text-white ${isRefundable ? "bg-amber-500 hover:bg-amber-600" : "bg-red-600 hover:bg-red-700"}`}
                       >
-                        {actionLoading ? "Cancelando..." : "Confirmar"}
+                        {actionLoading ? "Cancelando..." : "Sim, Cancelar"}
                       </Button>
                     </div>
                   </div>
@@ -1748,7 +1894,6 @@ CNPJ: 49.351.127/0001-44
             }
             onError={(err) => {
               console.error("Câmera bloqueada/falhou:", err);
-              // Quando o scanner nativo falha, trocamos automaticamente para o Modo Manual!
               setScannerConfig((prev) => ({ ...prev, cameraFailed: true }));
             }}
           />
