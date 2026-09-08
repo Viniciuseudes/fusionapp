@@ -2,7 +2,13 @@
 
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Send, Megaphone, Target } from "lucide-react";
+import {
+  Loader2,
+  Send,
+  Megaphone,
+  Target,
+  Link as LinkIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,7 +20,7 @@ export function PushCampaignManager() {
   const [formData, setFormData] = useState({
     title: "",
     message: "",
-    url: "/dashboard",
+    url: "/", // O padrão é abrir na Home/Dashboard
     filterType: "all", // all, specialty, city
     filterValue: "",
   });
@@ -44,8 +50,7 @@ export function PushCampaignManager() {
         description: `Entregue para ${data.success} profissionais. (Falhas: ${data.failed})`,
       });
 
-      // Limpa os campos após o envio
-      setFormData({ ...formData, title: "", message: "" });
+      setFormData({ ...formData, title: "", message: "", url: "/" });
     } catch (error: any) {
       toast({
         variant: "destructive",
@@ -58,7 +63,7 @@ export function PushCampaignManager() {
   };
 
   return (
-    <div className="bg-white p-6 md:p-8 rounded-[2rem] border border-slate-200 shadow-sm max-w-xl">
+    <div className="bg-white p-6 md:p-8 rounded-[2rem] border border-slate-200 shadow-sm max-w-xl w-full">
       <div className="flex items-center gap-3 mb-6">
         <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center">
           <Megaphone className="w-6 h-6 text-indigo-600" />
@@ -102,7 +107,24 @@ export function PushCampaignManager() {
           />
         </div>
 
-        <div className="p-5 bg-slate-50 rounded-2xl border border-slate-100 space-y-4">
+        {/* NOVO CAMPO: DEEP LINKING (URL) */}
+        <div className="space-y-2">
+          <Label className="font-bold text-slate-700 flex items-center gap-1.5">
+            <LinkIcon className="w-4 h-4 text-slate-400" /> Link de Destino
+          </Label>
+          <Input
+            placeholder="Ex: /dashboard ou /profile"
+            value={formData.url}
+            onChange={(e) => setFormData({ ...formData, url: e.target.value })}
+            className="h-12 bg-slate-50 border-slate-200 rounded-xl text-slate-600 font-medium"
+          />
+          <p className="text-[11px] text-slate-500 font-medium mt-1">
+            Para onde o aplicativo deve ir quando o usuário clicar na
+            notificação? (Padrão: <b>/</b>)
+          </p>
+        </div>
+
+        <div className="p-5 bg-slate-50 rounded-2xl border border-slate-100 space-y-4 mt-2">
           <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
             <Target className="w-4 h-4" /> Segmentação de Público
           </h3>
@@ -159,7 +181,7 @@ export function PushCampaignManager() {
         <Button
           type="submit"
           disabled={loading}
-          className="w-full h-14 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-xl shadow-lg shadow-indigo-600/20 text-base"
+          className="w-full h-14 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-xl shadow-lg shadow-indigo-600/20 text-base mt-4"
         >
           {loading ? (
             <Loader2 className="w-5 h-5 animate-spin" />

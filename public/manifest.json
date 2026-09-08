@@ -1,7 +1,7 @@
 {
   "id": "/",
   "name": "Fusion Clinic",
-  "short_name": "Fusion",
+  "short_name": "Fusion Clinic",
   "description": "Marketplace de Espaços para Profissionais de Saúde",
   "start_url": "/",
   "display": "standalone",
