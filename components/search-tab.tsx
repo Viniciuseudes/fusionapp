@@ -380,7 +380,6 @@ export function SearchTab({
             .eq("id", user.id)
             .single();
 
-          // SÊNIOR: Adicionado expires_at na query!
           const { data: txData } = await supabase
             .from("wallet_transactions")
             .select("amount, created_at, description, type, tier, expires_at")
@@ -395,7 +394,6 @@ export function SearchTab({
 
           if (txData) {
             txData.forEach((tx) => {
-              // REGRA DE OURO: Ignorar créditos positivos expirados
               if (
                 tx.amount > 0 &&
                 tx.expires_at &&
@@ -415,6 +413,22 @@ export function SearchTab({
               }
             });
           }
+
+          // === SÊNIOR: EFEITO CASCATA VISUAL (Impede saldos negativos no display) ===
+          if (bStart < 0) {
+            bVip += bStart;
+            bStart = 0;
+          }
+          if (bVip < 0) {
+            bMaster += bVip;
+            bVip = 0;
+          }
+
+          // Trava final de segurança para nunca exibir números negativos
+          bStart = Math.max(0, bStart);
+          bVip = Math.max(0, bVip);
+          bMaster = Math.max(0, bMaster);
+          // =====================================================================
 
           setWalletBalances({ start: bStart, vip: bVip, master: bMaster });
 
@@ -825,6 +839,7 @@ export function SearchTab({
             </div>
           </div>
 
+          {/* TABELA DE PREÇOS REFINADA */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-12 items-start">
             {dynamicPackages.map((pkg) => {
               const Icon = pkg.icon;
@@ -858,6 +873,7 @@ export function SearchTab({
                     )}
                   </div>
 
+                  {/* Seletor de Horas Estilo Toggle Group */}
                   <div className="flex items-center gap-2 mb-6">
                     {pkg.options.map((opt) => (
                       <button
@@ -943,6 +959,7 @@ export function SearchTab({
             </div>
           </div>
 
+          {/* ORGANIZAÇÃO DOS FILTROS ELEGANTES (UX APRIMORADA) */}
           <div className="px-4 py-2 mx-auto max-w-5xl w-full mt-4 space-y-5">
             <div>
               <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-2 pl-1">
@@ -961,6 +978,7 @@ export function SearchTab({
               </div>
             </div>
 
+            {/* Aviso Informativo do Turno Mensal */}
             {rentalType === "turno" && (
               <div className="bg-blue-50/80 border border-blue-100 p-4 rounded-2xl flex items-start gap-3 mt-2 animate-in fade-in zoom-in-95">
                 <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
@@ -1059,6 +1077,7 @@ export function SearchTab({
             </div>
           ) : (
             <div className="px-4 max-w-5xl mx-auto w-full space-y-12 pb-12">
+              {/* SESSÃO PREMIUM (Renderiza independente da modalidade de aluguel) */}
               {(activeTier === "all" || activeTier === "master") &&
                 masterRooms.length > 0 && (
                   <section className="bg-zinc-900 -mx-4 px-4 py-8 lg:rounded-3xl lg:mx-0 border border-zinc-800 shadow-2xl">
@@ -1074,6 +1093,7 @@ export function SearchTab({
                       </div>
                     </div>
 
+                    {/* Banner promocional SÓ aparece se for hora e se a tag específica estiver clicada */}
                     {activeTier === "master" &&
                       rentalType === "hora" &&
                       renderFusionPassBanner()}
@@ -1102,6 +1122,7 @@ export function SearchTab({
                   </section>
                 )}
 
+              {/* SESSÃO VIP */}
               {(activeTier === "all" || activeTier === "vip") &&
                 vipRooms.length > 0 && (
                   <section className="pt-8">
@@ -1145,6 +1166,7 @@ export function SearchTab({
                   </section>
                 )}
 
+              {/* SESSÃO BASIC */}
               {(activeTier === "all" || activeTier === "start") &&
                 startRooms.length > 0 && (
                   <section className="border-t border-zinc-200 pt-8 pb-8 mt-8">
