@@ -6,11 +6,11 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
   const [stage, setStage] = useState(0);
 
   useEffect(() => {
-    // ESTEIRA DE ANIMAÇÃO COREOGRAFADA (Timings precisos de UX)
-    const t1 = setTimeout(() => setStage(1), 100); // Entra a logo
-    const t2 = setTimeout(() => setStage(2), 600); // Entra o Glow e a barra carrega
-    const t3 = setTimeout(() => setStage(3), 2800); // Fade out (desmonta a tela)
-    const t4 = setTimeout(() => onComplete(), 3300); // Libera o app
+    // TIMING COREOGRAFADO PARA UMA EXPERIÊNCIA CINEMATOGRÁFICA
+    const t1 = setTimeout(() => setStage(1), 50); // Inicia o "respiro" da logo e o Glow
+    const t2 = setTimeout(() => setStage(2), 600); // Entra o Slogan e a barra começa a carregar
+    const t3 = setTimeout(() => setStage(3), 2800); // Tela dissolve suavemente
+    const t4 = setTimeout(() => onComplete(), 3300); // App é liberado para uso
 
     return () => {
       clearTimeout(t1);
@@ -20,54 +20,49 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
     };
   }, [onComplete]);
 
-  // A cor exata extraída da sua marca
   const brandOrange = "#f05e23";
 
   return (
     <div
-      className={`fixed inset-0 z-[9999] bg-white flex flex-col items-center justify-center transition-all duration-500 ease-in-out ${
+      className={`fixed inset-0 z-[9999] bg-white flex flex-col items-center justify-center transition-all duration-700 ease-in-out ${
         stage === 3
           ? "opacity-0 scale-105 pointer-events-none"
           : "opacity-100 scale-100"
       }`}
     >
-      {/* EFEITO DE BRILHO (GLOW) AO FUNDO */}
+      {/* EFEITO DE BRILHO (GLOW) PULSANTE AO FUNDO */}
       <div
-        className={`absolute w-64 h-64 rounded-full blur-[80px] transition-all duration-[2000ms] ease-out ${
-          stage >= 2 ? "opacity-20 scale-150" : "opacity-0 scale-50"
+        className={`absolute w-[300px] h-[300px] rounded-full blur-[100px] transition-all duration-[2000ms] ease-out ${
+          stage >= 1 ? "opacity-20 scale-150" : "opacity-0 scale-50"
         }`}
         style={{ backgroundColor: brandOrange }}
       />
 
-      {/* ÁREA DA LOGO ANIMADA */}
-      <div
-        className={`relative z-10 flex flex-col items-center transition-all duration-1000 ease-out ${
-          stage >= 1 ? "translate-y-0 opacity-100" : "translate-y-12 opacity-0"
-        }`}
-      >
-        {/* A imagem do seu "F" com fundo transparente */}
+      <div className="relative z-10 flex flex-col items-center">
+        {/* A LOGO PRINCIPAL (Com o texto "Fusion Clinic" já embutido nela) */}
         <img
           src="/logo-fusion-orange.png"
           alt="Fusion Clinic"
-          className="w-32 h-32 object-contain drop-shadow-2xl"
+          className={`w-56 h-auto object-contain transition-all duration-1000 ease-out ${
+            stage >= 1
+              ? "translate-y-0 opacity-100 drop-shadow-2xl"
+              : "translate-y-4 opacity-0"
+          }`}
         />
 
-        {/* TEXTO DA MARCA (Opcional, se já não estiver na imagem acima) */}
+        {/* O NOVO SLOGAN SOFISTICADO */}
         <div
-          className={`mt-6 overflow-hidden transition-all duration-1000 delay-300 ${
-            stage >= 1 ? "opacity-100" : "opacity-0"
+          className={`mt-3 overflow-hidden transition-all duration-1000 delay-300 ${
+            stage >= 2 ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"
           }`}
         >
-          <h1
-            className="text-4xl font-black tracking-tighter"
-            style={{ color: brandOrange }}
-          >
-            Fusion Clinic
-          </h1>
+          <p className="text-slate-400 font-semibold tracking-[0.2em] text-[10px] uppercase text-center">
+            A sua flexibilidade em consutórios
+          </p>
         </div>
       </div>
 
-      {/* BARRA DE PROGRESSO MINIMALISTA (Estilo Apple) */}
+      {/* BARRA DE PROGRESSO APPLE-STYLE */}
       <div
         className={`absolute bottom-20 w-48 h-1 bg-slate-100 rounded-full overflow-hidden transition-all duration-700 delay-500 ${
           stage >= 1 ? "opacity-100" : "opacity-0"
