@@ -3,6 +3,7 @@ import { Inter, DM_Sans } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
 import { Toaster } from "@/components/ui/toaster";
 import { PWAPrompt } from "@/components/pwa-prompt";
+import { SplashManager } from "@/components/splash-manager"; // <-- IMPORTAÇÃO AQUI
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
@@ -15,7 +16,7 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Fusion", // Nome curto otimizado para a tela inicial do iPhone
+    title: "Fusion",
   },
   icons: {
     icon: [
@@ -23,16 +24,16 @@ export const metadata: Metadata = {
       { url: "/icon-dark-32x32.png", media: "(prefers-color-scheme: dark)" },
       { url: "/icon.svg", type: "image/svg+xml" },
     ],
-    apple: "/icon-192x192.png", // Ícone que o iOS (iPhone/iPad) vai usar
+    apple: "/icon-192x192.png",
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#ffffff", // Sincronizado com a Splash Screen para evitar flashes de cor
+  themeColor: "#ffffff",
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
-  userScalable: false, // Trava o zoom (Sensação de app nativo)
+  userScalable: false,
 };
 
 export default function RootLayout({
@@ -43,7 +44,6 @@ export default function RootLayout({
   return (
     <html lang="pt-BR">
       <head>
-        {/* ARMADILHA GLOBAL PARA O PWA: Captura o evento antes do React carregar */}
         <script
           dangerouslySetInnerHTML={{
             __html: `
@@ -59,7 +59,9 @@ export default function RootLayout({
       <body
         className={`${inter.variable} ${dmSans.variable} font-sans antialiased`}
       >
-        {children}
+        {/* ENVOLVENDO O CHILDREN COM O GERENCIADOR DE SPLASH */}
+        <SplashManager>{children}</SplashManager>
+
         <Analytics />
         <Toaster />
         <PWAPrompt />
