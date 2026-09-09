@@ -6,6 +6,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useMobileBack } from "@/hooks/use-mobile-back";
+import { addMonths, format } from "date-fns";
+import { ptBR } from "date-fns/locale";
 import {
   Search,
   SlidersHorizontal,
@@ -23,6 +25,9 @@ import {
   Building2,
   Stethoscope,
   Info,
+  Zap,
+  RefreshCw,
+  Unlock,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -193,7 +198,6 @@ export function SearchTab({
     master: 0,
   });
 
-  // SÊNIOR: Estado da Assinatura na busca
   const [activeSub, setActiveSub] = useState<any>(null);
 
   const [bestHourlyRates, setBestHourlyRates] = useState<
@@ -210,6 +214,13 @@ export function SearchTab({
     string | null
   >(null);
 
+  // SÊNIOR: Estado do Modal Transparente de Assinatura
+  const [subModal, setSubModal] = useState<{
+    isOpen: boolean;
+    pkg: PlanPackage | null;
+    option: PlanOption | null;
+  }>({ isOpen: false, pkg: null, option: null });
+
   useMobileBack(
     isWalletOpen,
     () => setIsWalletOpen(false),
@@ -220,10 +231,85 @@ export function SearchTab({
     () => setIsFilterModalOpen(false),
     "filter-modal",
   );
+  useMobileBack(
+    subModal.isOpen,
+    () => setSubModal({ isOpen: false, pkg: null, option: null }),
+    "sub-modal",
+  );
+
+  const fetchWalletData = async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data: profileData } = await supabase
+      .from("profiles")
+      .select("full_name")
+      .eq("id", user.id)
+      .single();
+
+    const { data: subData } = await supabase
+      .from("subscriptions")
+      .select("tier, status, hours")
+      .eq("user_id", user.id)
+      .eq("status", "ACTIVE")
+      .maybeSingle();
+    setActiveSub(subData);
+
+    const { data: txData } = await supabase
+      .from("wallet_transactions")
+      .select("amount, created_at, description, type, tier, expires_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false });
+
+    let bStart = 0,
+      bVip = 0,
+      bMaster = 0;
+    const now = new Date();
+
+    if (txData) {
+      txData.forEach((tx) => {
+        if (tx.amount > 0 && tx.expires_at && new Date(tx.expires_at) < now)
+          return;
+        const amt = Number(tx.amount);
+        const txTier = tx.tier?.toLowerCase() || "start";
+
+        if (txTier === "master" || txTier === "premium") bMaster += amt;
+        else if (txTier === "vip") bVip += amt;
+        else bStart += amt;
+      });
+    }
+
+    if (bStart < 0) {
+      bVip += bStart;
+      bStart = 0;
+    }
+    if (bVip < 0) {
+      bMaster += bVip;
+      bVip = 0;
+    }
+
+    bStart = Math.max(0, bStart);
+    bVip = Math.max(0, bVip);
+    bMaster = Math.max(0, bMaster);
+
+    setWalletBalances({ start: bStart, vip: bVip, master: bMaster });
+
+    const { data: favData } = await supabase
+      .from("favorites")
+      .select("room_id")
+      .eq("user_id", user.id);
+    if (favData) setFavorites(new Set(favData.map((f) => f.room_id)));
+
+    setProfile({
+      name: profileData?.full_name || "Doutor(a)",
+      balance: bStart + bVip + bMaster,
+    });
+  };
 
   useEffect(() => {
     async function fetchData() {
-      // 1. Busca os pacotes
       const { data: pkgsData } = await supabase
         .from("packages")
         .select("*")
@@ -270,21 +356,15 @@ export function SearchTab({
         });
       }
 
-      // 2. Busca as salas e avaliações
       const { data: roomsData, error: roomsError } = await supabase
         .from("rooms")
         .select(
-          `
-          id, name, image_url, modalities, is_partner, specialty, tier, address_details, host_id,
-          reviews ( rating )
-        `,
+          `id, name, image_url, modalities, is_partner, specialty, tier, address_details, host_id, reviews ( rating )`,
         )
         .eq("is_active", true)
         .eq("is_paused", false);
 
-      if (roomsError) {
-        console.error("Erro ao buscar salas:", roomsError);
-      }
+      if (roomsError) console.error("Erro ao buscar salas:", roomsError);
 
       if (roomsData) {
         const formattedRooms = roomsData.map((r: any) => {
@@ -293,7 +373,6 @@ export function SearchTab({
           const finalModalities = Array.isArray(r.modalities)
             ? r.modalities
             : [];
-
           const reviewsArray = r.reviews || [];
           const reviews_count = reviewsArray.length;
           const rating =
@@ -373,86 +452,7 @@ export function SearchTab({
       }
 
       if (!isPublic) {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (user) {
-          const { data: profileData } = await supabase
-            .from("profiles")
-            .select("full_name")
-            .eq("id", user.id)
-            .single();
-
-          // SÊNIOR: Busca assinatura ativa
-          const { data: subData } = await supabase
-            .from("subscriptions")
-            .select("tier, status")
-            .eq("user_id", user.id)
-            .eq("status", "ACTIVE")
-            .maybeSingle();
-          setActiveSub(subData);
-
-          const { data: txData } = await supabase
-            .from("wallet_transactions")
-            .select("amount, created_at, description, type, tier, expires_at")
-            .eq("user_id", user.id)
-            .order("created_at", { ascending: false });
-
-          let bStart = 0,
-            bVip = 0,
-            bMaster = 0;
-
-          const now = new Date();
-
-          if (txData) {
-            txData.forEach((tx) => {
-              if (
-                tx.amount > 0 &&
-                tx.expires_at &&
-                new Date(tx.expires_at) < now
-              )
-                return;
-
-              const amt = Number(tx.amount);
-              const txTier = tx.tier?.toLowerCase() || "start";
-
-              if (txTier === "master" || txTier === "premium") {
-                bMaster += amt;
-              } else if (txTier === "vip") {
-                bVip += amt;
-              } else {
-                bStart += amt;
-              }
-            });
-          }
-
-          // SÊNIOR: EFEITO CASCATA VISUAL (Impede saldos negativos no display)
-          if (bStart < 0) {
-            bVip += bStart;
-            bStart = 0;
-          }
-          if (bVip < 0) {
-            bMaster += bVip;
-            bVip = 0;
-          }
-
-          bStart = Math.max(0, bStart);
-          bVip = Math.max(0, bVip);
-          bMaster = Math.max(0, bMaster);
-
-          setWalletBalances({ start: bStart, vip: bVip, master: bMaster });
-
-          const { data: favData } = await supabase
-            .from("favorites")
-            .select("room_id")
-            .eq("user_id", user.id);
-          if (favData) setFavorites(new Set(favData.map((f) => f.room_id)));
-
-          setProfile({
-            name: profileData?.full_name || "Doutor(a)",
-            balance: bStart + bVip + bMaster,
-          });
-        }
+        await fetchWalletData();
       }
       setLoading(false);
     }
@@ -536,8 +536,19 @@ export function SearchTab({
     }
   }
 
-  const handleBuyPackage = async (pkg: PlanPackage, option: PlanOption) => {
-    setIsProcessingCheckout(pkg.id);
+  const handleOpenWalletPromo = () => {
+    setIsWalletOpen(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  // SÊNIOR: Abertura e Confirmação da Assinatura via Modal
+  const handleBuyPackage = (pkg: PlanPackage, option: PlanOption) => {
+    setSubModal({ isOpen: true, pkg, option });
+  };
+
+  const confirmSubscription = async () => {
+    if (!subModal.pkg || !subModal.option) return;
+    setIsProcessingCheckout(subModal.pkg.id);
     try {
       const {
         data: { user },
@@ -547,42 +558,43 @@ export function SearchTab({
           title: "Faça login",
           description: "Você precisa estar logado para assinar.",
         });
-        setIsProcessingCheckout(null);
         return;
       }
-      toast({
-        title: "Preparando ambiente seguro...",
-        description: `Gerando cobrança para o ${pkg.title}`,
-      });
+
       const response = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           checkoutType: "package",
-          packageId: pkg.id,
-          hours: option.hours,
-          price: option.price,
-          packageName: pkg.title,
+          packageId: subModal.pkg.id,
+          hours: subModal.option.hours,
+          price: subModal.option.price,
+          packageName: subModal.pkg.title,
         }),
       });
       const data = await response.json();
-      if (!response.ok) {
+      if (!response.ok)
         throw new Error(data.error || "Falha ao gerar pagamento.");
-      }
-      window.location.href = data.invoiceUrl;
+
+      await fetchWalletData(); // Atualiza a carteira em tempo real no frontend
+
+      toast({
+        title: "Assinatura Ativa! 🎉",
+        description: "Suas horas foram adicionadas à carteira com sucesso.",
+      });
+
+      setSubModal({ isOpen: false, pkg: null, option: null });
+      setIsWalletOpen(true);
+      window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err: any) {
       toast({
         variant: "destructive",
         title: "Erro no Checkout",
         description: err.message,
       });
+    } finally {
       setIsProcessingCheckout(null);
     }
-  };
-
-  const handleOpenWalletPromo = () => {
-    setIsWalletOpen(true);
-    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const processedRooms = useMemo(() => {
@@ -601,7 +613,6 @@ export function SearchTab({
         minPrice === "" || room.filterPrice >= Number(minPrice);
       const passesMaxPrice =
         maxPrice === "" || room.filterPrice <= Number(maxPrice);
-
       const matchesTier = activeTier === "all" || room.tier === activeTier;
 
       return (
@@ -618,16 +629,14 @@ export function SearchTab({
       result = result
         .map((r) => {
           let d = 999;
-          if (r.rawAddress?.lat && r.rawAddress?.lng) {
+          if (r.rawAddress?.lat && r.rawAddress?.lng)
             d = calculateDistance(
               userLocation.lat,
               userLocation.lng,
               r.rawAddress.lat,
               r.rawAddress.lng,
             );
-          } else {
-            d = Math.random() * 12 + 1;
-          }
+          else d = Math.random() * 12 + 1;
           return { ...r, distanceKm: d };
         })
         .sort((a, b) => (a.distanceKm || 999) - (b.distanceKm || 999));
@@ -784,14 +793,12 @@ export function SearchTab({
 
       {isWalletOpen ? (
         <div className="mx-auto w-full max-w-5xl px-4 -mt-6 relative z-20 animate-in fade-in slide-in-from-bottom-2 duration-300">
-          {/* CARTEIRA DIGITAL */}
           <div className="bg-white rounded-3xl p-8 md:p-10 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-zinc-100 relative overflow-hidden mb-10">
             <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-orange-50 via-transparent to-transparent rounded-full blur-3xl -translate-y-1/2 translate-x-1/3 pointer-events-none" />
-
             <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-8">
               <div>
-                <p className="text-zinc-500 font-bold uppercase tracking-wider text-xs mb-2">
-                  Saldo Total Disponível
+                <p className="text-zinc-500 font-bold uppercase tracking-wider text-xs mb-2 flex items-center gap-2">
+                  <Wallet className="w-5 h-5" /> Saldo Total
                 </p>
                 <div className="flex items-baseline gap-2">
                   <span className="text-6xl font-black text-zinc-900 tracking-tight">
@@ -843,13 +850,11 @@ export function SearchTab({
                 Assine um Fusion Pass
               </h3>
               <p className="text-sm font-medium text-zinc-500 mt-1">
-                Escolha o nível de exclusividade e garanta até 30 dias de acesso
-                com economia.
+                Escolha o nível de exclusividade e garanta descontos.
               </p>
             </div>
           </div>
 
-          {/* SÊNIOR: CHECK DE ASSINATURA ATIVA NO HEADER DA BUSCA */}
           {activeSub ? (
             <div className="bg-zinc-900 rounded-3xl p-8 text-white border border-zinc-800 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-6 mb-12">
               <div>
@@ -886,7 +891,6 @@ export function SearchTab({
                 const selectedOption =
                   pkg.options.find((o) => o.hours === currentHours) ||
                   pkg.options[0];
-
                 if (!selectedOption) return null;
 
                 return (
@@ -912,7 +916,6 @@ export function SearchTab({
                       )}
                     </div>
 
-                    {/* Seletor de Horas Estilo Toggle Group */}
                     <div className="flex items-center gap-2 mb-6">
                       {pkg.options.map((opt) => (
                         <button
@@ -940,7 +943,7 @@ export function SearchTab({
                         R$ {selectedOption.price}
                       </span>
                       <span className="text-sm font-bold opacity-50 uppercase tracking-widest">
-                        /pacote
+                        /mês
                       </span>
                     </div>
 
@@ -959,14 +962,9 @@ export function SearchTab({
 
                     <Button
                       onClick={() => handleBuyPackage(pkg, selectedOption)}
-                      disabled={isProcessingCheckout === pkg.id}
                       className={`w-full h-14 rounded-xl font-black flex items-center justify-center transition-all ${pkg.buttonStyle}`}
                     >
-                      {isProcessingCheckout === pkg.id ? (
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                      ) : (
-                        "Assinar Agora"
-                      )}
+                      Assinar Agora
                     </Button>
                   </div>
                 );
@@ -976,6 +974,7 @@ export function SearchTab({
         </div>
       ) : (
         <>
+          {/* SEARCH COMPONENT (Escondido se a carteira estiver aberta) */}
           <div className="mx-auto w-full max-w-5xl px-4 -mt-6 relative z-20 sticky top-4 animate-in fade-in duration-300">
             <div className="flex flex-col gap-3">
               <div className="flex items-center gap-2">
@@ -1001,7 +1000,6 @@ export function SearchTab({
             </div>
           </div>
 
-          {/* ORGANIZAÇÃO DOS FILTROS ELEGANTES (UX APRIMORADA) */}
           <div className="px-4 py-2 mx-auto max-w-5xl w-full mt-4 space-y-5">
             <div>
               <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-2 pl-1">
@@ -1020,7 +1018,6 @@ export function SearchTab({
               </div>
             </div>
 
-            {/* Aviso Informativo do Turno Mensal */}
             {rentalType === "turno" && (
               <div className="bg-blue-50/80 border border-blue-100 p-4 rounded-2xl flex items-start gap-3 mt-2 animate-in fade-in zoom-in-95">
                 <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
@@ -1029,10 +1026,9 @@ export function SearchTab({
                     O que é a Locação por Turno?
                   </p>
                   <p className="text-xs font-medium text-blue-800/80 leading-relaxed">
-                    Você garante o mesmo bloco de 4 horas (ex: toda terça à
-                    tarde) durante um mês inteiro.
+                    Você garante o mesmo bloco de 4 horas durante um mês
+                    inteiro.{" "}
                     <strong className="text-blue-900">
-                      {" "}
                       Total de aprox. 16h/mês.
                     </strong>
                   </p>
@@ -1119,7 +1115,6 @@ export function SearchTab({
             </div>
           ) : (
             <div className="px-4 max-w-5xl mx-auto w-full space-y-12 pb-12">
-              {/* SESSÃO PREMIUM (Renderiza independente da modalidade de aluguel) */}
               {(activeTier === "all" || activeTier === "master") &&
                 masterRooms.length > 0 && (
                   <section className="bg-zinc-900 -mx-4 px-4 py-8 lg:rounded-3xl lg:mx-0 border border-zinc-800 shadow-2xl">
@@ -1134,12 +1129,9 @@ export function SearchTab({
                         </p>
                       </div>
                     </div>
-
-                    {/* Banner promocional SÓ aparece se for hora e se a tag específica estiver clicada */}
                     {activeTier === "master" &&
                       rentalType === "hora" &&
                       renderFusionPassBanner()}
-
                     <div
                       className={
                         masterRooms.length === 1
@@ -1164,7 +1156,6 @@ export function SearchTab({
                   </section>
                 )}
 
-              {/* SESSÃO VIP */}
               {(activeTier === "all" || activeTier === "vip") &&
                 vipRooms.length > 0 && (
                   <section className="pt-8">
@@ -1179,11 +1170,9 @@ export function SearchTab({
                         </p>
                       </div>
                     </div>
-
                     {activeTier === "vip" &&
                       rentalType === "hora" &&
                       renderFusionPassBanner()}
-
                     <div
                       className={
                         vipRooms.length === 1
@@ -1208,7 +1197,6 @@ export function SearchTab({
                   </section>
                 )}
 
-              {/* SESSÃO BASIC */}
               {(activeTier === "all" || activeTier === "start") &&
                 startRooms.length > 0 && (
                   <section className="border-t border-zinc-200 pt-8 pb-8 mt-8">
@@ -1223,11 +1211,9 @@ export function SearchTab({
                         </p>
                       </div>
                     </div>
-
                     {activeTier === "start" &&
                       rentalType === "hora" &&
                       renderFusionPassBanner()}
-
                     <div
                       className={
                         startRooms.length === 1
@@ -1255,6 +1241,149 @@ export function SearchTab({
           )}
         </>
       )}
+
+      {/* SÊNIOR: MODAL DE CONFIRMAÇÃO DE ASSINATURA */}
+      <Dialog
+        open={subModal.isOpen}
+        onOpenChange={(open) =>
+          !open && setSubModal({ isOpen: false, pkg: null, option: null })
+        }
+      >
+        <DialogContent className="sm:max-w-md rounded-[2rem] p-0 overflow-hidden bg-slate-50 border-0">
+          {subModal.pkg && subModal.option && (
+            <div className="flex flex-col">
+              <div
+                className={`p-6 pb-10 ${subModal.pkg.id === "master" ? "bg-zinc-950 text-white" : subModal.pkg.id === "vip" ? "bg-[#ea580c] text-white" : "bg-slate-900 text-white"}`}
+              >
+                <div className="w-12 h-12 bg-white/10 rounded-2xl flex items-center justify-center mb-4 border border-white/20">
+                  <subModal.pkg.icon className="w-6 h-6 text-white" />
+                </div>
+                <h2 className="text-2xl font-black mb-1">Revisar Assinatura</h2>
+                <p className="text-sm opacity-80 font-medium">
+                  Você está a um passo de assinar o plano {subModal.pkg.title}.
+                </p>
+              </div>
+
+              <div className="p-6 bg-white -mt-6 rounded-t-3xl relative z-10 flex flex-col gap-6 shadow-[0_-10px_20px_-10px_rgba(0,0,0,0.1)]">
+                <div className="flex justify-between items-center bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-0.5">
+                      Plano Selecionado
+                    </p>
+                    <p className="text-lg font-black text-slate-900">
+                      {subModal.pkg.title}{" "}
+                      <span className="text-slate-500 font-bold text-sm">
+                        ({subModal.option.hours}h)
+                      </span>
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-0.5">
+                      Mensalidade
+                    </p>
+                    <p className="text-xl font-black text-[#f05e23]">
+                      R$ {subModal.option.price}
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-xs font-black text-slate-900 uppercase tracking-widest mb-4 flex items-center gap-2">
+                    <Shield className="w-4 h-4 text-emerald-500" />{" "}
+                    Transparência Fusion
+                  </h4>
+                  <div className="space-y-4">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-full bg-emerald-50 flex items-center justify-center shrink-0">
+                        <Zap className="w-5 h-5 text-emerald-600" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-slate-900">
+                          Liberação Imediata
+                        </p>
+                        <p className="text-xs font-medium text-slate-500 mt-0.5 leading-relaxed">
+                          As{" "}
+                          <strong className="text-slate-700">
+                            {subModal.option.hours} horas
+                          </strong>{" "}
+                          caem na sua carteira assim que você confirmar a
+                          assinatura.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center shrink-0">
+                        <RefreshCw className="w-5 h-5 text-blue-600" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-slate-900">
+                          Renovação Automática
+                        </p>
+                        <p className="text-xs font-medium text-slate-500 mt-0.5 leading-relaxed">
+                          Próxima cobrança será em{" "}
+                          <strong className="text-slate-700">
+                            {format(addMonths(new Date(), 1), "dd 'de' MMMM", {
+                              locale: ptBR,
+                            })}
+                          </strong>
+                          .
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center shrink-0">
+                        <Unlock className="w-5 h-5 text-slate-600" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-slate-900">
+                          Cancele quando quiser
+                        </p>
+                        <p className="text-xs font-medium text-slate-500 mt-0.5 leading-relaxed">
+                          Sem taxas escondidas. Você gerencia e cancela direto
+                          pelo seu Perfil.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+                    Forma de Pagamento
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-6 bg-slate-800 rounded flex items-center justify-center shrink-0 shadow-sm">
+                      <span className="text-[8px] font-black text-white">
+                        VISA
+                      </span>
+                    </div>
+                    <p className="text-sm font-bold text-slate-900 flex-1 truncate">
+                      Cartão final 1111
+                    </p>
+                    <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 border-0 shadow-none text-[10px] uppercase tracking-wider font-bold">
+                      Salvo
+                    </Badge>
+                  </div>
+                </div>
+
+                <Button
+                  onClick={confirmSubscription}
+                  disabled={isProcessingCheckout === subModal.pkg.id}
+                  className="w-full h-14 bg-[#ea580c] hover:bg-[#d6521e] text-white font-black rounded-xl text-base shadow-xl shadow-orange-500/20 transition-all active:scale-95"
+                >
+                  {isProcessingCheckout === subModal.pkg.id ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    `Confirmar Assinatura - R$ ${subModal.option.price}`
+                  )}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={isFilterModalOpen} onOpenChange={setIsFilterModalOpen}>
         <DialogContent className="sm:max-w-md rounded-3xl">
@@ -1291,43 +1420,6 @@ export function SearchTab({
                   </Badge>
                 )}
               </button>
-            </div>
-
-            <div className="space-y-3">
-              <Label className="text-xs font-bold text-zinc-500 uppercase tracking-wider flex justify-between">
-                <span>Faixa de Preço</span>
-                <span className="text-zinc-400 font-medium normal-case">
-                  Modalidade:{" "}
-                  {rentalTypes.find((t) => t.id === rentalType)?.label}
-                </span>
-              </Label>
-              <div className="flex items-center gap-3">
-                <div className="flex-1 relative">
-                  <span className="absolute left-3 top-3 text-zinc-400 text-sm">
-                    R$
-                  </span>
-                  <Input
-                    type="number"
-                    placeholder="Mín."
-                    value={minPrice}
-                    onChange={(e) => setMinPrice(e.target.value)}
-                    className="h-10 pl-9 rounded-xl border-zinc-200 text-sm font-semibold"
-                  />
-                </div>
-                <span className="text-zinc-300">-</span>
-                <div className="flex-1 relative">
-                  <span className="absolute left-3 top-3 text-zinc-400 text-sm">
-                    R$
-                  </span>
-                  <Input
-                    type="number"
-                    placeholder="Máx."
-                    value={maxPrice}
-                    onChange={(e) => setMaxPrice(e.target.value)}
-                    className="h-10 pl-9 rounded-xl border-zinc-200 text-sm font-semibold"
-                  />
-                </div>
-              </div>
             </div>
           </div>
           <DialogFooter className="border-t border-zinc-100 pt-4 flex flex-row gap-3">
@@ -1404,7 +1496,6 @@ function RoomCard({
             e.target.src = "/placeholder.jpg";
           }}
         />
-
         <div className="absolute top-2 left-2 flex flex-col gap-1 z-10">
           {room.isPartner && (
             <div className="bg-white/95 backdrop-blur px-2 py-1 rounded-md text-[9px] font-bold text-orange-600 uppercase tracking-wider flex items-center gap-1 shadow-sm">
@@ -1412,7 +1503,6 @@ function RoomCard({
             </div>
           )}
         </div>
-
         <div className="absolute top-2 right-2 z-10">
           {isMaster && (
             <Badge className="bg-amber-500 text-zinc-950 font-black border-0 shadow-sm">
@@ -1430,9 +1520,7 @@ function RoomCard({
             </Badge>
           )}
         </div>
-
         <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-
         <button
           onClick={(e) => onToggleFavorite(e, room.id)}
           className="absolute bottom-3 right-3 p-2 rounded-full bg-white/30 backdrop-blur-md hover:bg-white/80 transition-colors z-10 shadow-sm"
@@ -1449,7 +1537,6 @@ function RoomCard({
             <h3 className="font-bold text-lg text-slate-900 leading-tight line-clamp-2 group-hover:text-[#f05e23] transition-colors">
               {room.name}
             </h3>
-
             {room.reviews_count > 0 ? (
               <div className="flex items-center gap-1 bg-emerald-50 px-2 py-1 rounded-md shrink-0 border border-emerald-100">
                 <Star className="w-3 h-3 fill-emerald-600 text-emerald-600" />
@@ -1477,7 +1564,6 @@ function RoomCard({
                 {room.rawAddress?.city || "Localização pendente"}
               </span>
             </div>
-
             <div className="flex items-center gap-2 text-slate-500">
               <Stethoscope className="w-4 h-4 shrink-0 text-slate-400" />
               <span className="text-sm font-medium truncate">
@@ -1485,7 +1571,6 @@ function RoomCard({
               </span>
             </div>
           </div>
-
           {usingLocation && room.distanceKm && (
             <p className="text-[10px] font-bold text-emerald-600 bg-emerald-50 w-fit px-2 py-1 rounded-md mb-2 flex items-center gap-1">
               <Navigation className="w-3 h-3" /> A {room.distanceKm.toFixed(1)}{" "}
@@ -1503,7 +1588,6 @@ function RoomCard({
                   ? "Turno Mensal (16h)"
                   : "Locação Fixa"}
             </p>
-
             {showDiscount ? (
               <div className="flex flex-col">
                 <span className="text-xs font-semibold text-zinc-400 line-through mb-0.5">
@@ -1514,7 +1598,7 @@ function RoomCard({
                   {bestHourlyRate.toLocaleString("pt-BR", {
                     minimumFractionDigits: 2,
                   })}
-                  /h
+                  /h{" "}
                   <span className="text-[9px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-md uppercase tracking-wider">
                     c/ Pass
                   </span>
