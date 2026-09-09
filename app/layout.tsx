@@ -15,7 +15,7 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Fusion Clinic",
+    title: "Fusion", // Nome curto otimizado para a tela inicial do iPhone
   },
   icons: {
     icon: [
@@ -23,17 +23,16 @@ export const metadata: Metadata = {
       { url: "/icon-dark-32x32.png", media: "(prefers-color-scheme: dark)" },
       { url: "/icon.svg", type: "image/svg+xml" },
     ],
-    //apple: "/apple-icon.png",
-    apple: "/icon-192x192.png",
+    apple: "/icon-192x192.png", // Ícone que o iOS (iPhone/iPad) vai usar
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#f05e23",
+  themeColor: "#ffffff", // Sincronizado com a Splash Screen para evitar flashes de cor
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
-  userScalable: false,
+  userScalable: false, // Trava o zoom (Sensação de app nativo)
 };
 
 export default function RootLayout({
