@@ -184,7 +184,7 @@ export default function LoginPage() {
         <CardHeader className="space-y-2 text-center pt-8 pb-6">
           <div className="mx-auto relative w-20 h-20 mb-2 drop-shadow-md">
             <Image
-              src="public/logo-fusion-orange.png"
+              src="logo-fusion-orange.png"
               alt="Fusion Clinic"
               fill
               className="object-contain"
