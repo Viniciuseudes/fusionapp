@@ -4,9 +4,10 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { format, parseISO, differenceInDays } from "date-fns";
+import { format, parseISO, differenceInDays, addDays } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useMobileBack } from "@/hooks/use-mobile-back";
+
 import {
   User,
   MapPin,
@@ -40,8 +41,11 @@ import {
   X,
   CalendarDays,
   Trophy,
+  CheckCircle2,
   AlertTriangle,
+  TrendingUp,
 } from "lucide-react";
+
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -119,9 +123,9 @@ const getTierInfo = (bookingsCount: number, isProfileComplete: boolean) => {
       current: bookingsCount,
       next: 1,
       percent: 0,
-      color: "text-slate-600",
-      bg: "bg-slate-100",
-      bar: "bg-slate-300",
+      color: "text-zinc-600",
+      bg: "bg-zinc-100",
+      bar: "bg-zinc-300",
       icon: AlertCircle,
       message: "Complete seu cadastro para habilitar a plataforma.",
       reward: "Habilita reservas no aplicativo",
@@ -148,9 +152,9 @@ const getTierInfo = (bookingsCount: number, isProfileComplete: boolean) => {
       current: bookingsCount,
       next: 30,
       percent: (bookingsCount / 30) * 100,
-      color: "text-slate-700",
-      bg: "bg-slate-200",
-      bar: "bg-slate-400",
+      color: "text-zinc-700",
+      bg: "bg-zinc-200",
+      bar: "bg-zinc-400",
       icon: Star,
       message: `Faltam ${30 - bookingsCount} reservas para o Nível Ouro`,
       reward: "Prioridade máxima nas buscas",
@@ -175,9 +179,9 @@ const getTierInfo = (bookingsCount: number, isProfileComplete: boolean) => {
     current: bookingsCount,
     next: bookingsCount,
     percent: 100,
-    color: "text-cyan-700",
-    bg: "bg-cyan-100",
-    bar: "bg-cyan-500",
+    color: "text-zinc-900",
+    bg: "bg-zinc-200",
+    bar: "bg-zinc-800",
     icon: Gem,
     message: "Você alcançou o nível máximo da plataforma!",
     reward: "Você possui todos os benefícios exclusivos",
@@ -285,6 +289,7 @@ export function ProfileTab() {
           .eq("user_id", user.id)
           .eq("status", "ACTIVE")
           .maybeSingle();
+
         setActiveSub(subData);
 
         const { count } = await supabase
@@ -292,6 +297,7 @@ export function ProfileTab() {
           .select("*", { count: "exact", head: true })
           .eq("user_id", user.id)
           .eq("status", "completed");
+
         setBookingsCount(count || 0);
 
         if (data) {
@@ -409,6 +415,7 @@ export function ProfileTab() {
       )
     )
       return;
+
     setCancelingSub(true);
     try {
       const res = await fetch("/api/subscriptions/cancel", {
@@ -477,6 +484,7 @@ export function ProfileTab() {
           tier: giftTier,
         }),
       });
+
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
 
@@ -484,9 +492,10 @@ export function ProfileTab() {
         title:
           data.status === "pending"
             ? "Convite VIP Enviado!"
-            : "Presente Entregue! 🎉",
+            : "Presente Entregue! 🎁",
         description: data.message,
       });
+
       setIsGiftModalOpen(false);
       setGiftEmail("");
       setGiftAmount("");
@@ -509,10 +518,12 @@ export function ProfileTab() {
         data: { user },
       } = await supabase.auth.getUser();
       if (!user) return;
+
       await supabase
         .from("credit_transfers")
         .update({ status: "cancelled" })
         .eq("id", transfer.id);
+
       await supabase.from("wallet_transactions").insert({
         user_id: user.id,
         amount: transfer.amount,
@@ -520,6 +531,7 @@ export function ProfileTab() {
         tier: transfer.tier,
         description: `Estorno de Fusion Gift (${transfer.receiver_email})`,
       });
+
       toast({
         title: "Convite Revogado",
         description: "As horas retornaram para o seu saldo.",
@@ -579,6 +591,7 @@ export function ProfileTab() {
     const cleanCep = formData.cep.replace(/\D/g, "");
     if (cleanCep.length !== 8)
       return toast({ variant: "destructive", title: "CEP Inválido" });
+
     setCepLoading(true);
     try {
       const response = await fetch(
@@ -586,6 +599,7 @@ export function ProfileTab() {
       );
       const data = await response.json();
       if (data.erro) throw new Error("CEP não encontrado.");
+
       setFormData((prev) => ({
         ...prev,
         address_street: data.logradouro || "",
@@ -610,20 +624,26 @@ export function ProfileTab() {
       setUploadingImage(true);
       if (!e.target.files || e.target.files.length === 0)
         throw new Error("Selecione uma imagem.");
+
       const {
         data: { user },
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuário não autenticado.");
+
       const file = e.target.files[0];
       const fileExt = file.name.split(".").pop();
       const fileName = `${user.id}/profile.${fileExt}`;
+
       const { error: uploadError } = await supabase.storage
         .from("avatars")
         .upload(fileName, file, { upsert: true, cacheControl: "3600" });
+
       if (uploadError) throw uploadError;
+
       const {
         data: { publicUrl },
       } = supabase.storage.from("avatars").getPublicUrl(fileName);
+
       setFormData({
         ...formData,
         avatar_url: `${publicUrl}?t=${new Date().getTime()}`,
@@ -638,14 +658,17 @@ export function ProfileTab() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+
     if (formData.cpf && !isValidCPF(formData.cpf))
       return toast({ variant: "destructive", title: "CPF Inválido" });
+
     let dbBirthDate = null;
     if (formData.birth_date) {
       if (formData.birth_date.length !== 10)
         return toast({ variant: "destructive", title: "Data Inválida" });
       const [d, m, y] = formData.birth_date.split("/");
       dbBirthDate = `${y}-${m}-${d}`;
+
       const dateObj = new Date(`${y}-${m}-${d}T00:00:00`);
       if (
         isNaN(dateObj.getTime()) ||
@@ -655,12 +678,14 @@ export function ProfileTab() {
         return toast({ variant: "destructive", title: "Data Inválida" });
       }
     }
+
     setSaving(true);
     try {
       const {
         data: { user },
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuário não autenticado.");
+
       const { error } = await supabase
         .from("profiles")
         .update({
@@ -681,8 +706,10 @@ export function ProfileTab() {
           address_state: formData.address_state,
         })
         .eq("id", user.id);
+
       if (error) throw error;
-      toast({ title: "Perfil salvo! 🎉" });
+
+      toast({ title: "Perfil salvo! 🚀" });
       setView("overview");
     } catch (error: any) {
       toast({
@@ -713,15 +740,15 @@ export function ProfileTab() {
           <div className="flex items-center gap-4">
             <button
               onClick={() => setView("overview")}
-              className="w-10 h-10 bg-white border border-slate-200 rounded-full flex items-center justify-center hover:bg-slate-50 text-slate-600 transition-colors"
+              className="w-10 h-10 bg-white border border-zinc-200 rounded-full flex items-center justify-center hover:bg-zinc-50 text-zinc-600 transition-colors"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
             <div>
-              <h1 className="text-2xl font-black text-slate-900">
+              <h1 className="text-2xl font-black text-zinc-900">
                 Minha Carteira
               </h1>
-              <p className="text-sm text-slate-500 font-medium">
+              <p className="text-sm text-zinc-500 font-medium">
                 Gestão de créditos e histórico de uso.
               </p>
             </div>
@@ -729,28 +756,26 @@ export function ProfileTab() {
           <Button
             onClick={() => setIsHowItWorksOpen(true)}
             variant="outline"
-            className="rounded-full text-xs font-bold text-slate-600 border-slate-200"
+            className="rounded-full text-xs font-bold text-zinc-600 border-zinc-200"
           >
             <Info className="w-4 h-4 mr-1.5" /> Como funciona?
           </Button>
         </div>
 
         {/* CARTÃO DE CRÉDITO DIGITAL LUXUOSO */}
-        <div className="bg-slate-900 p-6 md:p-8 rounded-3xl text-white shadow-xl relative overflow-hidden mb-8">
+        <div className="bg-zinc-900 p-6 md:p-8 rounded-3xl text-white shadow-xl relative overflow-hidden mb-8">
           <div className="absolute top-0 right-0 w-40 h-40 bg-[#BF4B24]/30 rounded-full blur-3xl -mr-10 -mt-10"></div>
-
           <div className="relative z-10 flex flex-col md:flex-row gap-8 justify-between">
             <div className="flex-1">
-              <p className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+              <p className="text-sm font-bold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-2">
                 <Wallet className="w-5 h-5" /> Saldo Disponível
               </p>
               <h3 className="text-5xl font-black tracking-tight mb-5">
                 {totalBalance}{" "}
-                <span className="text-2xl font-bold text-slate-400 ml-1">
+                <span className="text-2xl font-bold text-zinc-400 ml-1">
                   CR
                 </span>
               </h3>
-
               <div className="flex flex-col sm:flex-row gap-3 w-full">
                 <Button
                   onClick={() => {
@@ -772,28 +797,28 @@ export function ProfileTab() {
             </div>
 
             <div className="bg-white/10 backdrop-blur-md rounded-xl p-5 border border-white/10 min-w-[200px] h-fit">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">
+              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-3">
                 Saldos por Categoria
               </p>
               <div className="flex justify-between items-center mb-2.5">
                 <span className="text-sm font-semibold flex items-center gap-1.5">
-                  <Shield className="w-4 h-4 text-slate-400" /> Basic
+                  <Shield className="w-4 h-4 text-zinc-400" /> Basic
                 </span>
                 <span className="font-bold">{walletBalances.start}</span>
               </div>
               <div className="flex justify-between items-center mb-2.5">
-                <span className="text-sm font-semibold flex items-center gap-1.5 text-purple-300">
+                <span className="text-sm font-semibold flex items-center gap-1.5 text-[#BF4B24]">
                   <Star className="w-4 h-4" /> VIP
                 </span>
-                <span className="font-bold text-purple-300">
+                <span className="font-bold text-[#BF4B24]">
                   {walletBalances.vip}
                 </span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-sm font-semibold flex items-center gap-1.5 text-amber-300">
+                <span className="text-sm font-semibold flex items-center gap-1.5 text-amber-500">
                   <Crown className="w-4 h-4" /> Premium
                 </span>
-                <span className="font-bold text-amber-300">
+                <span className="font-bold text-amber-500">
                   {walletBalances.master}
                 </span>
               </div>
@@ -804,7 +829,7 @@ export function ProfileTab() {
           {allExpiringCredits.length > 0 && (
             <div className="relative z-10 mt-6 pt-5 border-t border-white/10">
               <div className="flex items-center justify-between mb-4">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
                   <Clock className="w-3.5 h-3.5 text-amber-400" /> Próximos a
                   Vencer
                 </p>
@@ -815,7 +840,6 @@ export function ProfileTab() {
                   Ver Todos ({allExpiringCredits.length})
                 </button>
               </div>
-
               <div className="space-y-2">
                 {allExpiringCredits.slice(0, 2).map((tx) => {
                   const daysLeft = differenceInDays(
@@ -832,7 +856,7 @@ export function ProfileTab() {
                       className="flex flex-col bg-white/5 hover:bg-white/10 transition-colors rounded-xl p-3 border border-white/10 cursor-pointer group"
                     >
                       <div className="flex justify-between items-start mb-2 gap-2">
-                        <span className="text-xs font-bold text-slate-300 truncate flex-1 group-hover:text-white transition-colors">
+                        <span className="text-xs font-bold text-zinc-300 truncate flex-1 group-hover:text-white transition-colors">
                           {tx.description || "Movimentação Fusion"}
                         </span>
                         <Badge className="bg-white/10 text-white border-0 shadow-none text-[8px] uppercase px-1.5 py-0 shrink-0">
@@ -862,24 +886,24 @@ export function ProfileTab() {
         {/* CONVITES PENDENTES */}
         {pendingTransfers.length > 0 && (
           <section className="pt-2 mb-8">
-            <h3 className="text-lg font-black text-slate-900 flex items-center gap-2 mb-4">
+            <h3 className="text-lg font-black text-zinc-900 flex items-center gap-2 mb-4">
               <Clock className="w-5 h-5 text-amber-500" /> Convites Pendentes
             </h3>
             <div className="space-y-3">
               {pendingTransfers.map((pt) => (
                 <div
                   key={pt.id}
-                  className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all hover:border-slate-300"
+                  className="bg-white border border-zinc-200 p-4 rounded-2xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all hover:border-zinc-300"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center shrink-0">
-                      <Mail className="w-4 h-4 text-slate-500" />
+                    <div className="w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center shrink-0">
+                      <Mail className="w-4 h-4 text-zinc-500" />
                     </div>
                     <div>
-                      <p className="text-sm font-bold text-slate-900">
+                      <p className="text-sm font-bold text-zinc-900">
                         {pt.receiver_email}
                       </p>
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">
+                      <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mt-0.5">
                         Enviado em{" "}
                         {pt.created_at
                           ? format(parseISO(pt.created_at), "dd/MM/yyyy")
@@ -889,10 +913,10 @@ export function ProfileTab() {
                   </div>
                   <div className="flex items-center justify-between sm:justify-end w-full sm:w-auto gap-4">
                     <div className="flex items-center gap-1.5">
-                      <span className="font-black text-lg text-slate-900">
+                      <span className="font-black text-lg text-zinc-900">
                         {pt.amount}h
                       </span>
-                      <Badge className="bg-slate-100 text-slate-600 border-0 shadow-none text-[9px] uppercase">
+                      <Badge className="bg-zinc-100 text-zinc-600 border-0 shadow-none text-[9px] uppercase">
                         {pt.tier === "master"
                           ? "Premium"
                           : pt.tier === "vip"
@@ -917,59 +941,57 @@ export function ProfileTab() {
 
         {/* EXTRATO ESTILO LIVELO */}
         <div>
-          <h3 className="text-lg font-black text-slate-900 mb-4 flex items-center gap-2">
+          <h3 className="text-lg font-black text-zinc-900 mb-4 flex items-center gap-2">
             <History className="w-5 h-5 text-[#BF4B24]" /> Extrato
           </h3>
-
-          <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden flex flex-col">
+          <div className="bg-white border border-zinc-200 rounded-3xl shadow-sm overflow-hidden flex flex-col">
             {loadingWallet ? (
               <div className="flex justify-center items-center py-16">
-                <Loader2 className="w-8 h-8 animate-spin text-slate-300" />
+                <Loader2 className="w-8 h-8 animate-spin text-zinc-300" />
               </div>
             ) : transactions.length === 0 ? (
               <div className="text-center py-16 px-4">
-                <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <Receipt className="w-8 h-8 text-slate-300" />
+                <div className="w-16 h-16 bg-zinc-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Receipt className="w-8 h-8 text-zinc-300" />
                 </div>
-                <p className="font-bold text-slate-900">Nenhuma movimentação</p>
-                <p className="text-sm text-slate-500 font-medium mt-1">
+                <p className="font-bold text-zinc-900">Nenhuma movimentação</p>
+                <p className="text-sm text-zinc-500 font-medium mt-1">
                   Seu extrato aparecerá aqui.
                 </p>
               </div>
             ) : (
-              <div className="divide-y divide-slate-100">
+              <div className="divide-y divide-zinc-100">
                 {transactions.map((tx) => {
                   const credit = isCredit(tx.type, Number(tx.amount));
-
                   return (
                     <div
                       key={tx.id}
                       onClick={() => setSelectedTx(tx)}
-                      className="p-5 flex flex-col gap-1 hover:bg-slate-50 transition-colors cursor-pointer relative"
+                      className="p-5 flex flex-col gap-1 hover:bg-zinc-50 transition-colors cursor-pointer relative"
                     >
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">
                         {tx.created_at
                           ? format(parseISO(tx.created_at), "dd/MM/yyyy", {
                               locale: ptBR,
                             })
                           : "Recente"}
                       </span>
-                      <span className="text-xs font-semibold text-slate-500">
+                      <span className="text-xs font-semibold text-zinc-500">
                         {credit ? "Acúmulo / Crédito" : "Uso de Crédito"}
                       </span>
-                      <span className="text-base font-black text-slate-900 pr-16 truncate">
+                      <span className="text-base font-black text-zinc-900 pr-16 truncate">
                         {tx.description || "Movimentação Fusion"}
                       </span>
                       <span
-                        className={`text-xl font-black mt-1 ${credit ? "text-emerald-600" : "text-slate-700"}`}
+                        className={`text-xl font-black mt-1 ${credit ? "text-emerald-600" : "text-zinc-700"}`}
                       >
                         {credit ? "+" : ""} {tx.amount} horas
                       </span>
 
                       {credit && tx.expires_at && (
-                        <div className="mt-2 inline-flex items-center gap-1.5 bg-slate-100/80 px-2 py-1 rounded-md w-fit">
-                          <Clock className="w-3.5 h-3.5 text-slate-500" />
-                          <span className="text-[10px] font-bold text-slate-600">
+                        <div className="mt-2 inline-flex items-center gap-1.5 bg-zinc-100/80 px-2 py-1 rounded-md w-fit">
+                          <Clock className="w-3.5 h-3.5 text-zinc-500" />
+                          <span className="text-[10px] font-bold text-zinc-600">
                             Expira em{" "}
                             {format(parseISO(tx.expires_at), "dd/MM/yyyy", {
                               locale: ptBR,
@@ -978,7 +1000,7 @@ export function ProfileTab() {
                         </div>
                       )}
 
-                      <div className="absolute right-5 top-1/2 -translate-y-1/2 text-slate-300">
+                      <div className="absolute right-5 top-1/2 -translate-y-1/2 text-zinc-300">
                         <ChevronRight className="w-5 h-5" />
                       </div>
                     </div>
@@ -994,7 +1016,7 @@ export function ProfileTab() {
           <DialogContent className="sm:max-w-md rounded-[2rem] p-6 bg-white border-0 [&>button]:hidden">
             <button
               onClick={() => setIsTimelineOpen(false)}
-              className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 transition-colors z-50"
+              className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full bg-zinc-100 hover:bg-zinc-200 text-zinc-500 transition-colors z-50"
             >
               <X className="w-4 h-4" />
             </button>
@@ -1009,17 +1031,17 @@ export function ProfileTab() {
               <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center mb-4">
                 <CalendarDays className="w-6 h-6 text-amber-500" />
               </div>
-              <h2 className="text-xl font-black text-slate-900">
+              <h2 className="text-xl font-black text-zinc-900">
                 Seus Vencimentos
               </h2>
-              <p className="text-sm font-medium text-slate-500">
+              <p className="text-sm font-medium text-zinc-500">
                 Acompanhe a data exata de expiração dos seus créditos ativos.
               </p>
             </DialogHeader>
 
             <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-2">
               {allExpiringCredits.length === 0 ? (
-                <p className="text-slate-500 text-center py-6">
+                <p className="text-zinc-500 text-center py-6">
                   Você não possui créditos a vencer.
                 </p>
               ) : (
@@ -1034,18 +1056,18 @@ export function ProfileTab() {
                   return (
                     <div
                       key={`modal-exp-${tx.id}`}
-                      className="flex flex-col bg-slate-50 rounded-xl p-4 border border-slate-100"
+                      className="flex flex-col bg-zinc-50 rounded-xl p-4 border border-zinc-100"
                     >
                       <div className="flex justify-between items-start mb-2 gap-2">
-                        <span className="text-xs font-bold text-slate-600 truncate flex-1">
+                        <span className="text-xs font-bold text-zinc-600 truncate flex-1">
                           {tx.description || "Movimentação Fusion"}
                         </span>
-                        <Badge className="bg-white text-slate-600 border border-slate-200 shadow-none text-[8px] uppercase px-1.5 py-0 shrink-0">
+                        <Badge className="bg-white text-zinc-600 border border-zinc-200 shadow-none text-[8px] uppercase px-1.5 py-0 shrink-0">
                           {isPremium ? "Premium" : isVip ? "VIP" : "Basic"}
                         </Badge>
                       </div>
                       <div className="flex justify-between items-end">
-                        <span className="text-xl font-black text-slate-900 leading-none">
+                        <span className="text-xl font-black text-zinc-900 leading-none">
                           {tx.amount}h
                         </span>
                         <div className="text-right">
@@ -1056,7 +1078,7 @@ export function ProfileTab() {
                               ? "Expira hoje"
                               : `Expira em ${daysLeft} dias`}
                           </span>
-                          <span className="text-[10px] font-bold text-slate-400">
+                          <span className="text-[10px] font-bold text-zinc-400">
                             {format(parseISO(tx.expires_at!), "dd/MM/yyyy")}
                           </span>
                         </div>
@@ -1074,7 +1096,7 @@ export function ProfileTab() {
           <DialogContent className="sm:max-w-md rounded-[2rem] p-6 bg-white border-0 [&>button]:hidden">
             <button
               onClick={() => setIsGiftModalOpen(false)}
-              className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 transition-colors z-50"
+              className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full bg-zinc-100 hover:bg-zinc-200 text-zinc-500 transition-colors z-50"
             >
               <X className="w-4 h-4" />
             </button>
@@ -1082,14 +1104,15 @@ export function ProfileTab() {
             <DialogDescription className="sr-only">
               Formulário para presentear um colega com horas.
             </DialogDescription>
+
             <DialogHeader className="mb-4">
               <div className="w-12 h-12 bg-orange-50 rounded-2xl flex items-center justify-center mb-4">
                 <Gift className="w-6 h-6 text-[#BF4B24]" />
               </div>
-              <h2 className="text-2xl font-black text-slate-900">
+              <h2 className="text-2xl font-black text-zinc-900">
                 Enviar Fusion Gift
               </h2>
-              <p className="text-sm font-medium text-slate-500">
+              <p className="text-sm font-medium text-zinc-500">
                 Transfira horas não utilizadas para um colega. Se ele não tiver
                 conta, enviaremos um convite VIP.
               </p>
@@ -1097,7 +1120,7 @@ export function ProfileTab() {
 
             <div className="space-y-4">
               <div className="space-y-2">
-                <Label className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                <Label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">
                   E-mail do Destinatário
                 </Label>
                 <Input
@@ -1105,13 +1128,13 @@ export function ProfileTab() {
                   placeholder="dr.colega@email.com"
                   value={giftEmail}
                   onChange={(e) => setGiftEmail(e.target.value)}
-                  className="h-12 rounded-xl bg-slate-50 border-slate-200"
+                  className="h-12 rounded-xl bg-zinc-50 border-zinc-200"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                  <Label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">
                     Qtd de Horas
                   </Label>
                   <Input
@@ -1120,17 +1143,17 @@ export function ProfileTab() {
                     placeholder="Ex: 4"
                     value={giftAmount}
                     onChange={(e) => setGiftAmount(e.target.value)}
-                    className="h-12 rounded-xl bg-slate-50 border-slate-200 font-black text-lg"
+                    className="h-12 rounded-xl bg-zinc-50 border-zinc-200 font-black text-lg"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                  <Label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">
                     Qual Pacote?
                   </Label>
                   <select
                     value={giftTier}
                     onChange={(e) => setGiftTier(e.target.value as any)}
-                    className="h-12 bg-slate-50 border border-slate-200 rounded-xl px-3 outline-none font-bold text-slate-700 w-full"
+                    className="h-12 bg-zinc-50 border border-zinc-200 rounded-xl px-3 outline-none font-bold text-zinc-700 w-full"
                   >
                     <option value="start">
                       Basic ({walletBalances.start}h)
@@ -1168,10 +1191,11 @@ export function ProfileTab() {
           <DialogContent className="sm:max-w-sm rounded-[2rem] p-0 overflow-hidden bg-white border-0 gap-0 [&>button]:hidden">
             <button
               onClick={() => setSelectedTx(null)}
-              className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full bg-slate-200/50 hover:bg-slate-200 text-slate-600 transition-colors z-50"
+              className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full bg-zinc-200/50 hover:bg-zinc-200 text-zinc-600 transition-colors z-50"
             >
               <X className="w-4 h-4" />
             </button>
+
             <DialogTitle className="sr-only">Detalhes da Transação</DialogTitle>
             <DialogDescription className="sr-only">
               Informações detalhadas sobre a movimentação da carteira.
@@ -1184,6 +1208,7 @@ export function ProfileTab() {
                   Number(selectedTx.amount),
                 );
                 const isTransfer = selectedTx.type?.includes("transfer");
+
                 const tierName =
                   selectedTx.tier === "master"
                     ? "Premium"
@@ -1194,26 +1219,26 @@ export function ProfileTab() {
                 return (
                   <div className="flex flex-col">
                     <div
-                      className={`p-8 pb-12 flex flex-col items-center justify-center text-center ${credit ? "bg-emerald-50" : "bg-slate-50"}`}
+                      className={`p-8 pb-12 flex flex-col items-center justify-center text-center ${credit ? "bg-emerald-50" : "bg-zinc-50"}`}
                     >
                       <div
-                        className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 shadow-sm border ${credit ? "bg-white border-emerald-100" : "bg-white border-slate-200"}`}
+                        className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 shadow-sm border ${credit ? "bg-white border-emerald-100" : "bg-white border-zinc-200"}`}
                       >
                         {isTransfer ? (
                           <ArrowRightLeft
-                            className={`w-8 h-8 ${credit ? "text-emerald-500" : "text-slate-400"}`}
+                            className={`w-8 h-8 ${credit ? "text-emerald-500" : "text-zinc-400"}`}
                           />
                         ) : credit ? (
                           <ArrowDownRight className="w-8 h-8 text-emerald-500" />
                         ) : (
-                          <ArrowUpRight className="w-8 h-8 text-slate-400" />
+                          <ArrowUpRight className="w-8 h-8 text-zinc-400" />
                         )}
                       </div>
-                      <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                      <p className="text-xs font-black text-zinc-400 uppercase tracking-widest mb-2">
                         {credit ? "Entrada de Crédito" : "Saída de Crédito"}
                       </p>
                       <h3
-                        className={`text-4xl font-black ${credit ? "text-emerald-600" : "text-slate-900"}`}
+                        className={`text-4xl font-black ${credit ? "text-emerald-600" : "text-zinc-900"}`}
                       >
                         {credit ? "+" : ""}
                         {selectedTx.amount}h
@@ -1222,20 +1247,20 @@ export function ProfileTab() {
 
                     <div className="p-6 space-y-5 bg-white -mt-6 rounded-t-3xl relative z-10 shadow-[0_-10px_20px_-10px_rgba(0,0,0,0.05)]">
                       <div>
-                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                        <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-1">
                           Descrição do Lançamento
                         </p>
-                        <p className="font-black text-slate-900 text-lg leading-tight">
+                        <p className="font-black text-zinc-900 text-lg leading-tight">
                           {selectedTx.description}
                         </p>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-4 border-t border-slate-100 pt-4">
+                      <div className="grid grid-cols-2 gap-4 border-t border-zinc-100 pt-4">
                         <div>
-                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
                             Data da Operação
                           </p>
-                          <p className="font-bold text-slate-900">
+                          <p className="font-bold text-zinc-900">
                             {selectedTx.created_at
                               ? format(
                                   parseISO(selectedTx.created_at),
@@ -1245,17 +1270,17 @@ export function ProfileTab() {
                           </p>
                         </div>
                         <div>
-                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
                             Categoria
                           </p>
-                          <Badge className="bg-slate-100 text-slate-700 border-0 shadow-none hover:bg-slate-100">
+                          <Badge className="bg-zinc-100 text-zinc-700 border-0 shadow-none hover:bg-zinc-100">
                             {tierName}
                           </Badge>
                         </div>
                       </div>
 
                       {credit && selectedTx.expires_at && (
-                        <div className="border-t border-slate-100 pt-4 bg-amber-50/50 -mx-6 px-6 pb-4 mt-4">
+                        <div className="border-t border-zinc-100 pt-4 bg-amber-50/50 -mx-6 px-6 pb-4 mt-4">
                           <p className="text-[10px] font-bold text-amber-600 uppercase tracking-wider flex items-center gap-1.5 mb-1">
                             <Clock className="w-3.5 h-3.5" /> Validade dos
                             Créditos
@@ -1280,7 +1305,7 @@ export function ProfileTab() {
           <DialogContent className="sm:max-w-md rounded-[2rem] p-6 bg-white border-0 [&>button]:hidden">
             <button
               onClick={() => setIsHowItWorksOpen(false)}
-              className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 transition-colors z-50"
+              className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full bg-zinc-100 hover:bg-zinc-200 text-zinc-500 transition-colors z-50"
             >
               <X className="w-4 h-4" />
             </button>
@@ -1288,39 +1313,40 @@ export function ProfileTab() {
             <DialogDescription className="sr-only">
               Regras da carteira e validade de horas
             </DialogDescription>
+
             <DialogHeader className="mb-4">
-              <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center mb-4">
-                <HelpCircle className="w-6 h-6 text-blue-500" />
+              <div className="w-12 h-12 bg-zinc-100 rounded-2xl flex items-center justify-center mb-4">
+                <HelpCircle className="w-6 h-6 text-zinc-600" />
               </div>
-              <h2 className="text-2xl font-black text-slate-900">
+              <h2 className="text-2xl font-black text-zinc-900">
                 Como funciona o Fusion Pass
               </h2>
             </DialogHeader>
 
             <div className="space-y-6">
               <div className="flex gap-4 items-start">
-                <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center shrink-0 border border-slate-100">
-                  <Clock className="w-5 h-5 text-slate-600" />
+                <div className="w-10 h-10 rounded-full bg-zinc-50 flex items-center justify-center shrink-0 border border-zinc-100">
+                  <Clock className="w-5 h-5 text-zinc-600" />
                 </div>
                 <div>
-                  <h4 className="font-black text-slate-900">
+                  <h4 className="font-black text-zinc-900">
                     Validade de 30 dias
                   </h4>
-                  <p className="text-sm text-slate-500 font-medium leading-relaxed mt-1">
+                  <p className="text-sm text-zinc-500 font-medium leading-relaxed mt-1">
                     Todos os pacotes de horas que você adquire possuem uma
                     validade de exatos 30 dias a partir do momento do pagamento.
                   </p>
                 </div>
               </div>
               <div className="flex gap-4 items-start">
-                <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center shrink-0 border border-slate-100">
-                  <ArrowDownRight className="w-5 h-5 text-slate-600" />
+                <div className="w-10 h-10 rounded-full bg-zinc-50 flex items-center justify-center shrink-0 border border-zinc-100">
+                  <ArrowDownRight className="w-5 h-5 text-zinc-600" />
                 </div>
                 <div>
-                  <h4 className="font-black text-slate-900">
+                  <h4 className="font-black text-zinc-900">
                     Efeito Cascata (Vantagem)
                   </h4>
-                  <p className="text-sm text-slate-500 font-medium leading-relaxed mt-1">
+                  <p className="text-sm text-zinc-500 font-medium leading-relaxed mt-1">
                     Pacotes de alto padrão podem alugar salas de padrão menor.
                     Ex: Se você usar suas horas "Premium" em uma sala "Basic", o
                     sistema descontará da sua carteira Premium automaticamente.
@@ -1328,12 +1354,12 @@ export function ProfileTab() {
                 </div>
               </div>
               <div className="flex gap-4 items-start">
-                <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center shrink-0 border border-slate-100">
-                  <Gift className="w-5 h-5 text-slate-600" />
+                <div className="w-10 h-10 rounded-full bg-zinc-50 flex items-center justify-center shrink-0 border border-zinc-100">
+                  <Gift className="w-5 h-5 text-zinc-600" />
                 </div>
                 <div>
-                  <h4 className="font-black text-slate-900">Fusion Gift</h4>
-                  <p className="text-sm text-slate-500 font-medium leading-relaxed mt-1">
+                  <h4 className="font-black text-zinc-900">Fusion Gift</h4>
+                  <p className="text-sm text-zinc-500 font-medium leading-relaxed mt-1">
                     O mês está acabando e sobraram horas? Não as perca!
                     Transfira gratuitamente para um colega médico e ajude-o no
                     início da carreira.
@@ -1342,10 +1368,10 @@ export function ProfileTab() {
               </div>
             </div>
 
-            <DialogFooter className="mt-6 border-t border-slate-100 pt-4">
+            <DialogFooter className="mt-6 border-t border-zinc-100 pt-4">
               <Button
                 onClick={() => setIsHowItWorksOpen(false)}
-                className="w-full h-12 bg-slate-900 hover:bg-slate-800 text-white font-black rounded-xl"
+                className="w-full h-12 bg-zinc-900 hover:bg-zinc-800 text-white font-black rounded-xl"
               >
                 Entendi
               </Button>
@@ -1362,17 +1388,68 @@ export function ProfileTab() {
   if (view === "overview") {
     const tierInfo = getTierInfo(bookingsCount, !!isProfileComplete);
 
+    // SÊNIOR: Cálculo de Economia da Assinatura e Métricas
+    let subUsagePercent = 0;
+    let subSavedAmount = 0;
+    let subNextRenewal = "";
+    let subPrice = 0;
+    let hoursLeft = 0;
+    let totalPlanHours = 0;
+    let TierIcon = Shield;
+    let tierColor = "text-zinc-600";
+    let tierBg = "bg-zinc-50 border-zinc-200";
+
+    if (activeSub) {
+      hoursLeft =
+        walletBalances[activeSub.tier as keyof typeof walletBalances] || 0;
+      totalPlanHours = activeSub.hours || 10;
+      subUsagePercent = Math.max(
+        0,
+        Math.min(100, ((totalPlanHours - hoursLeft) / totalPlanHours) * 100),
+      );
+
+      const baseHourlyRate = 45;
+      const discountPerHour =
+        activeSub.tier === "master" ? 15 : activeSub.tier === "vip" ? 10 : 5;
+      subSavedAmount = totalPlanHours * discountPerHour;
+      subPrice = totalPlanHours * (baseHourlyRate - discountPerHour);
+
+      // Fallback da data de renovação
+      subNextRenewal = activeSub.current_period_end
+        ? format(parseISO(activeSub.current_period_end), "dd/MM/yyyy")
+        : format(addDays(new Date(), 28), "dd/MM/yyyy");
+
+      TierIcon =
+        activeSub.tier === "master"
+          ? Crown
+          : activeSub.tier === "vip"
+            ? Star
+            : Shield;
+      tierColor =
+        activeSub.tier === "master"
+          ? "text-amber-500"
+          : activeSub.tier === "vip"
+            ? "text-[#BF4B24]"
+            : "text-zinc-700";
+      tierBg =
+        activeSub.tier === "master"
+          ? "bg-amber-50 border-amber-100"
+          : activeSub.tier === "vip"
+            ? "bg-orange-50 border-orange-100"
+            : "bg-zinc-100 border-zinc-200";
+    }
+
     return (
       <div className="space-y-6 max-w-md mx-auto w-full animate-in fade-in pb-24 pt-8 px-4">
         <div className="text-center mb-6">
-          <h2 className="text-2xl font-black text-slate-900 tracking-tight">
+          <h2 className="text-2xl font-black text-zinc-900 tracking-tight">
             Meu Perfil
           </h2>
         </div>
 
-        <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100 flex flex-col gap-6">
+        <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-zinc-200 flex flex-col gap-6">
           <div className="flex gap-4 items-center">
-            <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 border-2 border-slate-50 shadow-inner">
+            <div className="w-16 h-16 rounded-full bg-zinc-100 flex items-center justify-center overflow-hidden shrink-0 border-2 border-zinc-50 shadow-inner">
               {formData.avatar_url ? (
                 <img
                   src={formData.avatar_url}
@@ -1380,17 +1457,16 @@ export function ProfileTab() {
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <User className="w-8 h-8 text-slate-400" />
+                <User className="w-8 h-8 text-zinc-400" />
               )}
             </div>
             <div className="flex-1 overflow-hidden">
-              <h2 className="text-lg font-black text-slate-900 leading-tight truncate">
+              <h2 className="text-lg font-black text-zinc-900 leading-tight truncate">
                 {formData.full_name || "Completar Cadastro"}
               </h2>
-              <p className="text-sm text-slate-500 font-medium truncate mb-2">
+              <p className="text-sm text-zinc-500 font-medium truncate mb-2">
                 {formData.email}
               </p>
-
               <Badge
                 className={`border-0 font-bold px-2 py-0.5 shadow-none ${tierInfo.bg} ${tierInfo.color}`}
               >
@@ -1400,22 +1476,21 @@ export function ProfileTab() {
             </div>
           </div>
 
-          <div className="pt-4 border-t border-slate-50">
+          <div className="pt-4 border-t border-zinc-100">
             <div className="flex justify-between items-end mb-2">
-              <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+              <p className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider">
                 {tierInfo.message}
               </p>
-              <span className="text-xs font-black text-slate-900">
+              <span className="text-xs font-black text-zinc-900">
                 {!tierInfo.isMax && `${tierInfo.current} / ${tierInfo.next}`}
               </span>
             </div>
-            <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden mb-3">
+            <div className="h-2 w-full bg-zinc-100 rounded-full overflow-hidden mb-3">
               <div
                 className={`h-full rounded-full transition-all duration-1000 ${tierInfo.bar}`}
                 style={{ width: `${tierInfo.percent}%` }}
               />
             </div>
-
             <div
               className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${tierInfo.bg.replace("bg-", "border-").replace("100", "200")} ${tierInfo.bg.replace("100", "50")}`}
             >
@@ -1432,7 +1507,7 @@ export function ProfileTab() {
 
         <div
           onClick={() => setView("wallet")}
-          className="cursor-pointer bg-[#ea580c] rounded-[2rem] p-6 text-white shadow-lg flex items-center justify-between hover:scale-[1.02] transition-transform duration-300"
+          className="cursor-pointer bg-[#BF4B24] rounded-[2rem] p-6 text-white shadow-lg shadow-orange-500/20 flex items-center justify-between hover:scale-[1.02] transition-transform duration-300"
         >
           <div>
             <p className="text-xs font-bold text-white/90 uppercase tracking-widest mb-1 flex items-center gap-2">
@@ -1443,44 +1518,125 @@ export function ProfileTab() {
               <span className="text-xl font-bold text-white/90">CR</span>
             </div>
           </div>
-
           <div className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center backdrop-blur-md">
             <ChevronRight className="w-6 h-6 text-white" />
           </div>
         </div>
 
-        {/* SÊNIOR: GESTÃO DA ASSINATURA (SÓ APARECE SE TIVER ASSINATURA ATIVA) */}
+        {/* SÊNIOR: DASHBOARD DE ASSINATURA */}
         {activeSub && (
-          <div className="bg-slate-900 rounded-[2rem] p-6 text-white shadow-xl flex flex-col border border-slate-800">
-            <div className="flex justify-between items-start mb-6">
-              <div>
-                <p className="text-[10px] uppercase tracking-widest text-slate-400 font-black mb-1">
-                  Seu Plano Atual
-                </p>
-                <h3 className="text-xl font-black text-white flex items-center gap-2 capitalize">
-                  <Crown className="w-5 h-5 text-amber-500" /> Fusion Pass{" "}
-                  {activeSub.tier}
-                </h3>
-                <p className="text-sm font-medium text-slate-400 mt-1">
-                  Garante {activeSub.hours} horas mensais.
-                </p>
+          <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-zinc-200 flex flex-col relative overflow-hidden">
+            <div
+              className={`absolute -right-10 -top-10 w-40 h-40 rounded-full blur-3xl pointer-events-none opacity-20 ${activeSub.tier === "master" ? "bg-amber-500" : activeSub.tier === "vip" ? "bg-[#BF4B24]" : "bg-zinc-400"}`}
+            />
+
+            <div className="relative z-10 flex flex-col gap-6">
+              {/* Header da Assinatura */}
+              <div className="flex justify-between items-start">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`w-12 h-12 rounded-2xl flex items-center justify-center border shadow-sm ${tierBg}`}
+                  >
+                    <TierIcon className={`w-6 h-6 ${tierColor}`} />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-0.5">
+                      Assinatura Ativa
+                    </p>
+                    <h3 className="text-xl font-black text-zinc-900 leading-tight capitalize">
+                      Fusion Pass {activeSub.tier}
+                    </h3>
+                  </div>
+                </div>
+                <Badge className="bg-emerald-100 text-emerald-700 border-0 font-bold uppercase tracking-wider text-[10px] px-2 py-1 shadow-none">
+                  Ativo
+                </Badge>
               </div>
-              <Badge className="bg-emerald-500/20 text-emerald-400 px-3 py-1 rounded-full text-xs font-bold border border-emerald-500/30">
-                Ativo
-              </Badge>
-            </div>
-            <div className="pt-4 border-t border-slate-800 flex justify-between items-center">
-              <p className="text-xs text-slate-500 flex items-center gap-1.5">
-                <AlertTriangle className="w-3.5 h-3.5" /> Renovação automática.
-              </p>
-              <Button
-                onClick={handleCancelSubscription}
-                disabled={cancelingSub}
-                variant="ghost"
-                className="text-red-400 hover:text-red-300 hover:bg-red-400/10 text-xs font-bold h-9"
-              >
-                {cancelingSub ? "Cancelando..." : "Cancelar Assinatura"}
-              </Button>
+
+              {/* Grid de Métricas do Manager */}
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div className="bg-zinc-50 rounded-xl p-3 border border-zinc-100">
+                  <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1 flex items-center gap-1.5">
+                    <CalendarDays className="w-3 h-3" /> Renovação
+                  </p>
+                  <p className="font-black text-zinc-900 text-sm">
+                    {subNextRenewal}
+                  </p>
+                </div>
+                <div className="bg-zinc-50 rounded-xl p-3 border border-zinc-100">
+                  <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1 flex items-center gap-1.5">
+                    <TrendingUp className="w-3 h-3" /> Economizado
+                  </p>
+                  <p className="font-black text-emerald-600 text-sm">
+                    R$ {subSavedAmount},00
+                  </p>
+                </div>
+                <div className="bg-zinc-50 rounded-xl p-3 border border-zinc-100 col-span-2 md:col-span-1">
+                  <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1 flex items-center gap-1.5">
+                    <Wallet className="w-3 h-3" /> Fatura Mensal
+                  </p>
+                  <p className="font-black text-zinc-900 text-sm">
+                    R$ {activeSub.price || subPrice},00{" "}
+                    <span className="text-[10px] text-zinc-400 font-medium">
+                      /mês
+                    </span>
+                  </p>
+                </div>
+              </div>
+
+              {/* Barra de Consumo Inteligente Integrada à Carteira */}
+              <div className="bg-zinc-50 border border-zinc-100 rounded-xl p-4">
+                <div className="flex justify-between items-end mb-2">
+                  <p className="text-xs font-bold text-zinc-600">
+                    Uso do Pacote Atual
+                  </p>
+                  <p className="text-xs font-black text-zinc-900">
+                    {totalPlanHours - hoursLeft}{" "}
+                    <span className="text-zinc-400 font-medium">
+                      de {totalPlanHours}h
+                    </span>
+                  </p>
+                </div>
+                <div className="h-2.5 w-full bg-zinc-200 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-1000 ${activeSub.tier === "master" ? "bg-amber-500" : activeSub.tier === "vip" ? "bg-[#BF4B24]" : "bg-zinc-800"}`}
+                    style={{ width: `${subUsagePercent}%` }}
+                  />
+                </div>
+                {hoursLeft > 0 ? (
+                  <p className="text-[10px] font-bold text-emerald-600 mt-2 flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" /> Você ainda tem{" "}
+                    {hoursLeft}h disponíveis neste ciclo.
+                  </p>
+                ) : (
+                  <p className="text-[10px] font-bold text-amber-600 mt-2 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3" /> Horas esgotadas.
+                    Descontos avulsos liberados.
+                  </p>
+                )}
+              </div>
+
+              {/* Ações */}
+              <div className="pt-2 flex justify-between items-center gap-4">
+                <Button
+                  onClick={handleCancelSubscription}
+                  disabled={cancelingSub}
+                  variant="ghost"
+                  className="text-red-500 hover:text-red-600 hover:bg-red-50 text-xs font-bold px-0 md:px-4"
+                >
+                  {cancelingSub ? "Processando..." : "Cancelar Assinatura"}
+                </Button>
+                <Button
+                  onClick={() => {
+                    setView("wallet");
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                  }}
+                  className="bg-zinc-900 hover:bg-zinc-800 text-white font-bold text-xs rounded-xl shadow-md"
+                >
+                  <History className="w-4 h-4 mr-2" />
+                  Ver Histórico
+                </Button>
+              </div>
             </div>
           </div>
         )}
@@ -1497,7 +1653,7 @@ export function ProfileTab() {
               <Button
                 onClick={() => setView("edit")}
                 size="sm"
-                className="bg-red-600 hover:bg-red-700 text-white font-bold h-8 rounded-xl"
+                className="bg-red-600 hover:bg-red-700 text-white font-bold h-8 rounded-xl shadow-sm"
               >
                 Completar Agora
               </Button>
@@ -1505,23 +1661,23 @@ export function ProfileTab() {
           </div>
         )}
 
-        <div className="bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden divide-y divide-slate-100">
+        <div className="bg-white rounded-[2rem] shadow-sm border border-zinc-200 overflow-hidden divide-y divide-zinc-100">
           <button
             onClick={() => setView("edit")}
-            className="w-full flex items-center justify-between p-5 hover:bg-slate-50 transition-colors"
+            className="w-full flex items-center justify-between p-5 hover:bg-zinc-50 transition-colors"
           >
             <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center text-blue-500">
+              <div className="w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-600 border border-zinc-200">
                 <FileText className="w-5 h-5" />
               </div>
               <div className="text-left">
-                <p className="font-bold text-slate-900">Meus Dados</p>
-                <p className="text-xs font-medium text-slate-500 mt-0.5">
+                <p className="font-bold text-zinc-900">Meus Dados</p>
+                <p className="text-xs font-medium text-zinc-500 mt-0.5">
                   Informações pessoais e endereço
                 </p>
               </div>
             </div>
-            <ChevronRight className="w-5 h-5 text-slate-300" />
+            <ChevronRight className="w-5 h-5 text-zinc-300" />
           </button>
 
           <button
@@ -1531,20 +1687,20 @@ export function ProfileTab() {
                 description: "Redirecionando para o suporte...",
               })
             }
-            className="w-full flex items-center justify-between p-5 hover:bg-slate-50 transition-colors"
+            className="w-full flex items-center justify-between p-5 hover:bg-zinc-50 transition-colors"
           >
             <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
+              <div className="w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-600 border border-zinc-200">
                 <HelpCircle className="w-5 h-5" />
               </div>
               <div className="text-left">
-                <p className="font-bold text-slate-900">Central de Ajuda</p>
-                <p className="text-xs font-medium text-slate-500 mt-0.5">
+                <p className="font-bold text-zinc-900">Central de Ajuda</p>
+                <p className="text-xs font-medium text-zinc-500 mt-0.5">
                   Dúvidas frequentes e suporte
                 </p>
               </div>
             </div>
-            <ChevronRight className="w-5 h-5 text-slate-300" />
+            <ChevronRight className="w-5 h-5 text-zinc-300" />
           </button>
 
           <button
@@ -1552,7 +1708,7 @@ export function ProfileTab() {
             className="w-full flex items-center justify-between p-5 hover:bg-red-50/50 transition-colors group"
           >
             <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500 group-hover:bg-red-100 transition-colors">
+              <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500 border border-red-100 group-hover:bg-red-100 transition-colors">
                 <LogOut className="w-5 h-5" />
               </div>
               <div className="text-left">
@@ -1576,24 +1732,24 @@ export function ProfileTab() {
       <div className="mb-6 flex items-center gap-4">
         <button
           onClick={() => setView("overview")}
-          className="w-10 h-10 bg-white border border-slate-200 rounded-full flex items-center justify-center hover:bg-slate-50 text-slate-600"
+          className="w-10 h-10 bg-white border border-zinc-200 rounded-full flex items-center justify-center hover:bg-zinc-50 text-zinc-600"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
         <div>
-          <h1 className="text-2xl font-black text-slate-900">
+          <h1 className="text-2xl font-black text-zinc-900">
             Completar Perfil
           </h1>
-          <p className="text-sm text-slate-500 font-medium">
+          <p className="text-sm text-zinc-500 font-medium">
             Preencha seus dados para habilitar reservas.
           </p>
         </div>
       </div>
 
       <form onSubmit={handleSave} className="space-y-6">
-        <div className="bg-white border border-slate-200 p-6 rounded-[2rem] shadow-sm flex flex-col sm:flex-row items-center gap-6">
+        <div className="bg-white border border-zinc-200 p-6 rounded-[2rem] shadow-sm flex flex-col sm:flex-row items-center gap-6">
           <div className="relative group shrink-0">
-            <div className="w-24 h-24 rounded-full overflow-hidden bg-slate-100 border-2 border-slate-200">
+            <div className="w-24 h-24 rounded-full overflow-hidden bg-zinc-100 border-2 border-zinc-200">
               {formData.avatar_url ? (
                 <img
                   src={formData.avatar_url}
@@ -1601,7 +1757,7 @@ export function ProfileTab() {
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <div className="w-full h-full flex items-center justify-center text-slate-400">
+                <div className="w-full h-full flex items-center justify-center text-zinc-400">
                   <User className="w-10 h-10" />
                 </div>
               )}
@@ -1609,7 +1765,7 @@ export function ProfileTab() {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="absolute bottom-0 right-0 w-8 h-8 bg-slate-900 rounded-full flex items-center justify-center text-white border-2 border-white hover:bg-slate-800 transition-colors"
+              className="absolute bottom-0 right-0 w-8 h-8 bg-zinc-900 rounded-full flex items-center justify-center text-white border-2 border-white hover:bg-zinc-800 transition-colors shadow-sm"
             >
               {uploadingImage ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -1626,26 +1782,26 @@ export function ProfileTab() {
             />
           </div>
           <div className="text-center sm:text-left">
-            <h3 className="font-bold text-slate-900 flex items-center justify-center sm:justify-start gap-2">
+            <h3 className="font-bold text-zinc-900 flex items-center justify-center sm:justify-start gap-2">
               Foto de Perfil{" "}
-              <span className="text-xs text-slate-400 font-normal">
+              <span className="text-xs text-zinc-400 font-normal">
                 (Opcional)
               </span>
             </h3>
-            <p className="text-xs text-slate-500 mt-1">
+            <p className="text-xs text-zinc-500 mt-1">
               Sua foto será mostrada para os anfitriões ao realizar uma reserva.
             </p>
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 p-6 md:p-8 rounded-[2rem] shadow-sm">
-          <h3 className="text-lg font-black text-slate-900 mb-6 flex items-center gap-2">
+        <div className="bg-white border border-zinc-200 p-6 md:p-8 rounded-[2rem] shadow-sm">
+          <h3 className="text-lg font-black text-zinc-900 mb-6 flex items-center gap-2">
             <User className="w-5 h-5 text-[#BF4B24]" /> Dados Pessoais
           </h3>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
-              <Label className="font-bold text-slate-700">
+              <Label className="font-bold text-zinc-700">
                 Nome Completo <RequiredAsterisk />
               </Label>
               <Input
@@ -1654,11 +1810,11 @@ export function ProfileTab() {
                 onChange={(e) =>
                   setFormData({ ...formData, full_name: e.target.value })
                 }
-                className="h-12 bg-slate-50 border-slate-200 rounded-xl"
+                className="h-12 bg-zinc-50 border-zinc-200 rounded-xl focus-visible:ring-[#BF4B24]/20"
               />
             </div>
             <div className="space-y-2">
-              <Label className="font-bold text-slate-700">
+              <Label className="font-bold text-zinc-700">
                 CPF <RequiredAsterisk />
               </Label>
               <Input
@@ -1666,11 +1822,11 @@ export function ProfileTab() {
                 placeholder="000.000.000-00"
                 value={formData.cpf}
                 onChange={handleCpfChange}
-                className="h-12 bg-slate-50 border-slate-200 rounded-xl"
+                className="h-12 bg-zinc-50 border-zinc-200 rounded-xl focus-visible:ring-[#BF4B24]/20"
               />
             </div>
             <div className="space-y-2">
-              <Label className="font-bold text-slate-700">
+              <Label className="font-bold text-zinc-700">
                 Data de Nascimento <RequiredAsterisk />
               </Label>
               <Input
@@ -1679,11 +1835,11 @@ export function ProfileTab() {
                 placeholder="DD/MM/AAAA"
                 value={formData.birth_date}
                 onChange={handleDateChange}
-                className="h-12 bg-slate-50 border-slate-200 rounded-xl"
+                className="h-12 bg-zinc-50 border-zinc-200 rounded-xl focus-visible:ring-[#BF4B24]/20"
               />
             </div>
             <div className="space-y-2">
-              <Label className="font-bold text-slate-700">
+              <Label className="font-bold text-zinc-700">
                 Telefone / WhatsApp <RequiredAsterisk />
               </Label>
               <Input
@@ -1693,18 +1849,18 @@ export function ProfileTab() {
                 onChange={(e) =>
                   setFormData({ ...formData, phone: e.target.value })
                 }
-                className="h-12 bg-slate-50 border-slate-200 rounded-xl"
+                className="h-12 bg-zinc-50 border-zinc-200 rounded-xl focus-visible:ring-[#BF4B24]/20"
               />
             </div>
 
-            <div className="space-y-2 md:col-span-2 pt-4 border-t border-slate-100">
-              <h4 className="font-bold text-slate-700 mb-2">
+            <div className="space-y-2 md:col-span-2 pt-4 border-t border-zinc-100">
+              <h4 className="font-bold text-zinc-700 mb-2">
                 Registro Profissional
               </h4>
             </div>
 
             <div className="space-y-2">
-              <Label className="font-bold text-slate-700">
+              <Label className="font-bold text-zinc-700">
                 Conselho e Número <RequiredAsterisk />
               </Label>
               <div className="flex gap-2">
@@ -1714,7 +1870,7 @@ export function ProfileTab() {
                   onChange={(e) =>
                     setFormData({ ...formData, council: e.target.value })
                   }
-                  className="h-12 bg-slate-50 border border-slate-200 rounded-xl px-3 outline-none w-28 font-bold text-slate-700"
+                  className="h-12 bg-zinc-50 border border-zinc-200 rounded-xl px-3 outline-none w-28 font-bold text-zinc-700 focus:border-[#BF4B24] focus:ring-2 focus:ring-[#BF4B24]/20"
                 >
                   <option value="CRM">CRM</option>
                   <option value="CRP">CRP</option>
@@ -1729,13 +1885,12 @@ export function ProfileTab() {
                   onChange={(e) =>
                     setFormData({ ...formData, council_number: e.target.value })
                   }
-                  className="h-12 bg-slate-50 border-slate-200 rounded-xl flex-1"
+                  className="h-12 bg-zinc-50 border-zinc-200 rounded-xl flex-1 focus-visible:ring-[#BF4B24]/20"
                 />
               </div>
             </div>
-
             <div className="space-y-2">
-              <Label className="font-bold text-slate-700">
+              <Label className="font-bold text-zinc-700">
                 Especialidade <RequiredAsterisk />
               </Label>
               <Input
@@ -1745,20 +1900,20 @@ export function ProfileTab() {
                 onChange={(e) =>
                   setFormData({ ...formData, specialty: e.target.value })
                 }
-                className="h-12 bg-slate-50 border-slate-200 rounded-xl"
+                className="h-12 bg-zinc-50 border-zinc-200 rounded-xl focus-visible:ring-[#BF4B24]/20"
               />
             </div>
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 p-6 md:p-8 rounded-[2rem] shadow-sm">
-          <h3 className="text-lg font-black text-slate-900 mb-6 flex items-center gap-2">
+        <div className="bg-white border border-zinc-200 p-6 md:p-8 rounded-[2rem] shadow-sm">
+          <h3 className="text-lg font-black text-zinc-900 mb-6 flex items-center gap-2">
             <MapPin className="w-5 h-5 text-[#BF4B24]" /> Endereço Residencial
           </h3>
 
           <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
             <div className="space-y-2 md:col-span-4">
-              <Label className="font-bold text-slate-700">
+              <Label className="font-bold text-zinc-700">
                 CEP <RequiredAsterisk />
               </Label>
               <div className="relative flex items-center">
@@ -1767,13 +1922,13 @@ export function ProfileTab() {
                   placeholder="00000-000"
                   value={formData.cep}
                   onChange={handleCepChange}
-                  className="h-12 bg-slate-50 border-slate-200 rounded-xl pr-12"
+                  className="h-12 bg-zinc-50 border-zinc-200 rounded-xl pr-12 focus-visible:ring-[#BF4B24]/20"
                 />
                 <Button
                   type="button"
                   onClick={handleSearchCep}
                   disabled={cepLoading || formData.cep.length < 8}
-                  className="absolute right-1 top-1 bottom-1 w-10 h-10 rounded-lg p-0 bg-slate-900 text-white hover:bg-slate-800"
+                  className="absolute right-1 top-1 bottom-1 w-10 h-10 rounded-lg p-0 bg-zinc-900 text-white hover:bg-zinc-800"
                 >
                   {cepLoading ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -1783,8 +1938,9 @@ export function ProfileTab() {
                 </Button>
               </div>
             </div>
+
             <div className="space-y-2 md:col-span-8">
-              <Label className="font-bold text-slate-700">
+              <Label className="font-bold text-zinc-700">
                 Rua / Logradouro <RequiredAsterisk />
               </Label>
               <Input
@@ -1794,11 +1950,12 @@ export function ProfileTab() {
                 onChange={(e) =>
                   setFormData({ ...formData, address_street: e.target.value })
                 }
-                className="h-12 bg-slate-50 border-slate-200 rounded-xl"
+                className="h-12 bg-zinc-50 border-zinc-200 rounded-xl focus-visible:ring-[#BF4B24]/20"
               />
             </div>
+
             <div className="space-y-2 md:col-span-4">
-              <Label className="font-bold text-slate-700">
+              <Label className="font-bold text-zinc-700">
                 Número <RequiredAsterisk />
               </Label>
               <Input
@@ -1808,13 +1965,14 @@ export function ProfileTab() {
                 onChange={(e) =>
                   setFormData({ ...formData, address_number: e.target.value })
                 }
-                className="h-12 bg-slate-50 border-slate-200 rounded-xl"
+                className="h-12 bg-zinc-50 border-zinc-200 rounded-xl focus-visible:ring-[#BF4B24]/20"
               />
             </div>
+
             <div className="space-y-2 md:col-span-8">
-              <Label className="font-bold text-slate-700">
+              <Label className="font-bold text-zinc-700">
                 Complemento{" "}
-                <span className="text-xs text-slate-400 font-normal">
+                <span className="text-xs text-zinc-400 font-normal">
                   (Opcional)
                 </span>
               </Label>
@@ -1827,11 +1985,12 @@ export function ProfileTab() {
                     address_complement: e.target.value,
                   })
                 }
-                className="h-12 bg-slate-50 border-slate-200 rounded-xl"
+                className="h-12 bg-zinc-50 border-zinc-200 rounded-xl focus-visible:ring-[#BF4B24]/20"
               />
             </div>
+
             <div className="space-y-2 md:col-span-4">
-              <Label className="font-bold text-slate-700">
+              <Label className="font-bold text-zinc-700">
                 Bairro <RequiredAsterisk />
               </Label>
               <Input
@@ -1843,11 +2002,12 @@ export function ProfileTab() {
                     address_neighborhood: e.target.value,
                   })
                 }
-                className="h-12 bg-slate-50 border-slate-200 rounded-xl"
+                className="h-12 bg-zinc-50 border-zinc-200 rounded-xl focus-visible:ring-[#BF4B24]/20"
               />
             </div>
+
             <div className="space-y-2 md:col-span-5">
-              <Label className="font-bold text-slate-700">
+              <Label className="font-bold text-zinc-700">
                 Cidade <RequiredAsterisk />
               </Label>
               <Input
@@ -1856,11 +2016,12 @@ export function ProfileTab() {
                 onChange={(e) =>
                   setFormData({ ...formData, address_city: e.target.value })
                 }
-                className="h-12 bg-slate-50 border-slate-200 rounded-xl"
+                className="h-12 bg-zinc-50 border-zinc-200 rounded-xl focus-visible:ring-[#BF4B24]/20"
               />
             </div>
+
             <div className="space-y-2 md:col-span-3">
-              <Label className="font-bold text-slate-700">
+              <Label className="font-bold text-zinc-700">
                 Estado (UF) <RequiredAsterisk />
               </Label>
               <Input
@@ -1874,7 +2035,7 @@ export function ProfileTab() {
                     address_state: e.target.value.toUpperCase(),
                   })
                 }
-                className="h-12 bg-slate-50 border-slate-200 rounded-xl"
+                className="h-12 bg-zinc-50 border-zinc-200 rounded-xl focus-visible:ring-[#BF4B24]/20"
               />
             </div>
           </div>
@@ -1884,7 +2045,7 @@ export function ProfileTab() {
           <Button
             type="submit"
             disabled={saving}
-            className="w-full md:w-auto h-14 px-10 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-black shadow-lg text-lg"
+            className="w-full md:w-auto h-14 px-10 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black shadow-lg shadow-orange-500/20 text-lg"
           >
             {saving ? (
               <Loader2 className="w-5 h-5 mr-2 animate-spin" />
