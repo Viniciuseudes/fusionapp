@@ -13,7 +13,6 @@ import {
   CardContent,
   CardDescription,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import {
   AlertCircle,
@@ -71,7 +70,6 @@ export default function LoginPage() {
         provider: "google",
         options: {
           redirectTo: `${window.location.origin}/auth/callback`,
-          // Força o Google a exibir a tela de seleção de contas em todos os logins
           queryParams: {
             prompt: "select_account",
           },
@@ -115,7 +113,6 @@ export default function LoginPage() {
           description: "Login realizado com sucesso.",
         });
 
-        // Redirecionamento baseado no perfil de acesso
         const userRole = profile?.role;
         if (userRole === "admin") router.push("/admin/dashboard");
         else if (userRole === "host") router.push("/host");
@@ -164,7 +161,7 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 p-4">
-      <div className="w-full max-w-md mb-4 flex justify-start">
+      <div className="w-full max-w-md mb-3 flex justify-start">
         <button
           onClick={() =>
             step === "gateway"
@@ -181,29 +178,25 @@ export default function LoginPage() {
       <Card className="w-full max-w-md shadow-2xl border-slate-100 rounded-[2rem] overflow-hidden">
         <div className="h-2 w-full bg-gradient-to-r from-[#f05e23] to-[#d6521e]" />
 
-        <CardHeader className="space-y-2 text-center pt-8 pb-6">
-          <div className="mx-auto relative w-20 h-20 mb-2 drop-shadow-md">
+        <CardHeader className="space-y-1 text-center pt-6 pb-4">
+          <div className="mx-auto relative w-48 h-14 mb-1 drop-shadow-md">
             <Image
-              src="logo-fusion-orange.png"
+              src="/logo-fusion-orange.png"
               alt="Fusion Clinic"
               fill
               className="object-contain"
               priority
             />
           </div>
-          <CardTitle className="text-2xl font-black text-slate-900 tracking-tight">
-            Fusion Clinic
-          </CardTitle>
-          <CardDescription className="text-slate-500 font-medium px-4">
-            {step === "gateway" &&
-              "Acesse sua conta ou cadastre-se para alugar ou gerenciar espaços."}
+          <CardDescription className="text-slate-500 text-sm font-medium px-4">
+            {step === "gateway" && "Acesse ou cadastre-se para começar."}
             {step === "login" && "Acesse seu painel com e-mail e senha."}
             {step === "register_professional" &&
-              "Crie sua conta de Especialista para alugar salas."}
+              "Crie sua conta para alugar salas."}
           </CardDescription>
         </CardHeader>
 
-        <CardContent className="px-6 pb-8">
+        <CardContent className="px-6 pb-6">
           {error && (
             <div className="flex items-center gap-2 bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium mb-4">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -212,13 +205,13 @@ export default function LoginPage() {
           )}
 
           {step === "gateway" && (
-            <div className="space-y-4">
+            <div className="space-y-3">
               <Button
                 type="button"
                 onClick={handleGoogleLogin}
                 disabled={loadingGoogle}
                 variant="outline"
-                className="w-full h-14 rounded-xl font-bold border-slate-200 text-slate-700 hover:bg-slate-50 transition-all shadow-sm"
+                className="w-full h-12 rounded-xl font-bold border-slate-200 text-slate-700 hover:bg-slate-50 transition-all shadow-sm"
               >
                 {loadingGoogle ? (
                   <Loader2 className="w-5 h-5 animate-spin" />
@@ -229,11 +222,11 @@ export default function LoginPage() {
                 )}
               </Button>
 
-              <div className="relative py-2">
+              <div className="relative py-1">
                 <div className="absolute inset-0 flex items-center">
                   <span className="w-full border-t border-slate-200" />
                 </div>
-                <div className="relative flex justify-center text-xs uppercase">
+                <div className="relative flex justify-center text-[10px] uppercase">
                   <span className="bg-white px-3 text-slate-400 font-bold tracking-widest">
                     Ou use seu e-mail
                   </span>
@@ -242,12 +235,12 @@ export default function LoginPage() {
 
               <Button
                 onClick={() => setStep("login")}
-                className="w-full h-14 justify-start text-left bg-[#f05e23] hover:bg-[#d6521e] text-white rounded-xl shadow-sm transition-colors"
+                className="w-full h-12 justify-start text-left bg-[#f05e23] hover:bg-[#d6521e] text-white rounded-xl shadow-sm transition-colors"
               >
-                <LogIn className="w-5 h-5 mr-3 text-white/80" />
-                <div>
-                  <div className="font-bold">Já tenho uma conta</div>
-                  <div className="text-xs text-white/70 font-medium">
+                <LogIn className="w-5 h-5 mr-3 text-white/80 shrink-0" />
+                <div className="leading-tight">
+                  <div className="font-bold text-sm">Já tenho uma conta</div>
+                  <div className="text-[10px] text-white/70 font-medium">
                     Fazer login com senha
                   </div>
                 </div>
@@ -256,13 +249,15 @@ export default function LoginPage() {
               <Button
                 onClick={() => setStep("register_professional")}
                 variant="outline"
-                className="w-full h-14 justify-start text-left border-slate-200 hover:bg-slate-50 hover:text-[#f05e23] rounded-xl group"
+                className="w-full h-12 justify-start text-left border-slate-200 hover:bg-slate-50 hover:text-[#f05e23] rounded-xl group"
               >
-                <Stethoscope className="w-5 h-5 mr-3 text-slate-400 group-hover:text-[#f05e23]" />
-                <div>
-                  <div className="font-bold">Sou Profissional</div>
-                  <div className="text-xs text-slate-500 font-normal">
-                    Quero criar conta e reservar salas
+                <Stethoscope className="w-5 h-5 mr-3 text-slate-400 group-hover:text-[#f05e23] shrink-0" />
+                <div className="leading-tight">
+                  <div className="font-bold text-sm text-slate-700 group-hover:text-[#f05e23]">
+                    Sou Profissional
+                  </div>
+                  <div className="text-[10px] text-slate-500 font-medium">
+                    Criar conta e reservar salas
                   </div>
                 </div>
               </Button>
@@ -271,13 +266,15 @@ export default function LoginPage() {
                 type="button"
                 onClick={() => window.location.assign("/host/register")}
                 variant="outline"
-                className="w-full h-14 justify-start text-left border-slate-200 hover:bg-slate-50 hover:text-[#f05e23] rounded-xl group"
+                className="w-full h-12 justify-start text-left border-slate-200 hover:bg-slate-50 hover:text-[#f05e23] rounded-xl group"
               >
-                <Building2 className="w-5 h-5 mr-3 text-slate-400 group-hover:text-[#f05e23]" />
-                <div>
-                  <div className="font-bold">Sou Anfitrião</div>
-                  <div className="text-xs text-slate-500 font-normal">
-                    Quero cadastrar minha clínica
+                <Building2 className="w-5 h-5 mr-3 text-slate-400 group-hover:text-[#f05e23] shrink-0" />
+                <div className="leading-tight">
+                  <div className="font-bold text-sm text-slate-700 group-hover:text-[#f05e23]">
+                    Sou Anfitrião
+                  </div>
+                  <div className="text-[10px] text-slate-500 font-medium">
+                    Cadastrar minha clínica
                   </div>
                 </div>
               </Button>
@@ -286,8 +283,10 @@ export default function LoginPage() {
 
           {step === "login" && (
             <form onSubmit={handleLogin} className="space-y-4">
-              <div className="space-y-2">
-                <Label>E-mail</Label>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-slate-600">
+                  E-mail
+                </Label>
                 <Input
                   type="email"
                   placeholder="seu@email.com"
@@ -297,8 +296,10 @@ export default function LoginPage() {
                   className="h-12 bg-slate-50 rounded-xl"
                 />
               </div>
-              <div className="space-y-2">
-                <Label>Senha</Label>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-slate-600">
+                  Senha
+                </Label>
                 <Input
                   type="password"
                   placeholder="••••••••"
@@ -324,8 +325,10 @@ export default function LoginPage() {
 
           {step === "register_professional" && (
             <form onSubmit={handleRegisterProfessional} className="space-y-4">
-              <div className="space-y-2">
-                <Label>Nome Completo</Label>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-slate-600">
+                  Nome Completo
+                </Label>
                 <Input
                   type="text"
                   placeholder="Dr. João Silva"
@@ -335,8 +338,10 @@ export default function LoginPage() {
                   className="h-12 bg-slate-50 rounded-xl"
                 />
               </div>
-              <div className="space-y-2">
-                <Label>E-mail Profissional</Label>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-slate-600">
+                  E-mail Profissional
+                </Label>
                 <Input
                   type="email"
                   placeholder="medico@exemplo.com"
@@ -346,8 +351,10 @@ export default function LoginPage() {
                   className="h-12 bg-slate-50 rounded-xl"
                 />
               </div>
-              <div className="space-y-2">
-                <Label>Senha</Label>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-slate-600">
+                  Senha
+                </Label>
                 <Input
                   type="password"
                   placeholder="Crie uma senha forte"
