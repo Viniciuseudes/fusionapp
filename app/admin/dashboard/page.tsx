@@ -117,7 +117,7 @@ export default function AdminDashboardPage() {
           />
           <div>
             <h1 className="font-black text-slate-900 text-lg leading-tight tracking-tight">
-              Fusion Admin
+              Admin
             </h1>
             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
               Torre de Controle

@@ -981,7 +981,7 @@ export function SearchTab({
                 <div className="relative flex items-center flex-1 bg-white rounded-2xl border border-zinc-200 shadow-[0_4px_20px_rgb(0,0,0,0.03)] h-14 transition-all focus-within:ring-2 focus-within:ring-[#BF4B24]/20">
                   <Search className="absolute left-4 h-5 w-5 text-zinc-400" />
                   <Input
-                    placeholder="Buscar por cidade, clínica ou especialidade..."
+                    placeholder="Buscar por localização ou especialidade..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="h-full w-full border-0 bg-transparent pl-11 pr-4 text-sm text-zinc-900 shadow-none focus-visible:ring-0 placeholder:text-zinc-400 font-medium"
