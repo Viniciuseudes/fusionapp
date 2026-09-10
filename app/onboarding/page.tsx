@@ -100,7 +100,7 @@ export default function OnboardingPage() {
   if (checking) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
-        <Loader2 className="w-12 h-12 animate-spin text-[#f05e23] mb-4" />
+        <Loader2 className="w-12 h-12 animate-spin text-[#BF4B24] mb-4" />
         <h2 className="text-xl font-bold text-slate-700">
           Preparando sua conta...
         </h2>
@@ -111,7 +111,7 @@ export default function OnboardingPage() {
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
       <Card className="w-full max-w-xl shadow-2xl border-slate-100 rounded-[2rem] overflow-hidden">
-        <div className="h-2 w-full bg-gradient-to-r from-[#f05e23] to-[#d6521e]" />
+        <div className="h-2 w-full bg-gradient-to-r from-[#BF4B24] to-[#9A3C1D]" />
 
         <CardHeader className="space-y-2 text-center pt-10 pb-6 px-8">
           <div className="mx-auto relative w-20 h-20 mb-4 drop-shadow-md">
@@ -137,13 +137,13 @@ export default function OnboardingPage() {
           <button
             onClick={() => handleSelectRole("user")}
             disabled={loadingRole !== null}
-            className="w-full bg-white border-2 border-slate-100 hover:border-[#f05e23] hover:shadow-md transition-all p-6 rounded-2xl flex flex-col sm:flex-row items-center sm:items-start gap-4 text-left group"
+            className="w-full bg-white border-2 border-slate-100 hover:border-[#BF4B24] hover:shadow-md transition-all p-6 rounded-2xl flex flex-col sm:flex-row items-center sm:items-start gap-4 text-left group"
           >
             <div className="w-14 h-14 bg-orange-50 rounded-full flex items-center justify-center shrink-0">
-              <Stethoscope className="w-7 h-7 text-[#f05e23]" />
+              <Stethoscope className="w-7 h-7 text-[#BF4B24]" />
             </div>
             <div className="flex-1 text-center sm:text-left">
-              <h3 className="text-lg font-black text-slate-900 group-hover:text-[#f05e23] transition-colors">
+              <h3 className="text-lg font-black text-slate-900 group-hover:text-[#BF4B24] transition-colors">
                 Sou Profissional (Especialista)
               </h3>
               <p className="text-sm font-medium text-slate-500 mt-1">
@@ -153,9 +153,9 @@ export default function OnboardingPage() {
             </div>
             <div className="hidden sm:flex self-center">
               {loadingRole === "user" ? (
-                <Loader2 className="w-6 h-6 animate-spin text-[#f05e23]" />
+                <Loader2 className="w-6 h-6 animate-spin text-[#BF4B24]" />
               ) : (
-                <ArrowRight className="w-6 h-6 text-slate-300 group-hover:text-[#f05e23] transition-colors" />
+                <ArrowRight className="w-6 h-6 text-slate-300 group-hover:text-[#BF4B24] transition-colors" />
               )}
             </div>
           </button>
@@ -163,13 +163,13 @@ export default function OnboardingPage() {
           <button
             onClick={() => handleSelectRole("host")}
             disabled={loadingRole !== null}
-            className="w-full bg-white border-2 border-slate-100 hover:border-[#f05e23] hover:shadow-md transition-all p-6 rounded-2xl flex flex-col sm:flex-row items-center sm:items-start gap-4 text-left group"
+            className="w-full bg-white border-2 border-slate-100 hover:border-[#BF4B24] hover:shadow-md transition-all p-6 rounded-2xl flex flex-col sm:flex-row items-center sm:items-start gap-4 text-left group"
           >
             <div className="w-14 h-14 bg-slate-100 rounded-full flex items-center justify-center shrink-0">
               <Building2 className="w-7 h-7 text-slate-600" />
             </div>
             <div className="flex-1 text-center sm:text-left">
-              <h3 className="text-lg font-black text-slate-900 group-hover:text-[#f05e23] transition-colors">
+              <h3 className="text-lg font-black text-slate-900 group-hover:text-[#BF4B24] transition-colors">
                 Sou Anfitrião (Dono de Clínica)
               </h3>
               <p className="text-sm font-medium text-slate-500 mt-1">
@@ -179,9 +179,9 @@ export default function OnboardingPage() {
             </div>
             <div className="hidden sm:flex self-center">
               {loadingRole === "host" ? (
-                <Loader2 className="w-6 h-6 animate-spin text-[#f05e23]" />
+                <Loader2 className="w-6 h-6 animate-spin text-[#BF4B24]" />
               ) : (
-                <ArrowRight className="w-6 h-6 text-slate-300 group-hover:text-[#f05e23] transition-colors" />
+                <ArrowRight className="w-6 h-6 text-slate-300 group-hover:text-[#BF4B24] transition-colors" />
               )}
             </div>
           </button>

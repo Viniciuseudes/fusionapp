@@ -139,7 +139,7 @@ export function PWAPrompt() {
                 disabled={!isReady}
                 className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
                   isReady
-                    ? "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/20"
+                    ? "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/20"
                     : "bg-slate-800 text-slate-500 cursor-not-allowed"
                 }`}
               >

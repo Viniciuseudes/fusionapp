@@ -159,7 +159,7 @@ export function WalletTab() {
   if (loading) {
     return (
       <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -170,14 +170,14 @@ export function WalletTab() {
       <section>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-black text-slate-900 flex items-center gap-2">
-            <Wallet className="w-5 h-5 text-[#f05e23]" /> Minha Carteira
+            <Wallet className="w-5 h-5 text-[#BF4B24]" /> Minha Carteira
           </h2>
         </div>
 
         <div className="bg-slate-900 rounded-[2rem] p-8 text-white shadow-2xl relative overflow-hidden">
           {/* Efeitos de fundo do cartão */}
           <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
-          <div className="absolute bottom-0 left-0 w-48 h-48 bg-[#f05e23]/20 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2" />
+          <div className="absolute bottom-0 left-0 w-48 h-48 bg-[#BF4B24]/20 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2" />
 
           <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-8">
             <div>
@@ -227,7 +227,7 @@ export function WalletTab() {
       <section className="pt-4">
         <div className="mb-6">
           <h3 className="text-xl font-black text-slate-900 flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-[#f05e23]" /> Recarregar Horas
+            <Sparkles className="w-5 h-5 text-[#BF4B24]" /> Recarregar Horas
           </h3>
           <p className="text-sm font-medium text-slate-500 mt-1">
             Pacotes superiores (VIP/Master) podem ser usados em salas de

@@ -63,7 +63,7 @@ export function OnboardingTutorial() {
   const steps = [
     {
       id: "welcome",
-      icon: <Building2 className="w-16 h-16 text-[#f05e23]" />,
+      icon: <Building2 className="w-16 h-16 text-[#BF4B24]" />,
       title: "Bem-vindo à Fusion Clinic",
       subtitle: "A nova forma de gerenciar seus atendimentos.",
       description:
@@ -147,7 +147,7 @@ export function OnboardingTutorial() {
             <h2 className="text-2xl font-black text-slate-900 mb-2 tracking-tight">
               {step.title}
             </h2>
-            <p className="text-xs sm:text-sm font-bold text-[#f05e23] uppercase tracking-wider mb-3">
+            <p className="text-xs sm:text-sm font-bold text-[#BF4B24] uppercase tracking-wider mb-3">
               {step.subtitle}
             </p>
             <p className="text-sm font-medium text-slate-600 leading-relaxed">
@@ -177,7 +177,7 @@ export function OnboardingTutorial() {
                 id="dontShowAgain"
                 checked={dontShowAgain}
                 onChange={(e) => setDontShowAgain(e.target.checked)}
-                className="w-4 h-4 mt-0.5 rounded text-[#f05e23] border-slate-300 focus:ring-[#f05e23]"
+                className="w-4 h-4 mt-0.5 rounded text-[#BF4B24] border-slate-300 focus:ring-[#BF4B24]"
               />
               <label
                 htmlFor="dontShowAgain"
@@ -194,7 +194,7 @@ export function OnboardingTutorial() {
             {steps.map((_, idx) => (
               <div
                 key={idx}
-                className={`h-2 rounded-full transition-all duration-300 ${idx === currentStep ? "w-6 bg-[#f05e23]" : "w-2 bg-slate-200"}`}
+                className={`h-2 rounded-full transition-all duration-300 ${idx === currentStep ? "w-6 bg-[#BF4B24]" : "w-2 bg-slate-200"}`}
               />
             ))}
           </div>

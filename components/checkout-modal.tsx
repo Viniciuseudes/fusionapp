@@ -301,7 +301,7 @@ export function CheckoutModal({
                 />
               </div>
               <div className="flex flex-col justify-center">
-                <p className="text-xs font-bold text-[#f05e23] uppercase tracking-wider mb-1">
+                <p className="text-xs font-bold text-[#BF4B24] uppercase tracking-wider mb-1">
                   {room.specialty || "Consultório"}
                 </p>
                 <h4 className="font-bold text-lg text-slate-900 leading-tight">
@@ -399,14 +399,14 @@ export function CheckoutModal({
               <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-sm">
                 <div className="flex justify-between items-start mb-3 border-b border-slate-100 pb-3">
                   <div className="flex items-center gap-2">
-                    <CalendarIcon className="w-4 h-4 text-[#f05e23]" />
+                    <CalendarIcon className="w-4 h-4 text-[#BF4B24]" />
                     <p className="font-bold text-slate-900 text-sm">
                       Data e Horários
                     </p>
                   </div>
                   <button
                     onClick={onClose}
-                    className="text-xs font-bold text-[#f05e23] hover:underline underline-offset-2"
+                    className="text-xs font-bold text-[#BF4B24] hover:underline underline-offset-2"
                   >
                     Alterar Horas
                   </button>
@@ -510,16 +510,16 @@ export function CheckoutModal({
 
               <div
                 onClick={() => handlePaymentSelect("wallet")}
-                className={`p-4 rounded-xl border-2 cursor-pointer flex flex-col gap-2 transition-all ${paymentMethod === "wallet" ? "bg-orange-50 border-[#f05e23]" : "bg-white border-slate-200 hover:border-slate-300"}`}
+                className={`p-4 rounded-xl border-2 cursor-pointer flex flex-col gap-2 transition-all ${paymentMethod === "wallet" ? "bg-orange-50 border-[#BF4B24]" : "bg-white border-slate-200 hover:border-slate-300"}`}
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <Wallet
-                      className={`w-5 h-5 ${paymentMethod === "wallet" ? "text-[#f05e23]" : "text-slate-500"}`}
+                      className={`w-5 h-5 ${paymentMethod === "wallet" ? "text-[#BF4B24]" : "text-slate-500"}`}
                     />
                     <div>
                       <p
-                        className={`text-sm font-bold ${paymentMethod === "wallet" ? "text-[#f05e23]" : "text-slate-700"}`}
+                        className={`text-sm font-bold ${paymentMethod === "wallet" ? "text-[#BF4B24]" : "text-slate-700"}`}
                       >
                         Usar Créditos da Carteira
                       </p>
@@ -529,10 +529,10 @@ export function CheckoutModal({
                     </div>
                   </div>
                   <div
-                    className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMethod === "wallet" ? "border-[#f05e23]" : "border-slate-300"}`}
+                    className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMethod === "wallet" ? "border-[#BF4B24]" : "border-slate-300"}`}
                   >
                     {paymentMethod === "wallet" && (
-                      <div className="w-2.5 h-2.5 bg-[#f05e23] rounded-full" />
+                      <div className="w-2.5 h-2.5 bg-[#BF4B24] rounded-full" />
                     )}
                   </div>
                 </div>
@@ -552,15 +552,15 @@ export function CheckoutModal({
 
               <div
                 onClick={() => handlePaymentSelect("pix")}
-                className={`p-4 rounded-xl border-2 cursor-pointer flex items-center justify-between transition-all ${paymentMethod === "pix" ? "bg-orange-50 border-[#f05e23]" : "bg-white border-slate-200 hover:border-slate-300"}`}
+                className={`p-4 rounded-xl border-2 cursor-pointer flex items-center justify-between transition-all ${paymentMethod === "pix" ? "bg-orange-50 border-[#BF4B24]" : "bg-white border-slate-200 hover:border-slate-300"}`}
               >
                 <div className="flex items-center gap-3">
                   <QrCode
-                    className={`w-5 h-5 ${paymentMethod === "pix" ? "text-[#f05e23]" : "text-slate-500"}`}
+                    className={`w-5 h-5 ${paymentMethod === "pix" ? "text-[#BF4B24]" : "text-slate-500"}`}
                   />
                   <div>
                     <p
-                      className={`text-sm font-bold ${paymentMethod === "pix" ? "text-[#f05e23]" : "text-slate-700"}`}
+                      className={`text-sm font-bold ${paymentMethod === "pix" ? "text-[#BF4B24]" : "text-slate-700"}`}
                     >
                       Pix
                     </p>
@@ -570,25 +570,25 @@ export function CheckoutModal({
                   </div>
                 </div>
                 <div
-                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMethod === "pix" ? "border-[#f05e23]" : "border-slate-300"}`}
+                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMethod === "pix" ? "border-[#BF4B24]" : "border-slate-300"}`}
                 >
                   {paymentMethod === "pix" && (
-                    <div className="w-2.5 h-2.5 bg-[#f05e23] rounded-full" />
+                    <div className="w-2.5 h-2.5 bg-[#BF4B24] rounded-full" />
                   )}
                 </div>
               </div>
 
               <div
                 onClick={() => handlePaymentSelect("card")}
-                className={`p-4 rounded-xl border-2 cursor-pointer flex items-center justify-between transition-all ${paymentMethod === "card" ? "bg-orange-50 border-[#f05e23]" : "bg-white border-slate-200 hover:border-slate-300"}`}
+                className={`p-4 rounded-xl border-2 cursor-pointer flex items-center justify-between transition-all ${paymentMethod === "card" ? "bg-orange-50 border-[#BF4B24]" : "bg-white border-slate-200 hover:border-slate-300"}`}
               >
                 <div className="flex items-center gap-3">
                   <CreditCard
-                    className={`w-5 h-5 ${paymentMethod === "card" ? "text-[#f05e23]" : "text-slate-500"}`}
+                    className={`w-5 h-5 ${paymentMethod === "card" ? "text-[#BF4B24]" : "text-slate-500"}`}
                   />
                   <div>
                     <p
-                      className={`text-sm font-bold ${paymentMethod === "card" ? "text-[#f05e23]" : "text-slate-700"}`}
+                      className={`text-sm font-bold ${paymentMethod === "card" ? "text-[#BF4B24]" : "text-slate-700"}`}
                     >
                       Cartão de Crédito
                     </p>
@@ -598,10 +598,10 @@ export function CheckoutModal({
                   </div>
                 </div>
                 <div
-                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMethod === "card" ? "border-[#f05e23]" : "border-slate-300"}`}
+                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMethod === "card" ? "border-[#BF4B24]" : "border-slate-300"}`}
                 >
                   {paymentMethod === "card" && (
-                    <div className="w-2.5 h-2.5 bg-[#f05e23] rounded-full" />
+                    <div className="w-2.5 h-2.5 bg-[#BF4B24] rounded-full" />
                   )}
                 </div>
               </div>
@@ -625,7 +625,7 @@ export function CheckoutModal({
                 <Button
                   onClick={() => onConfirm(paymentMethod, appliedCoupon)}
                   disabled={loading || timeLeft === 0}
-                  className="w-full h-14 rounded-xl font-black bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-md transition-all text-base disabled:opacity-50"
+                  className="w-full h-14 rounded-xl font-black bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-md transition-all text-base disabled:opacity-50"
                 >
                   {loading ? (
                     <Loader2 className="w-5 h-5 animate-spin" />

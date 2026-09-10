@@ -176,7 +176,7 @@ export default function LoginPage() {
       </div>
 
       <Card className="w-full max-w-md shadow-2xl border-slate-100 rounded-[2rem] overflow-hidden">
-        <div className="h-2 w-full bg-gradient-to-r from-[#f05e23] to-[#d6521e]" />
+        <div className="h-2 w-full bg-gradient-to-r from-[#BF4B24] to-[#9A3C1D]" />
 
         <CardHeader className="space-y-1 text-center pt-6 pb-4">
           <div className="mx-auto relative w-48 h-14 mb-1 drop-shadow-md">
@@ -235,7 +235,7 @@ export default function LoginPage() {
 
               <Button
                 onClick={() => setStep("login")}
-                className="w-full h-12 justify-start text-left bg-[#f05e23] hover:bg-[#d6521e] text-white rounded-xl shadow-sm transition-colors"
+                className="w-full h-12 justify-start text-left bg-[#BF4B24] hover:bg-[#9A3C1D] text-white rounded-xl shadow-sm transition-colors"
               >
                 <LogIn className="w-5 h-5 mr-3 text-white/80 shrink-0" />
                 <div className="leading-tight">
@@ -249,11 +249,11 @@ export default function LoginPage() {
               <Button
                 onClick={() => setStep("register_professional")}
                 variant="outline"
-                className="w-full h-12 justify-start text-left border-slate-200 hover:bg-slate-50 hover:text-[#f05e23] rounded-xl group"
+                className="w-full h-12 justify-start text-left border-slate-200 hover:bg-slate-50 hover:text-[#BF4B24] rounded-xl group"
               >
-                <Stethoscope className="w-5 h-5 mr-3 text-slate-400 group-hover:text-[#f05e23] shrink-0" />
+                <Stethoscope className="w-5 h-5 mr-3 text-slate-400 group-hover:text-[#BF4B24] shrink-0" />
                 <div className="leading-tight">
-                  <div className="font-bold text-sm text-slate-700 group-hover:text-[#f05e23]">
+                  <div className="font-bold text-sm text-slate-700 group-hover:text-[#BF4B24]">
                     Sou Profissional
                   </div>
                   <div className="text-[10px] text-slate-500 font-medium">
@@ -266,11 +266,11 @@ export default function LoginPage() {
                 type="button"
                 onClick={() => window.location.assign("/host/register")}
                 variant="outline"
-                className="w-full h-12 justify-start text-left border-slate-200 hover:bg-slate-50 hover:text-[#f05e23] rounded-xl group"
+                className="w-full h-12 justify-start text-left border-slate-200 hover:bg-slate-50 hover:text-[#BF4B24] rounded-xl group"
               >
-                <Building2 className="w-5 h-5 mr-3 text-slate-400 group-hover:text-[#f05e23] shrink-0" />
+                <Building2 className="w-5 h-5 mr-3 text-slate-400 group-hover:text-[#BF4B24] shrink-0" />
                 <div className="leading-tight">
-                  <div className="font-bold text-sm text-slate-700 group-hover:text-[#f05e23]">
+                  <div className="font-bold text-sm text-slate-700 group-hover:text-[#BF4B24]">
                     Sou Anfitrião
                   </div>
                   <div className="text-[10px] text-slate-500 font-medium">
@@ -311,7 +311,7 @@ export default function LoginPage() {
               </div>
               <Button
                 type="submit"
-                className="w-full h-12 rounded-xl mt-2 font-bold bg-[#f05e23] hover:bg-[#d6521e] text-white"
+                className="w-full h-12 rounded-xl mt-2 font-bold bg-[#BF4B24] hover:bg-[#9A3C1D] text-white"
                 disabled={loading}
               >
                 {loading ? (
@@ -366,7 +366,7 @@ export default function LoginPage() {
               </div>
               <Button
                 type="submit"
-                className="w-full h-12 rounded-xl mt-2 font-bold bg-[#f05e23] hover:bg-[#d6521e] text-white"
+                className="w-full h-12 rounded-xl mt-2 font-bold bg-[#BF4B24] hover:bg-[#9A3C1D] text-white"
                 disabled={loading}
               >
                 {loading ? (

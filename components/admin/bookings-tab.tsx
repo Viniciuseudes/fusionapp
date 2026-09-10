@@ -254,7 +254,7 @@ export function AdminBookingsTab() {
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-2">
-            <CalendarIcon className="w-8 h-8 text-[#f05e23]" />
+            <CalendarIcon className="w-8 h-8 text-[#BF4B24]" />
             Histórico de Agendamentos
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-1">
@@ -271,7 +271,7 @@ export function AdminBookingsTab() {
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 mb-6">
         <div className="flex flex-col lg:flex-row justify-between items-center gap-4">
           <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
-            <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-[#f05e23]/20">
+            <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-[#BF4B24]/20">
               <div className="px-3 text-slate-400 border-r border-slate-200">
                 <CalendarIcon className="w-4 h-4" />
               </div>
@@ -293,7 +293,7 @@ export function AdminBookingsTab() {
             <Button
               onClick={fetchBookings}
               variant="outline"
-              className="h-10 w-10 p-0 rounded-xl border-slate-200 text-slate-600 hover:text-[#f05e23]"
+              className="h-10 w-10 p-0 rounded-xl border-slate-200 text-slate-600 hover:text-[#BF4B24]"
             >
               {loading ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -328,7 +328,7 @@ export function AdminBookingsTab() {
           <div className="flex gap-3 w-full lg:w-auto mt-4 lg:mt-0">
             <Button
               onClick={handleExportExcel}
-              className="flex-1 lg:flex-none bg-[#f05e23] hover:bg-[#d6521e] text-white font-bold h-10 shadow-sm"
+              className="flex-1 lg:flex-none bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold h-10 shadow-sm"
             >
               <FileSpreadsheet className="w-4 h-4 mr-2" /> Exportar Excel
             </Button>
@@ -345,7 +345,7 @@ export function AdminBookingsTab() {
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col relative">
         {loading && (
           <div className="absolute inset-0 bg-white/50 backdrop-blur-sm z-10 flex items-center justify-center">
-            <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+            <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
           </div>
         )}
 
@@ -398,7 +398,7 @@ export function AdminBookingsTab() {
                       </p>
                     </td>
                     <td className="px-6 py-4">
-                      <p className="font-bold text-[#f05e23]">
+                      <p className="font-bold text-[#BF4B24]">
                         {booking.specialist_name}
                       </p>
                     </td>

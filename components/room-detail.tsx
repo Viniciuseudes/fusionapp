@@ -1070,7 +1070,7 @@ export function RoomDetail(props: RoomDetailProps) {
   if (loading) {
     return (
       <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-6 text-center">
-        <Loader2 className="h-12 w-12 animate-spin text-[#f05e23]" />
+        <Loader2 className="h-12 w-12 animate-spin text-[#BF4B24]" />
         <h2 className="text-xl font-black text-slate-900 mb-2">
           Preparando o espaço...
         </h2>
@@ -1187,7 +1187,7 @@ export function RoomDetail(props: RoomDetailProps) {
           </div>
           <div className="flex items-center gap-4 text-xs md:text-sm font-medium text-slate-600">
             <div className="flex items-center gap-1.5 font-bold">
-              <MapPin className="w-4 h-4 text-[#f05e23]" />
+              <MapPin className="w-4 h-4 text-[#BF4B24]" />
               {address.city
                 ? `${address.city}, ${address.state}`
                 : "Localização protegida"}
@@ -1296,7 +1296,7 @@ export function RoomDetail(props: RoomDetailProps) {
                       key={amId}
                       className="flex items-center gap-3 p-3.5 rounded-xl bg-white border border-slate-200 shadow-sm hover:border-slate-300 transition-colors"
                     >
-                      <Icon className="w-5 h-5 text-[#f05e23]" />
+                      <Icon className="w-5 h-5 text-[#BF4B24]" />
                       <span className="text-xs font-bold text-slate-700">
                         {amenityDef.label}
                       </span>
@@ -1366,7 +1366,7 @@ export function RoomDetail(props: RoomDetailProps) {
               <section className="mt-10 animate-in fade-in slide-in-from-bottom-4">
                 <div className="bg-white rounded-3xl p-6 md:p-8 shadow-sm border border-slate-200 relative overflow-hidden group">
                   <div
-                    className={`absolute -right-10 -top-10 w-40 h-40 rounded-full blur-3xl pointer-events-none transition-all duration-500 opacity-[0.08] group-hover:opacity-[0.15] ${roomData.tier === "master" ? "bg-amber-500" : roomData.tier === "vip" ? "bg-[#f05e23]" : "bg-blue-500"}`}
+                    className={`absolute -right-10 -top-10 w-40 h-40 rounded-full blur-3xl pointer-events-none transition-all duration-500 opacity-[0.08] group-hover:opacity-[0.15] ${roomData.tier === "master" ? "bg-amber-500" : roomData.tier === "vip" ? "bg-[#BF4B24]" : "bg-blue-500"}`}
                   />
 
                   <div className="relative z-10 flex flex-col md:flex-row gap-8">
@@ -1375,7 +1375,7 @@ export function RoomDetail(props: RoomDetailProps) {
                         {roomData.tier === "master" ? (
                           <Crown className="w-6 h-6 text-amber-500" />
                         ) : roomData.tier === "vip" ? (
-                          <Star className="w-6 h-6 text-[#f05e23]" />
+                          <Star className="w-6 h-6 text-[#BF4B24]" />
                         ) : (
                           <Shield className="w-6 h-6 text-blue-500" />
                         )}
@@ -1514,7 +1514,7 @@ export function RoomDetail(props: RoomDetailProps) {
               {activeTab === "hora" && (
                 <section className="animate-in fade-in">
                   <div className="flex items-center gap-2 mb-4">
-                    <CalendarIcon className="w-5 h-5 text-[#f05e23]" />
+                    <CalendarIcon className="w-5 h-5 text-[#BF4B24]" />
                     <h2 className="text-lg font-black text-slate-900">
                       Agendamento
                     </h2>
@@ -1525,7 +1525,7 @@ export function RoomDetail(props: RoomDetailProps) {
                       <button
                         onClick={prevMonth}
                         disabled={!canGoPrevMonth}
-                        className={`p-1.5 rounded-full transition-colors ${canGoPrevMonth ? "text-slate-500 hover:bg-slate-100 hover:text-[#f05e23]" : "text-slate-200 cursor-not-allowed"}`}
+                        className={`p-1.5 rounded-full transition-colors ${canGoPrevMonth ? "text-slate-500 hover:bg-slate-100 hover:text-[#BF4B24]" : "text-slate-200 cursor-not-allowed"}`}
                       >
                         <ChevronLeft className="w-5 h-5" />
                       </button>
@@ -1536,7 +1536,7 @@ export function RoomDetail(props: RoomDetailProps) {
                       </div>
                       <button
                         onClick={nextMonth}
-                        className="p-1.5 rounded-full text-slate-500 hover:bg-slate-100 hover:text-[#f05e23] transition-colors"
+                        className="p-1.5 rounded-full text-slate-500 hover:bg-slate-100 hover:text-[#BF4B24] transition-colors"
                       >
                         <ChevronRight className="w-5 h-5" />
                       </button>
@@ -1574,14 +1574,14 @@ export function RoomDetail(props: RoomDetailProps) {
                               if (!isPast) setSelectedDate(day);
                             }}
                             disabled={isPast || !isCurrentMonth}
-                            className={`relative h-9 w-full rounded-lg text-xs font-bold flex flex-col items-center justify-center transition-colors ${!isCurrentMonth ? "invisible" : ""} ${isPast ? "text-slate-200 cursor-not-allowed" : ""} ${isSelected ? "bg-[#f05e23] text-white shadow-md shadow-orange-500/30" : ""} ${!isSelected && !isPast && isCurrentMonth ? "text-slate-700 hover:bg-slate-100" : ""}`}
+                            className={`relative h-9 w-full rounded-lg text-xs font-bold flex flex-col items-center justify-center transition-colors ${!isCurrentMonth ? "invisible" : ""} ${isPast ? "text-slate-200 cursor-not-allowed" : ""} ${isSelected ? "bg-[#BF4B24] text-white shadow-md shadow-orange-500/30" : ""} ${!isSelected && !isPast && isCurrentMonth ? "text-slate-700 hover:bg-slate-100" : ""}`}
                           >
                             <span className="relative z-10">
                               {format(day, "d")}
                             </span>
                             {hasSelection && (
                               <span
-                                className={`absolute bottom-1 w-1 h-1 rounded-full ${isSelected ? "bg-white" : "bg-[#f05e23]"}`}
+                                className={`absolute bottom-1 w-1 h-1 rounded-full ${isSelected ? "bg-white" : "bg-[#BF4B24]"}`}
                               />
                             )}
                           </button>
@@ -1627,15 +1627,15 @@ export function RoomDetail(props: RoomDetailProps) {
                               !isUnavailable && toggleSlot(slotKey)
                             }
                             disabled={isUnavailable}
-                            className={`h-14 rounded-xl flex flex-col items-center justify-center transition-all border-2 ${isUnavailable ? "border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed" : isSelected ? "border-[#f05e23] bg-orange-50" : "border-slate-100 bg-white hover:border-slate-300"}`}
+                            className={`h-14 rounded-xl flex flex-col items-center justify-center transition-all border-2 ${isUnavailable ? "border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed" : isSelected ? "border-[#BF4B24] bg-orange-50" : "border-slate-100 bg-white hover:border-slate-300"}`}
                           >
                             <span
-                              className={`text-xs font-bold ${isUnavailable ? "text-slate-400 line-through" : isSelected ? "text-[#f05e23]" : "text-slate-700"}`}
+                              className={`text-xs font-bold ${isUnavailable ? "text-slate-400 line-through" : isSelected ? "text-[#BF4B24]" : "text-slate-700"}`}
                             >
                               {slotTime}
                             </span>
                             <span
-                              className={`text-[10px] font-semibold mt-0.5 ${isUnavailable ? "text-slate-400" : isSelected ? "text-[#f05e23]/80" : "text-slate-400"}`}
+                              className={`text-[10px] font-semibold mt-0.5 ${isUnavailable ? "text-slate-400" : isSelected ? "text-[#BF4B24]/80" : "text-slate-400"}`}
                             >
                               {isUnavailable
                                 ? "Indisponível"
@@ -1656,7 +1656,7 @@ export function RoomDetail(props: RoomDetailProps) {
                             : "A partir de"}
                         </p>
                         <div className="flex items-baseline gap-1">
-                          <span className="text-2xl font-black text-[#f05e23]">
+                          <span className="text-2xl font-black text-[#BF4B24]">
                             R${" "}
                             {selectedSlots.length > 0
                               ? totalHourlyCost
@@ -1668,7 +1668,7 @@ export function RoomDetail(props: RoomDetailProps) {
                     <Button
                       onClick={handleAction}
                       disabled={actionLoading || selectedSlots.length === 0}
-                      className={`w-full h-14 rounded-xl font-black transition-all text-base ${selectedSlots.length > 0 ? "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/25 hover:scale-[1.02]" : "bg-slate-100 text-slate-400 shadow-none"}`}
+                      className={`w-full h-14 rounded-xl font-black transition-all text-base ${selectedSlots.length > 0 ? "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/25 hover:scale-[1.02]" : "bg-slate-100 text-slate-400 shadow-none"}`}
                     >
                       {actionLoading ? "Processando..." : "Reservar Agora"}
                     </Button>
@@ -1703,11 +1703,11 @@ export function RoomDetail(props: RoomDetailProps) {
                         <button
                           key={t.id}
                           onClick={() => setSelectedShift(t.id as any)}
-                          className={`flex flex-col items-center justify-center p-3.5 rounded-xl border-2 transition-all ${selectedShift === t.id ? "border-[#f05e23] bg-orange-50 text-[#f05e23]" : "border-slate-100 hover:border-slate-200 bg-white"}`}
+                          className={`flex flex-col items-center justify-center p-3.5 rounded-xl border-2 transition-all ${selectedShift === t.id ? "border-[#BF4B24] bg-orange-50 text-[#BF4B24]" : "border-slate-100 hover:border-slate-200 bg-white"}`}
                         >
                           <span className="text-xs font-black">{t.label}</span>
                           <span
-                            className={`text-[10px] font-bold mt-1 ${selectedShift === t.id ? "text-[#f05e23]/70" : "text-slate-400"}`}
+                            className={`text-[10px] font-bold mt-1 ${selectedShift === t.id ? "text-[#BF4B24]/70" : "text-slate-400"}`}
                           >
                             {t.price ? `R$ ${t.price}` : "--"}
                           </span>
@@ -1929,7 +1929,7 @@ export function RoomDetail(props: RoomDetailProps) {
                         <div className="mt-5 p-5 bg-slate-50 rounded-2xl border border-slate-200 md:ml-12 relative">
                           <div className="absolute top-0 left-6 -mt-2 w-4 h-4 bg-slate-50 border-t border-l border-slate-200 rotate-45"></div>
                           <p className="text-xs font-black text-slate-900 mb-1 flex items-center gap-1">
-                            <Check className="w-3.5 h-3.5 text-[#f05e23]" />{" "}
+                            <Check className="w-3.5 h-3.5 text-[#BF4B24]" />{" "}
                             Resposta do Anfitrião
                           </p>
                           <p className="text-sm font-medium text-slate-600">
@@ -1968,7 +1968,7 @@ export function RoomDetail(props: RoomDetailProps) {
           </p>
           <div className="flex items-baseline gap-1">
             <span
-              className={`text-2xl font-black ${activeTab === "hora" ? "text-[#f05e23]" : "text-slate-900"}`}
+              className={`text-2xl font-black ${activeTab === "hora" ? "text-[#BF4B24]" : "text-slate-900"}`}
             >
               R${" "}
               {activeTab === "hora"
@@ -1986,7 +1986,7 @@ export function RoomDetail(props: RoomDetailProps) {
           <Button
             onClick={handleAction}
             disabled={actionLoading || selectedSlots.length === 0}
-            className={`h-14 px-6 rounded-xl font-black transition-all w-[55%] text-base ${selectedSlots.length > 0 ? "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/25 active:scale-95" : "bg-slate-100 text-slate-400 shadow-none"}`}
+            className={`h-14 px-6 rounded-xl font-black transition-all w-[55%] text-base ${selectedSlots.length > 0 ? "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/25 active:scale-95" : "bg-slate-100 text-slate-400 shadow-none"}`}
           >
             {actionLoading ? "Aguarde..." : "Reservar"}
           </Button>
@@ -2141,7 +2141,7 @@ export function RoomDetail(props: RoomDetailProps) {
                   setShowProfileModal(false);
                   if (onNavigateToProfile) onNavigateToProfile();
                 }}
-                className="w-full h-12 rounded-xl font-black bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/25"
+                className="w-full h-12 rounded-xl font-black bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/25"
               >
                 Completar Perfil
               </Button>

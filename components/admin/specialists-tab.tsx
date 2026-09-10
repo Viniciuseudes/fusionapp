@@ -486,7 +486,7 @@ export function AdminSpecialistsTab() {
   if (loading)
     return (
       <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
 
@@ -578,7 +578,7 @@ export function AdminSpecialistsTab() {
 
         <div className="p-8 max-w-6xl mx-auto w-full space-y-6">
           <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm flex flex-col md:flex-row gap-8 relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-64 h-64 bg-[#f05e23]/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
+            <div className="absolute top-0 right-0 w-64 h-64 bg-[#BF4B24]/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
 
             <div className="w-32 h-32 rounded-full bg-slate-100 border-4 border-white shadow-lg overflow-hidden shrink-0 mx-auto md:mx-0">
               <img
@@ -673,7 +673,7 @@ export function AdminSpecialistsTab() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
-            <div className="bg-[#f05e23] rounded-3xl p-6 text-white shadow-lg relative overflow-hidden group md:col-span-6 lg:col-span-5">
+            <div className="bg-[#BF4B24] rounded-3xl p-6 text-white shadow-lg relative overflow-hidden group md:col-span-6 lg:col-span-5">
               <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl transition-transform group-hover:scale-150"></div>
               <div className="relative z-10 flex flex-col justify-between h-full gap-6">
                 <div>
@@ -760,13 +760,13 @@ export function AdminSpecialistsTab() {
             <div className="flex border-b border-slate-100">
               <button
                 onClick={() => setDossierTab("bookings")}
-                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "bookings" ? "border-[#f05e23] text-[#f05e23] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
+                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "bookings" ? "border-[#BF4B24] text-[#BF4B24] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
               >
                 Histórico de Reservas
               </button>
               <button
                 onClick={() => setDossierTab("transactions")}
-                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "transactions" ? "border-[#f05e23] text-[#f05e23] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
+                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "transactions" ? "border-[#BF4B24] text-[#BF4B24] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
               >
                 Extrato Financeiro (CR)
               </button>
@@ -774,13 +774,13 @@ export function AdminSpecialistsTab() {
 
             {profileLoading ? (
               <div className="flex justify-center py-20">
-                <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+                <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
               </div>
             ) : dossierTab === "bookings" ? (
               <div className="p-6">
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-6 gap-4 border-b border-slate-100 pb-6">
                   <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-[#f05e23]" /> Reservas
+                    <TrendingUp className="w-5 h-5 text-[#BF4B24]" /> Reservas
                     do Profissional
                   </h3>
 
@@ -883,7 +883,7 @@ export function AdminSpecialistsTab() {
               <div className="p-6">
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-6 gap-4 border-b border-slate-100 pb-6">
                   <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                    <Receipt className="w-5 h-5 text-[#f05e23]" /> Movimentações
+                    <Receipt className="w-5 h-5 text-[#BF4B24]" /> Movimentações
                     Financeiras
                   </h3>
 
@@ -981,7 +981,7 @@ export function AdminSpecialistsTab() {
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm px-4">
             <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 w-full max-w-md animate-in zoom-in-95">
               <div className="flex items-center gap-3 mb-6">
-                <div className="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center text-[#f05e23]">
+                <div className="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center text-[#BF4B24]">
                   <CreditCard className="w-6 h-6" />
                 </div>
                 <div>
@@ -1045,7 +1045,7 @@ export function AdminSpecialistsTab() {
                 <Button
                   disabled={!creditAmount || actionLoading}
                   onClick={handleAddCredits}
-                  className="flex-1 h-12 bg-[#f05e23] hover:bg-[#d6521e] text-white font-bold shadow-lg"
+                  className="flex-1 h-12 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold shadow-lg"
                 >
                   {actionLoading ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -1069,7 +1069,7 @@ export function AdminSpecialistsTab() {
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-2">
-            <Stethoscope className="w-8 h-8 text-[#f05e23]" />
+            <Stethoscope className="w-8 h-8 text-[#BF4B24]" />
             Especialistas (Profissionais)
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-1">
@@ -1106,7 +1106,7 @@ export function AdminSpecialistsTab() {
           </div>
         </div>
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center text-[#f05e23] shrink-0">
+          <div className="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center text-[#BF4B24] shrink-0">
             <Wallet className="w-6 h-6" />
           </div>
           <div>

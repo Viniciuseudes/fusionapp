@@ -50,7 +50,7 @@ const shiftLabels = [
   "Noite (20-23)",
 ];
 const PIE_COLORS = [
-  "#f05e23",
+  "#BF4B24",
   "#8b5cf6",
   "#10b981",
   "#3b82f6",
@@ -309,7 +309,7 @@ export function AdminOverviewTab() {
       return "bg-emerald-100 border-emerald-200 text-emerald-700";
     if (intensity <= 10) return "bg-amber-100 border-amber-200 text-amber-700";
     if (intensity <= 20) return "bg-orange-400 border-orange-500 text-white";
-    return "bg-[#d6521e] border-[#b03d12] text-white shadow-inner";
+    return "bg-[#9A3C1D] border-[#b03d12] text-white shadow-inner";
   };
 
   const handleExportPrint = () => {
@@ -319,7 +319,7 @@ export function AdminOverviewTab() {
   if (loading) {
     return (
       <div className="flex justify-center items-center h-full py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -362,7 +362,7 @@ export function AdminOverviewTab() {
           <Button
             onClick={handleExportPrint}
             variant="outline"
-            className="hidden md:flex h-11 rounded-xl border-slate-200 font-bold text-slate-600 hover:text-[#f05e23] hover:bg-orange-50"
+            className="hidden md:flex h-11 rounded-xl border-slate-200 font-bold text-slate-600 hover:text-[#BF4B24] hover:bg-orange-50"
           >
             <Download className="w-4 h-4 mr-2" /> Exportar BI
           </Button>
@@ -392,10 +392,10 @@ export function AdminOverviewTab() {
 
         {/* KPI 2: Receita Fusion (Take Rate) */}
         <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-6 rounded-2xl shadow-xl relative overflow-hidden group print:bg-white print:border print:border-slate-200 print:shadow-none">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-[#f05e23]/20 rounded-full blur-2xl -mr-8 -mt-8 transition-transform group-hover:scale-150 print:hidden"></div>
+          <div className="absolute top-0 right-0 w-32 h-32 bg-[#BF4B24]/20 rounded-full blur-2xl -mr-8 -mt-8 transition-transform group-hover:scale-150 print:hidden"></div>
           <div className="relative z-10">
             <div className="flex justify-between items-start mb-4">
-              <div className="w-10 h-10 rounded-xl bg-[#f05e23]/20 flex items-center justify-center text-[#f05e23]">
+              <div className="w-10 h-10 rounded-xl bg-[#BF4B24]/20 flex items-center justify-center text-[#BF4B24]">
                 <Wallet className="w-5 h-5" />
               </div>
             </div>
@@ -477,8 +477,8 @@ export function AdminOverviewTab() {
                     <stop offset="95%" stopColor="#94a3b8" stopOpacity={0} />
                   </linearGradient>
                   <linearGradient id="colorFee" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f05e23" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#f05e23" stopOpacity={0} />
+                    <stop offset="5%" stopColor="#BF4B24" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#BF4B24" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid
@@ -523,7 +523,7 @@ export function AdminOverviewTab() {
                 <Area
                   type="monotone"
                   dataKey="platformFee"
-                  stroke="#f05e23"
+                  stroke="#BF4B24"
                   strokeWidth={3}
                   fillOpacity={1}
                   fill="url(#colorFee)"
@@ -727,7 +727,7 @@ export function AdminOverviewTab() {
                         </span>
                         <div className="w-20 h-2 bg-slate-100 rounded-full overflow-hidden">
                           <div
-                            className="h-full rounded-full bg-[#f05e23]"
+                            className="h-full rounded-full bg-[#BF4B24]"
                             style={{ width: `${room.occupancy}%` }}
                           />
                         </div>

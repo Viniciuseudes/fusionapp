@@ -78,7 +78,7 @@ export function RoomQRScanner({
   if (checkingLocation) {
     return (
       <div className="fixed top-0 left-0 w-screen h-[100dvh] z-[9999] bg-slate-900 flex flex-col items-center justify-center p-6 text-center">
-        <MapPin className="w-16 h-16 text-[#f05e23] animate-bounce mb-4" />
+        <MapPin className="w-16 h-16 text-[#BF4B24] animate-bounce mb-4" />
         <h2 className="text-xl font-black text-white mb-2">
           Preparando Scanner...
         </h2>
@@ -146,12 +146,12 @@ export function RoomQRScanner({
 
       <div className="absolute inset-0 z-10 pointer-events-none flex flex-col items-center justify-center">
         <div className="w-64 h-64 border-2 border-white/20 rounded-[2rem] relative flex items-center justify-center overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.5)]">
-          <div className="absolute top-0 left-0 w-12 h-12 border-t-4 border-l-4 border-[#f05e23] rounded-tl-[2rem]"></div>
-          <div className="absolute top-0 right-0 w-12 h-12 border-t-4 border-r-4 border-[#f05e23] rounded-tr-[2rem]"></div>
-          <div className="absolute bottom-0 left-0 w-12 h-12 border-b-4 border-l-4 border-[#f05e23] rounded-bl-[2rem]"></div>
-          <div className="absolute bottom-0 right-0 w-12 h-12 border-b-4 border-r-4 border-[#f05e23] rounded-br-[2rem]"></div>
+          <div className="absolute top-0 left-0 w-12 h-12 border-t-4 border-l-4 border-[#BF4B24] rounded-tl-[2rem]"></div>
+          <div className="absolute top-0 right-0 w-12 h-12 border-t-4 border-r-4 border-[#BF4B24] rounded-tr-[2rem]"></div>
+          <div className="absolute bottom-0 left-0 w-12 h-12 border-b-4 border-l-4 border-[#BF4B24] rounded-bl-[2rem]"></div>
+          <div className="absolute bottom-0 right-0 w-12 h-12 border-b-4 border-r-4 border-[#BF4B24] rounded-br-[2rem]"></div>
 
-          <div className="w-full h-1 bg-[#f05e23] opacity-70 shadow-[0_0_15px_#f05e23] absolute top-1/2 animate-[scan_2s_ease-in-out_infinite]"></div>
+          <div className="w-full h-1 bg-[#BF4B24] opacity-70 shadow-[0_0_15px_#BF4B24] absolute top-1/2 animate-[scan_2s_ease-in-out_infinite]"></div>
         </div>
 
         <div className="mt-8 bg-black/60 backdrop-blur-md px-6 py-4 rounded-2xl border border-white/10 text-center mx-4">

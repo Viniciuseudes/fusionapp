@@ -6,7 +6,7 @@
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
-  "theme_color": "#f05e23",
+  "theme_color": "#BF4B24",
   "orientation": "portrait-primary",
   "lang": "pt-BR",
   "categories": ["medical", "business", "productivity"],

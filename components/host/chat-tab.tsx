@@ -236,7 +236,7 @@ export function HostChatTab() {
   if (loading)
     return (
       <div className="flex justify-center py-20">
-        <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
       </div>
     );
 
@@ -266,7 +266,7 @@ export function HostChatTab() {
                 <div
                   key={chat.id}
                   onClick={() => setActiveChat(chat)}
-                  className={`p-4 border-b border-slate-50 cursor-pointer transition-colors ${activeChat?.id === chat.id ? "bg-orange-50 border-l-4 border-l-[#f05e23]" : "hover:bg-slate-50 border-l-4 border-l-transparent"} ${isLocked ? "opacity-60 grayscale" : ""}`}
+                  className={`p-4 border-b border-slate-50 cursor-pointer transition-colors ${activeChat?.id === chat.id ? "bg-orange-50 border-l-4 border-l-[#BF4B24]" : "hover:bg-slate-50 border-l-4 border-l-transparent"} ${isLocked ? "opacity-60 grayscale" : ""}`}
                 >
                   <div className="flex justify-between items-start mb-1">
                     <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1">
@@ -274,7 +274,7 @@ export function HostChatTab() {
                       {getDisplayName(chat)}
                     </h4>
                   </div>
-                  <p className="text-xs font-semibold text-[#f05e23] truncate">
+                  <p className="text-xs font-semibold text-[#BF4B24] truncate">
                     {chat.room_name}
                   </p>
 
@@ -333,7 +333,7 @@ export function HostChatTab() {
               <div className="m-4 p-4 bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col sm:flex-row justify-between sm:items-center gap-4 shrink-0">
                 <div className="flex items-start gap-3">
                   <div className="w-10 h-10 rounded-full bg-orange-50 flex items-center justify-center shrink-0">
-                    <Calendar className="w-5 h-5 text-[#f05e23]" />
+                    <Calendar className="w-5 h-5 text-[#BF4B24]" />
                   </div>
                   <div>
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">
@@ -347,7 +347,7 @@ export function HostChatTab() {
                       )}
                     </p>
                     <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500 mt-1">
-                      <Clock className="w-3.5 h-3.5 text-[#f05e23]" />
+                      <Clock className="w-3.5 h-3.5 text-[#BF4B24]" />
                       {format(
                         parseISO(activeChat.booking.start_time),
                         "HH:mm",
@@ -447,7 +447,7 @@ export function HostChatTab() {
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
                   placeholder="Escreva sua resposta..."
-                  className="h-12 bg-slate-50 border-slate-200 pr-14 rounded-xl focus-visible:ring-[#f05e23]"
+                  className="h-12 bg-slate-50 border-slate-200 pr-14 rounded-xl focus-visible:ring-[#BF4B24]"
                   autoComplete="off"
                 />
                 <Button

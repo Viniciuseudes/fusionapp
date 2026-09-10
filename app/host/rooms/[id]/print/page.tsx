@@ -48,7 +48,7 @@ export default function PrintQRDoorSign() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-slate-100">
-        <Loader2 className="w-12 h-12 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-12 h-12 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -70,7 +70,7 @@ export default function PrintQRDoorSign() {
       <div className="w-[210mm] h-[297mm] bg-white p-12 flex flex-col items-center justify-between border border-slate-200 shadow-2xl print:border-none print:shadow-none print:w-full print:h-full">
         {/* HEADER DA PLACA */}
         <div className="w-full flex flex-col items-center text-center mt-10">
-          <div className="w-24 h-24 bg-[#f05e23] rounded-3xl flex items-center justify-center text-white text-5xl font-black mb-6 shadow-xl">
+          <div className="w-24 h-24 bg-[#BF4B24] rounded-3xl flex items-center justify-center text-white text-5xl font-black mb-6 shadow-xl">
             F
           </div>
           <h1 className="text-4xl font-black text-slate-900 tracking-tighter uppercase mb-2">
@@ -83,12 +83,12 @@ export default function PrintQRDoorSign() {
 
         {/* ÁREA DO QR CODE */}
         <div className="w-full flex flex-col items-center">
-          <div className="bg-slate-50 p-10 rounded-[3rem] border-4 border-[#f05e23] shadow-2xl relative">
+          <div className="bg-slate-50 p-10 rounded-[3rem] border-4 border-[#BF4B24] shadow-2xl relative">
             {/* Cantoneiras decorativas para reforçar o design do scanner */}
-            <div className="absolute -top-4 -left-4 w-12 h-12 border-t-8 border-l-8 border-[#f05e23] rounded-tl-3xl bg-white"></div>
-            <div className="absolute -top-4 -right-4 w-12 h-12 border-t-8 border-r-8 border-[#f05e23] rounded-tr-3xl bg-white"></div>
-            <div className="absolute -bottom-4 -left-4 w-12 h-12 border-b-8 border-l-8 border-[#f05e23] rounded-bl-3xl bg-white"></div>
-            <div className="absolute -bottom-4 -right-4 w-12 h-12 border-b-8 border-r-8 border-[#f05e23] rounded-br-3xl bg-white"></div>
+            <div className="absolute -top-4 -left-4 w-12 h-12 border-t-8 border-l-8 border-[#BF4B24] rounded-tl-3xl bg-white"></div>
+            <div className="absolute -top-4 -right-4 w-12 h-12 border-t-8 border-r-8 border-[#BF4B24] rounded-tr-3xl bg-white"></div>
+            <div className="absolute -bottom-4 -left-4 w-12 h-12 border-b-8 border-l-8 border-[#BF4B24] rounded-bl-3xl bg-white"></div>
+            <div className="absolute -bottom-4 -right-4 w-12 h-12 border-b-8 border-r-8 border-[#BF4B24] rounded-br-3xl bg-white"></div>
 
             {/* O QR Code Oficial gerado pelo React */}
             <QRCodeSVG
@@ -104,7 +104,7 @@ export default function PrintQRDoorSign() {
             <h2 className="text-5xl font-black text-slate-900 mb-4">
               {room.name}
             </h2>
-            <p className="text-2xl font-bold text-[#f05e23]">
+            <p className="text-2xl font-bold text-[#BF4B24]">
               Aponte a câmera do seu App
             </p>
             <p className="text-lg text-slate-500 font-medium mt-2">

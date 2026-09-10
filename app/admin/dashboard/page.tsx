@@ -88,7 +88,7 @@ export default function AdminDashboardPage() {
     <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
       <aside className="w-64 bg-slate-900 text-white flex flex-col shrink-0">
         <div className="p-6 border-b border-white/10 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f05e23] font-black text-xl shadow-lg">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#BF4B24] font-black text-xl shadow-lg">
             F
           </div>
           <div>
@@ -110,7 +110,7 @@ export default function AdminDashboardPage() {
                 onClick={() => setActiveTab(item.id)}
                 className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl font-bold transition-all ${
                   isActive
-                    ? "bg-[#f05e23] text-white shadow-md shadow-orange-500/20"
+                    ? "bg-[#BF4B24] text-white shadow-md shadow-orange-500/20"
                     : "text-slate-400 hover:bg-white/5 hover:text-white"
                 }`}
               >
@@ -712,7 +712,7 @@ function AdminRoomsTab() {
             onClick={() => !isPast && toggleBlockDate(cloneDay)}
             className={`
               h-14 border flex items-center justify-center text-sm font-bold transition-all rounded-xl cursor-pointer relative overflow-hidden
-              ${!isCurrentMonth ? "text-slate-300 bg-slate-50 border-slate-100" : "bg-white border-slate-200 hover:border-[#f05e23] hover:shadow-md"}
+              ${!isCurrentMonth ? "text-slate-300 bg-slate-50 border-slate-100" : "bg-white border-slate-200 hover:border-[#BF4B24] hover:shadow-md"}
               ${isPast ? "opacity-40 cursor-not-allowed hover:border-slate-200 hover:shadow-none" : ""}
               ${isBlocked && !isPast ? "bg-red-50 border-red-200 text-red-700" : "text-slate-700"}
             `}
@@ -757,7 +757,7 @@ function AdminRoomsTab() {
   if (loading)
     return (
       <div className="flex justify-center py-20">
-        <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
       </div>
     );
 
@@ -833,19 +833,19 @@ function AdminRoomsTab() {
             </p>
             <button
               onClick={() => setAuditTab("auditoria")}
-              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "auditoria" ? "bg-[#f05e23]/10 text-[#f05e23]" : "text-slate-500 hover:bg-slate-50"}`}
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "auditoria" ? "bg-[#BF4B24]/10 text-[#BF4B24]" : "text-slate-500 hover:bg-slate-50"}`}
             >
               <ShieldCheck className="w-5 h-5" /> Auditoria & Selos
             </button>
             <button
               onClick={() => setAuditTab("editar")}
-              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "editar" ? "bg-[#f05e23]/10 text-[#f05e23]" : "text-slate-500 hover:bg-slate-50"}`}
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "editar" ? "bg-[#BF4B24]/10 text-[#BF4B24]" : "text-slate-500 hover:bg-slate-50"}`}
             >
               <FileText className="w-5 h-5" /> Editar Informações
             </button>
             <button
               onClick={() => setAuditTab("agenda")}
-              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "agenda" ? "bg-[#f05e23]/10 text-[#f05e23]" : "text-slate-500 hover:bg-slate-50"}`}
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "agenda" ? "bg-[#BF4B24]/10 text-[#BF4B24]" : "text-slate-500 hover:bg-slate-50"}`}
             >
               <CalendarIcon className="w-5 h-5" /> Gerenciar Agenda
             </button>
@@ -901,7 +901,7 @@ function AdminRoomsTab() {
                         </p>
                         <p className="text-sm font-medium text-slate-500">
                           Valor Base (Hora):{" "}
-                          <strong className="text-[#f05e23]">
+                          <strong className="text-[#BF4B24]">
                             R$ {evalPricing.hourly || "0"}
                           </strong>
                         </p>
@@ -999,7 +999,7 @@ function AdminRoomsTab() {
 
                     <div className="p-6 border border-orange-200 bg-orange-50/50 rounded-2xl mb-8 flex flex-col md:flex-row md:items-center justify-between gap-6">
                       <div className="flex items-start gap-4">
-                        <div className="p-3 bg-white rounded-xl shadow-sm text-[#f05e23] shrink-0">
+                        <div className="p-3 bg-white rounded-xl shadow-sm text-[#BF4B24] shrink-0">
                           <Sparkles className="w-6 h-6" />
                         </div>
                         <div>
@@ -1030,7 +1030,7 @@ function AdminRoomsTab() {
                           onChange={(e) => setIsPartner(e.target.checked)}
                           className="sr-only peer"
                         />
-                        <div className="w-14 h-7 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-[#f05e23]"></div>
+                        <div className="w-14 h-7 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-[#BF4B24]"></div>
                       </label>
                     </div>
 
@@ -1122,7 +1122,7 @@ function AdminRoomsTab() {
                       <Button
                         onClick={handleSaveInfoEdit}
                         disabled={actionLoading}
-                        className="w-full h-14 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black text-base shadow-lg"
+                        className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black text-base shadow-lg"
                       >
                         {actionLoading ? (
                           "Salvando..."
@@ -1144,7 +1144,7 @@ function AdminRoomsTab() {
                   <div className="flex items-start justify-between bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
                     <div>
                       <h3 className="text-xl font-black text-slate-900 mb-2 flex items-center gap-2">
-                        <CalendarIcon className="w-6 h-6 text-[#f05e23]" />{" "}
+                        <CalendarIcon className="w-6 h-6 text-[#BF4B24]" />{" "}
                         Central de Reservas e Bloqueios
                       </h3>
                       <p className="text-sm font-medium text-slate-500 max-w-lg">
@@ -1550,7 +1550,7 @@ function AdminRoomsTab() {
                     </td>
                     <td className="px-6 py-4">
                       {room.is_partner && (
-                        <Badge className="bg-[#f05e23] text-white mr-2 text-[10px] uppercase border-0">
+                        <Badge className="bg-[#BF4B24] text-white mr-2 text-[10px] uppercase border-0">
                           Partner
                         </Badge>
                       )}

@@ -698,7 +698,7 @@ export function ProfileTab() {
   if (loading) {
     return (
       <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -737,7 +737,7 @@ export function ProfileTab() {
 
         {/* CARTÃO DE CRÉDITO DIGITAL LUXUOSO */}
         <div className="bg-slate-900 p-6 md:p-8 rounded-3xl text-white shadow-xl relative overflow-hidden mb-8">
-          <div className="absolute top-0 right-0 w-40 h-40 bg-[#f05e23]/30 rounded-full blur-3xl -mr-10 -mt-10"></div>
+          <div className="absolute top-0 right-0 w-40 h-40 bg-[#BF4B24]/30 rounded-full blur-3xl -mr-10 -mt-10"></div>
 
           <div className="relative z-10 flex flex-col md:flex-row gap-8 justify-between">
             <div className="flex-1">
@@ -758,7 +758,7 @@ export function ProfileTab() {
                     window.location.hash = "search";
                     window.dispatchEvent(new HashChangeEvent("hashchange"));
                   }}
-                  className="w-full sm:flex-1 h-12 px-6 rounded-xl font-black bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg text-sm"
+                  className="w-full sm:flex-1 h-12 px-6 rounded-xl font-black bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg text-sm"
                 >
                   <PlusCircle className="w-4 h-4 mr-2" /> Comprar Pass
                 </Button>
@@ -810,7 +810,7 @@ export function ProfileTab() {
                 </p>
                 <button
                   onClick={() => setIsTimelineOpen(true)}
-                  className="text-[10px] font-bold text-[#f05e23] hover:text-[#d6521e] uppercase tracking-wider bg-[#f05e23]/10 px-2 py-1 rounded-md transition-colors"
+                  className="text-[10px] font-bold text-[#BF4B24] hover:text-[#9A3C1D] uppercase tracking-wider bg-[#BF4B24]/10 px-2 py-1 rounded-md transition-colors"
                 >
                   Ver Todos ({allExpiringCredits.length})
                 </button>
@@ -918,7 +918,7 @@ export function ProfileTab() {
         {/* EXTRATO ESTILO LIVELO */}
         <div>
           <h3 className="text-lg font-black text-slate-900 mb-4 flex items-center gap-2">
-            <History className="w-5 h-5 text-[#f05e23]" /> Extrato
+            <History className="w-5 h-5 text-[#BF4B24]" /> Extrato
           </h3>
 
           <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden flex flex-col">
@@ -1084,7 +1084,7 @@ export function ProfileTab() {
             </DialogDescription>
             <DialogHeader className="mb-4">
               <div className="w-12 h-12 bg-orange-50 rounded-2xl flex items-center justify-center mb-4">
-                <Gift className="w-6 h-6 text-[#f05e23]" />
+                <Gift className="w-6 h-6 text-[#BF4B24]" />
               </div>
               <h2 className="text-2xl font-black text-slate-900">
                 Enviar Fusion Gift
@@ -1148,7 +1148,7 @@ export function ProfileTab() {
               <Button
                 onClick={handleSendGift}
                 disabled={actionLoading}
-                className="w-full h-14 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl shadow-lg shadow-orange-500/20 text-base transition-all active:scale-95"
+                className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl shadow-lg shadow-orange-500/20 text-base transition-all active:scale-95"
               >
                 {actionLoading ? (
                   <Loader2 className="w-5 h-5 animate-spin" />
@@ -1640,7 +1640,7 @@ export function ProfileTab() {
 
         <div className="bg-white border border-slate-200 p-6 md:p-8 rounded-[2rem] shadow-sm">
           <h3 className="text-lg font-black text-slate-900 mb-6 flex items-center gap-2">
-            <User className="w-5 h-5 text-[#f05e23]" /> Dados Pessoais
+            <User className="w-5 h-5 text-[#BF4B24]" /> Dados Pessoais
           </h3>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1753,7 +1753,7 @@ export function ProfileTab() {
 
         <div className="bg-white border border-slate-200 p-6 md:p-8 rounded-[2rem] shadow-sm">
           <h3 className="text-lg font-black text-slate-900 mb-6 flex items-center gap-2">
-            <MapPin className="w-5 h-5 text-[#f05e23]" /> Endereço Residencial
+            <MapPin className="w-5 h-5 text-[#BF4B24]" /> Endereço Residencial
           </h3>
 
           <div className="grid grid-cols-1 md:grid-cols-12 gap-6">

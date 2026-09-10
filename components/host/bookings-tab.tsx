@@ -172,7 +172,7 @@ export function HostBookingsTab() {
   if (loading) {
     return (
       <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -239,12 +239,12 @@ export function HostBookingsTab() {
           filteredBookings.map((booking) => (
             <div
               key={booking.id}
-              className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 hover:border-[#f05e23]/30 transition-colors"
+              className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 hover:border-[#BF4B24]/30 transition-colors"
             >
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 {/* Info do Médico e Sala */}
                 <div className="flex items-start gap-4">
-                  <div className="w-12 h-12 bg-orange-50 text-[#f05e23] rounded-full flex items-center justify-center shrink-0">
+                  <div className="w-12 h-12 bg-orange-50 text-[#BF4B24] rounded-full flex items-center justify-center shrink-0">
                     <User className="w-6 h-6" />
                   </div>
                   <div>
@@ -265,12 +265,12 @@ export function HostBookingsTab() {
                 <div className="flex flex-col md:items-end gap-2 border-t md:border-t-0 border-slate-100 pt-4 md:pt-0">
                   <div className="flex items-center gap-4 text-sm font-bold text-slate-700 bg-slate-50 px-4 py-2 rounded-xl border border-slate-100">
                     <div className="flex items-center gap-1.5">
-                      <CalendarIcon className="w-4 h-4 text-[#f05e23]" />
+                      <CalendarIcon className="w-4 h-4 text-[#BF4B24]" />
                       {booking.date}
                     </div>
                     <div className="w-px h-4 bg-slate-300"></div>
                     <div className="flex items-center gap-1.5">
-                      <Clock className="w-4 h-4 text-[#f05e23]" />
+                      <Clock className="w-4 h-4 text-[#BF4B24]" />
                       {booking.time}
                     </div>
                   </div>

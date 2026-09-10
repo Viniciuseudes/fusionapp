@@ -142,7 +142,7 @@ export default function AppPage() {
   if (isCheckingAuth) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-slate-50">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }

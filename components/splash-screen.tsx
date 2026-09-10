@@ -20,7 +20,7 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
     };
   }, [onComplete]);
 
-  const brandOrange = "#f05e23";
+  const brandOrange = "#BF4B24";
 
   return (
     <div

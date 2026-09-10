@@ -47,7 +47,7 @@ export function AvailabilityTab({ onSelectSpace }: AvailabilityTabProps) {
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center p-12 min-h-[40vh]">
-        <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
         <p className="mt-4 text-slate-500 font-medium">
           Carregando seus espaços...
         </p>
@@ -95,7 +95,7 @@ export function AvailabilityTab({ onSelectSpace }: AvailabilityTabProps) {
               return (
                 <div
                   key={space.id}
-                  className="bg-white rounded-2xl overflow-hidden shadow-sm border border-slate-200 hover:border-[#f05e23] transition-all group"
+                  className="bg-white rounded-2xl overflow-hidden shadow-sm border border-slate-200 hover:border-[#BF4B24] transition-all group"
                 >
                   <div className="flex flex-col sm:flex-row gap-4 p-4">
                     <div className="relative w-full sm:w-28 h-32 sm:h-28 rounded-xl overflow-hidden shrink-0 bg-slate-100">
@@ -114,14 +114,14 @@ export function AvailabilityTab({ onSelectSpace }: AvailabilityTabProps) {
                           {space.name}
                         </h3>
                         <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium mb-4">
-                          <MapPin className="w-3.5 h-3.5 shrink-0 text-[#f05e23]" />
+                          <MapPin className="w-3.5 h-3.5 shrink-0 text-[#BF4B24]" />
                           <span className="line-clamp-1">{fullAddress}</span>
                         </div>
                       </div>
 
                       <Button
                         onClick={() => onSelectSpace(space.id)}
-                        className="w-full bg-[#f05e23] hover:bg-[#d6521e] text-white font-bold h-10 shadow-sm transition-colors border-none"
+                        className="w-full bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold h-10 shadow-sm transition-colors border-none"
                       >
                         <Clock className="w-4 h-4 mr-2" />
                         Ajustar Disponibilidade

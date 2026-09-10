@@ -74,7 +74,7 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center pt-32 pb-20">
-        <Loader2 className="h-8 w-8 animate-spin text-[#f05e23]" />
+        <Loader2 className="h-8 w-8 animate-spin text-[#BF4B24]" />
         <p className="text-sm font-medium text-slate-500 mt-4">
           Buscando seus espaços favoritos...
         </p>
@@ -86,7 +86,7 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
     return (
       <div className="flex flex-col items-center justify-center pt-32 pb-20 px-6 text-center">
         <div className="flex h-16 w-16 items-center justify-center rounded-full bg-orange-50 mb-4">
-          <Heart className="h-8 w-8 text-[#f05e23]" />
+          <Heart className="h-8 w-8 text-[#BF4B24]" />
         </div>
         <h2 className="text-lg font-bold text-slate-900 mb-2">
           Faça login para ver seus favoritos
@@ -187,7 +187,7 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
 
                     <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 mt-1 truncate">
                       <MapPin
-                        className={`h-3 w-3 shrink-0 ${isAvailable ? "text-[#f05e23]" : "text-slate-400"}`}
+                        className={`h-3 w-3 shrink-0 ${isAvailable ? "text-[#BF4B24]" : "text-slate-400"}`}
                       />
                       <span className="truncate">{locationStr}</span>
                     </div>

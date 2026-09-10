@@ -269,7 +269,7 @@ function DashboardContent() {
       {!selectedRoom && (
         <aside className="hidden lg:flex fixed inset-y-0 left-0 z-40 w-64 flex-col border-r border-slate-200 bg-white shadow-sm">
           <div className="flex items-center gap-3 px-6 py-5 border-b border-slate-100">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f05e23] font-black text-xl text-white shadow-sm">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#BF4B24] font-black text-xl text-white shadow-sm">
               F
             </div>
             <div>
@@ -388,7 +388,7 @@ function DesktopNavItem({ icon: Icon, label, isActive, onClick }: any) {
     <li>
       <button
         onClick={onClick}
-        className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all duration-200 ${isActive ? "bg-[#f05e23]/10 text-[#f05e23]" : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"}`}
+        className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all duration-200 ${isActive ? "bg-[#BF4B24]/10 text-[#BF4B24]" : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"}`}
       >
         <Icon
           className={`w-5 h-5 ${isActive ? "stroke-[2.5px]" : "stroke-2"}`}
@@ -404,16 +404,16 @@ function MobileNavItem({ icon: Icon, label, isActive, onClick }: any) {
     <li className="flex-1">
       <button
         onClick={onClick}
-        className={`flex w-full flex-col items-center justify-center gap-1.5 py-3 text-[10px] font-bold transition-all duration-200 ${isActive ? "text-[#f05e23] scale-105" : "text-slate-400 hover:text-slate-700"}`}
+        className={`flex w-full flex-col items-center justify-center gap-1.5 py-3 text-[10px] font-bold transition-all duration-200 ${isActive ? "text-[#BF4B24] scale-105" : "text-slate-400 hover:text-slate-700"}`}
       >
         <div
           className={`relative flex items-center justify-center transition-transform duration-300 ${isActive ? "-translate-y-1" : ""}`}
         >
           <Icon
-            className={`w-5 h-5 transition-colors ${isActive ? "fill-[#f05e23]/20 stroke-[2.5px]" : "stroke-2"}`}
+            className={`w-5 h-5 transition-colors ${isActive ? "fill-[#BF4B24]/20 stroke-[2.5px]" : "stroke-2"}`}
           />
           {isActive && (
-            <span className="absolute -bottom-3 w-1.5 h-1.5 bg-[#f05e23] rounded-full animate-in zoom-in" />
+            <span className="absolute -bottom-3 w-1.5 h-1.5 bg-[#BF4B24] rounded-full animate-in zoom-in" />
           )}
         </div>
         <span
@@ -431,7 +431,7 @@ export default function DashboardPage() {
     <Suspense
       fallback={
         <div className="flex h-screen w-full items-center justify-center bg-slate-50">
-          <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+          <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
         </div>
       }
     >

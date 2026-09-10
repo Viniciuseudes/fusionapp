@@ -140,7 +140,7 @@ export function NotificationBell() {
       case "wallet":
         return <Wallet className="w-5 h-5 text-amber-500" />;
       default:
-        return <Sparkles className="w-5 h-5 text-[#f05e23]" />;
+        return <Sparkles className="w-5 h-5 text-[#BF4B24]" />;
     }
   };
 
@@ -149,7 +149,7 @@ export function NotificationBell() {
       {/* Botão do Sino */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className={`relative w-12 h-12 rounded-full flex items-center justify-center transition-all ${isOpen ? "bg-orange-50 text-[#f05e23]" : "bg-white text-slate-500 hover:bg-slate-50"} shadow-sm border border-slate-200`}
+        className={`relative w-12 h-12 rounded-full flex items-center justify-center transition-all ${isOpen ? "bg-orange-50 text-[#BF4B24]" : "bg-white text-slate-500 hover:bg-slate-50"} shadow-sm border border-slate-200`}
       >
         <Bell
           className={`w-5 h-5 ${unreadCount > 0 ? "fill-current animate-wiggle" : ""}`}
@@ -168,7 +168,7 @@ export function NotificationBell() {
             <h3 className="font-black text-slate-900 flex items-center gap-2">
               Notificações{" "}
               {unreadCount > 0 && (
-                <Badge className="bg-[#f05e23] text-white hover:bg-[#f05e23] border-0">
+                <Badge className="bg-[#BF4B24] text-white hover:bg-[#BF4B24] border-0">
                   {unreadCount} novas
                 </Badge>
               )}
@@ -176,7 +176,7 @@ export function NotificationBell() {
             {unreadCount > 0 && (
               <button
                 onClick={markAllAsRead}
-                className="text-xs font-bold text-[#f05e23] hover:underline"
+                className="text-xs font-bold text-[#BF4B24] hover:underline"
               >
                 Marcar todas lidas
               </button>
@@ -215,7 +215,7 @@ export function NotificationBell() {
                           {notification.title}
                         </p>
                         {!notification.is_read && (
-                          <span className="w-2 h-2 bg-[#f05e23] rounded-full shrink-0 mt-1.5" />
+                          <span className="w-2 h-2 bg-[#BF4B24] rounded-full shrink-0 mt-1.5" />
                         )}
                       </div>
                       <p

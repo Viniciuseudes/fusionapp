@@ -359,11 +359,11 @@ export default function AdminLoginPage() {
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-3xl p-8 shadow-2xl relative overflow-hidden">
         {/* Detalhe visual laranja no topo */}
-        <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-[#f05e23] to-[#d6521e]" />
+        <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-[#BF4B24] to-[#9A3C1D]" />
 
         <div className="flex flex-col items-center mb-8">
           <div className="w-16 h-16 bg-slate-900 rounded-2xl flex items-center justify-center mb-4 shadow-lg">
-            <ShieldCheck className="w-8 h-8 text-[#f05e23]" />
+            <ShieldCheck className="w-8 h-8 text-[#BF4B24]" />
           </div>
           <h1 className="text-2xl font-black text-slate-900">Fusion Admin</h1>
           <p className="text-sm font-medium text-slate-500 mt-1">
@@ -382,7 +382,7 @@ export default function AdminLoginPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="admin@fusionclinic.com.br"
-              className="h-12 rounded-xl bg-slate-50 border-slate-200 focus-visible:ring-[#f05e23]/20"
+              className="h-12 rounded-xl bg-slate-50 border-slate-200 focus-visible:ring-[#BF4B24]/20"
             />
           </div>
 
@@ -394,14 +394,14 @@ export default function AdminLoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
-              className="h-12 rounded-xl bg-slate-50 border-slate-200 focus-visible:ring-[#f05e23]/20"
+              className="h-12 rounded-xl bg-slate-50 border-slate-200 focus-visible:ring-[#BF4B24]/20"
             />
           </div>
 
           <Button
             type="submit"
             disabled={loading || !email || !password}
-            className="w-full h-12 rounded-xl font-black bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/20"
+            className="w-full h-12 rounded-xl font-black bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/20"
           >
             {loading ? (
               <Loader2 className="w-5 h-5 animate-spin" />
@@ -521,7 +521,7 @@ export default function PrintQRDoorSign() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-slate-100">
-        <Loader2 className="w-12 h-12 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-12 h-12 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -543,7 +543,7 @@ export default function PrintQRDoorSign() {
       <div className="w-[210mm] h-[297mm] bg-white p-12 flex flex-col items-center justify-between border border-slate-200 shadow-2xl print:border-none print:shadow-none print:w-full print:h-full">
         {/* HEADER DA PLACA */}
         <div className="w-full flex flex-col items-center text-center mt-10">
-          <div className="w-24 h-24 bg-[#f05e23] rounded-3xl flex items-center justify-center text-white text-5xl font-black mb-6 shadow-xl">
+          <div className="w-24 h-24 bg-[#BF4B24] rounded-3xl flex items-center justify-center text-white text-5xl font-black mb-6 shadow-xl">
             F
           </div>
           <h1 className="text-4xl font-black text-slate-900 tracking-tighter uppercase mb-2">
@@ -556,12 +556,12 @@ export default function PrintQRDoorSign() {
 
         {/* ÁREA DO QR CODE */}
         <div className="w-full flex flex-col items-center">
-          <div className="bg-slate-50 p-10 rounded-[3rem] border-4 border-[#f05e23] shadow-2xl relative">
+          <div className="bg-slate-50 p-10 rounded-[3rem] border-4 border-[#BF4B24] shadow-2xl relative">
             {/* Cantoneiras decorativas para reforçar o design do scanner */}
-            <div className="absolute -top-4 -left-4 w-12 h-12 border-t-8 border-l-8 border-[#f05e23] rounded-tl-3xl bg-white"></div>
-            <div className="absolute -top-4 -right-4 w-12 h-12 border-t-8 border-r-8 border-[#f05e23] rounded-tr-3xl bg-white"></div>
-            <div className="absolute -bottom-4 -left-4 w-12 h-12 border-b-8 border-l-8 border-[#f05e23] rounded-bl-3xl bg-white"></div>
-            <div className="absolute -bottom-4 -right-4 w-12 h-12 border-b-8 border-r-8 border-[#f05e23] rounded-br-3xl bg-white"></div>
+            <div className="absolute -top-4 -left-4 w-12 h-12 border-t-8 border-l-8 border-[#BF4B24] rounded-tl-3xl bg-white"></div>
+            <div className="absolute -top-4 -right-4 w-12 h-12 border-t-8 border-r-8 border-[#BF4B24] rounded-tr-3xl bg-white"></div>
+            <div className="absolute -bottom-4 -left-4 w-12 h-12 border-b-8 border-l-8 border-[#BF4B24] rounded-bl-3xl bg-white"></div>
+            <div className="absolute -bottom-4 -right-4 w-12 h-12 border-b-8 border-r-8 border-[#BF4B24] rounded-br-3xl bg-white"></div>
 
             {/* O QR Code Oficial gerado pelo React */}
             <QRCodeSVG
@@ -577,7 +577,7 @@ export default function PrintQRDoorSign() {
             <h2 className="text-5xl font-black text-slate-900 mb-4">
               {room.name}
             </h2>
-            <p className="text-2xl font-bold text-[#f05e23]">
+            <p className="text-2xl font-bold text-[#BF4B24]">
               Aponte a câmera do seu App
             </p>
             <p className="text-lg text-slate-500 font-medium mt-2">
@@ -721,7 +721,7 @@ export default function OnboardingPage() {
   if (checking) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
-        <Loader2 className="w-12 h-12 animate-spin text-[#f05e23] mb-4" />
+        <Loader2 className="w-12 h-12 animate-spin text-[#BF4B24] mb-4" />
         <h2 className="text-xl font-bold text-slate-700">
           Preparando sua conta...
         </h2>
@@ -732,7 +732,7 @@ export default function OnboardingPage() {
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
       <Card className="w-full max-w-xl shadow-2xl border-slate-100 rounded-[2rem] overflow-hidden">
-        <div className="h-2 w-full bg-gradient-to-r from-[#f05e23] to-[#d6521e]" />
+        <div className="h-2 w-full bg-gradient-to-r from-[#BF4B24] to-[#9A3C1D]" />
 
         <CardHeader className="space-y-2 text-center pt-10 pb-6 px-8">
           <div className="mx-auto relative w-20 h-20 mb-4 drop-shadow-md">
@@ -758,13 +758,13 @@ export default function OnboardingPage() {
           <button
             onClick={() => handleSelectRole("user")}
             disabled={loadingRole !== null}
-            className="w-full bg-white border-2 border-slate-100 hover:border-[#f05e23] hover:shadow-md transition-all p-6 rounded-2xl flex flex-col sm:flex-row items-center sm:items-start gap-4 text-left group"
+            className="w-full bg-white border-2 border-slate-100 hover:border-[#BF4B24] hover:shadow-md transition-all p-6 rounded-2xl flex flex-col sm:flex-row items-center sm:items-start gap-4 text-left group"
           >
             <div className="w-14 h-14 bg-orange-50 rounded-full flex items-center justify-center shrink-0">
-              <Stethoscope className="w-7 h-7 text-[#f05e23]" />
+              <Stethoscope className="w-7 h-7 text-[#BF4B24]" />
             </div>
             <div className="flex-1 text-center sm:text-left">
-              <h3 className="text-lg font-black text-slate-900 group-hover:text-[#f05e23] transition-colors">
+              <h3 className="text-lg font-black text-slate-900 group-hover:text-[#BF4B24] transition-colors">
                 Sou Profissional (Especialista)
               </h3>
               <p className="text-sm font-medium text-slate-500 mt-1">
@@ -774,9 +774,9 @@ export default function OnboardingPage() {
             </div>
             <div className="hidden sm:flex self-center">
               {loadingRole === "user" ? (
-                <Loader2 className="w-6 h-6 animate-spin text-[#f05e23]" />
+                <Loader2 className="w-6 h-6 animate-spin text-[#BF4B24]" />
               ) : (
-                <ArrowRight className="w-6 h-6 text-slate-300 group-hover:text-[#f05e23] transition-colors" />
+                <ArrowRight className="w-6 h-6 text-slate-300 group-hover:text-[#BF4B24] transition-colors" />
               )}
             </div>
           </button>
@@ -784,13 +784,13 @@ export default function OnboardingPage() {
           <button
             onClick={() => handleSelectRole("host")}
             disabled={loadingRole !== null}
-            className="w-full bg-white border-2 border-slate-100 hover:border-[#f05e23] hover:shadow-md transition-all p-6 rounded-2xl flex flex-col sm:flex-row items-center sm:items-start gap-4 text-left group"
+            className="w-full bg-white border-2 border-slate-100 hover:border-[#BF4B24] hover:shadow-md transition-all p-6 rounded-2xl flex flex-col sm:flex-row items-center sm:items-start gap-4 text-left group"
           >
             <div className="w-14 h-14 bg-slate-100 rounded-full flex items-center justify-center shrink-0">
               <Building2 className="w-7 h-7 text-slate-600" />
             </div>
             <div className="flex-1 text-center sm:text-left">
-              <h3 className="text-lg font-black text-slate-900 group-hover:text-[#f05e23] transition-colors">
+              <h3 className="text-lg font-black text-slate-900 group-hover:text-[#BF4B24] transition-colors">
                 Sou Anfitrião (Dono de Clínica)
               </h3>
               <p className="text-sm font-medium text-slate-500 mt-1">
@@ -800,9 +800,9 @@ export default function OnboardingPage() {
             </div>
             <div className="hidden sm:flex self-center">
               {loadingRole === "host" ? (
-                <Loader2 className="w-6 h-6 animate-spin text-[#f05e23]" />
+                <Loader2 className="w-6 h-6 animate-spin text-[#BF4B24]" />
               ) : (
-                <ArrowRight className="w-6 h-6 text-slate-300 group-hover:text-[#f05e23] transition-colors" />
+                <ArrowRight className="w-6 h-6 text-slate-300 group-hover:text-[#BF4B24] transition-colors" />
               )}
             </div>
           </button>
@@ -1005,7 +1005,7 @@ const shiftLabels = [
   "Noite (20-23)",
 ];
 const PIE_COLORS = [
-  "#f05e23",
+  "#BF4B24",
   "#8b5cf6",
   "#10b981",
   "#3b82f6",
@@ -1264,7 +1264,7 @@ export function AdminOverviewTab() {
       return "bg-emerald-100 border-emerald-200 text-emerald-700";
     if (intensity <= 10) return "bg-amber-100 border-amber-200 text-amber-700";
     if (intensity <= 20) return "bg-orange-400 border-orange-500 text-white";
-    return "bg-[#d6521e] border-[#b03d12] text-white shadow-inner";
+    return "bg-[#9A3C1D] border-[#b03d12] text-white shadow-inner";
   };
 
   const handleExportPrint = () => {
@@ -1274,7 +1274,7 @@ export function AdminOverviewTab() {
   if (loading) {
     return (
       <div className="flex justify-center items-center h-full py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -1317,7 +1317,7 @@ export function AdminOverviewTab() {
           <Button
             onClick={handleExportPrint}
             variant="outline"
-            className="hidden md:flex h-11 rounded-xl border-slate-200 font-bold text-slate-600 hover:text-[#f05e23] hover:bg-orange-50"
+            className="hidden md:flex h-11 rounded-xl border-slate-200 font-bold text-slate-600 hover:text-[#BF4B24] hover:bg-orange-50"
           >
             <Download className="w-4 h-4 mr-2" /> Exportar BI
           </Button>
@@ -1347,10 +1347,10 @@ export function AdminOverviewTab() {
 
         {/* KPI 2: Receita Fusion (Take Rate) */}
         <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-6 rounded-2xl shadow-xl relative overflow-hidden group print:bg-white print:border print:border-slate-200 print:shadow-none">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-[#f05e23]/20 rounded-full blur-2xl -mr-8 -mt-8 transition-transform group-hover:scale-150 print:hidden"></div>
+          <div className="absolute top-0 right-0 w-32 h-32 bg-[#BF4B24]/20 rounded-full blur-2xl -mr-8 -mt-8 transition-transform group-hover:scale-150 print:hidden"></div>
           <div className="relative z-10">
             <div className="flex justify-between items-start mb-4">
-              <div className="w-10 h-10 rounded-xl bg-[#f05e23]/20 flex items-center justify-center text-[#f05e23]">
+              <div className="w-10 h-10 rounded-xl bg-[#BF4B24]/20 flex items-center justify-center text-[#BF4B24]">
                 <Wallet className="w-5 h-5" />
               </div>
             </div>
@@ -1432,8 +1432,8 @@ export function AdminOverviewTab() {
                     <stop offset="95%" stopColor="#94a3b8" stopOpacity={0} />
                   </linearGradient>
                   <linearGradient id="colorFee" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f05e23" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#f05e23" stopOpacity={0} />
+                    <stop offset="5%" stopColor="#BF4B24" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#BF4B24" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid
@@ -1478,7 +1478,7 @@ export function AdminOverviewTab() {
                 <Area
                   type="monotone"
                   dataKey="platformFee"
-                  stroke="#f05e23"
+                  stroke="#BF4B24"
                   strokeWidth={3}
                   fillOpacity={1}
                   fill="url(#colorFee)"
@@ -1682,7 +1682,7 @@ export function AdminOverviewTab() {
                         </span>
                         <div className="w-20 h-2 bg-slate-100 rounded-full overflow-hidden">
                           <div
-                            className="h-full rounded-full bg-[#f05e23]"
+                            className="h-full rounded-full bg-[#BF4B24]"
                             style={{ width: `${room.occupancy}%` }}
                           />
                         </div>
@@ -1858,7 +1858,7 @@ export function PackagesAdminTab() {
   if (loading) {
     return (
       <div className="flex justify-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -1897,7 +1897,7 @@ export function PackagesAdminTab() {
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
         <div>
           <h2 className="text-3xl font-black text-slate-900 flex items-center gap-3 tracking-tight">
-            <Tags className="w-8 h-8 text-[#f05e23]" /> Precificação de Pacotes
+            <Tags className="w-8 h-8 text-[#BF4B24]" /> Precificação de Pacotes
           </h2>
           <p className="text-sm font-medium text-slate-500 mt-2">
             Altere os valores dos pacotes em tempo real para campanhas e
@@ -2164,7 +2164,7 @@ export function AdminRoomsTab() {
   if (loading)
     return (
       <div className="flex justify-center py-20">
-        <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
       </div>
     );
 
@@ -9499,7 +9499,7 @@ export function NotificationBell() {
       case "wallet":
         return <Wallet className="w-5 h-5 text-amber-500" />;
       default:
-        return <Sparkles className="w-5 h-5 text-[#f05e23]" />;
+        return <Sparkles className="w-5 h-5 text-[#BF4B24]" />;
     }
   };
 
@@ -9508,7 +9508,7 @@ export function NotificationBell() {
       {/* Botão do Sino */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className={`relative w-12 h-12 rounded-full flex items-center justify-center transition-all ${isOpen ? "bg-orange-50 text-[#f05e23]" : "bg-white text-slate-500 hover:bg-slate-50"} shadow-sm border border-slate-200`}
+        className={`relative w-12 h-12 rounded-full flex items-center justify-center transition-all ${isOpen ? "bg-orange-50 text-[#BF4B24]" : "bg-white text-slate-500 hover:bg-slate-50"} shadow-sm border border-slate-200`}
       >
         <Bell
           className={`w-5 h-5 ${unreadCount > 0 ? "fill-current animate-wiggle" : ""}`}
@@ -9527,7 +9527,7 @@ export function NotificationBell() {
             <h3 className="font-black text-slate-900 flex items-center gap-2">
               Notificações{" "}
               {unreadCount > 0 && (
-                <Badge className="bg-[#f05e23] text-white hover:bg-[#f05e23] border-0">
+                <Badge className="bg-[#BF4B24] text-white hover:bg-[#BF4B24] border-0">
                   {unreadCount} novas
                 </Badge>
               )}
@@ -9535,7 +9535,7 @@ export function NotificationBell() {
             {unreadCount > 0 && (
               <button
                 onClick={markAllAsRead}
-                className="text-xs font-bold text-[#f05e23] hover:underline"
+                className="text-xs font-bold text-[#BF4B24] hover:underline"
               >
                 Marcar todas lidas
               </button>
@@ -9574,7 +9574,7 @@ export function NotificationBell() {
                           {notification.title}
                         </p>
                         {!notification.is_read && (
-                          <span className="w-2 h-2 bg-[#f05e23] rounded-full shrink-0 mt-1.5" />
+                          <span className="w-2 h-2 bg-[#BF4B24] rounded-full shrink-0 mt-1.5" />
                         )}
                       </div>
                       <p
@@ -9863,7 +9863,7 @@ export function WalletTab() {
   if (loading) {
     return (
       <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -9874,14 +9874,14 @@ export function WalletTab() {
       <section>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-black text-slate-900 flex items-center gap-2">
-            <Wallet className="w-5 h-5 text-[#f05e23]" /> Minha Carteira
+            <Wallet className="w-5 h-5 text-[#BF4B24]" /> Minha Carteira
           </h2>
         </div>
 
         <div className="bg-slate-900 rounded-[2rem] p-8 text-white shadow-2xl relative overflow-hidden">
           {/* Efeitos de fundo do cartão */}
           <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
-          <div className="absolute bottom-0 left-0 w-48 h-48 bg-[#f05e23]/20 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2" />
+          <div className="absolute bottom-0 left-0 w-48 h-48 bg-[#BF4B24]/20 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2" />
 
           <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-8">
             <div>
@@ -9931,7 +9931,7 @@ export function WalletTab() {
       <section className="pt-4">
         <div className="mb-6">
           <h3 className="text-xl font-black text-slate-900 flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-[#f05e23]" /> Recarregar Horas
+            <Sparkles className="w-5 h-5 text-[#BF4B24]" /> Recarregar Horas
           </h3>
           <p className="text-sm font-medium text-slate-500 mt-1">
             Pacotes superiores (VIP/Master) podem ser usados em salas de
@@ -10601,7 +10601,7 @@ export function cn(...inputs: ClassValue[]) {
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
-  "theme_color": "#f05e23",
+  "theme_color": "#BF4B24",
   "orientation": "portrait",
   "icons": [
     {
@@ -11787,7 +11787,7 @@ export function AdminBookingsTab() {
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-2">
-            <CalendarIcon className="w-8 h-8 text-[#f05e23]" />
+            <CalendarIcon className="w-8 h-8 text-[#BF4B24]" />
             Histórico de Agendamentos
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-1">
@@ -11804,7 +11804,7 @@ export function AdminBookingsTab() {
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 mb-6">
         <div className="flex flex-col lg:flex-row justify-between items-center gap-4">
           <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
-            <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-[#f05e23]/20">
+            <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-[#BF4B24]/20">
               <div className="px-3 text-slate-400 border-r border-slate-200">
                 <CalendarIcon className="w-4 h-4" />
               </div>
@@ -11826,7 +11826,7 @@ export function AdminBookingsTab() {
             <Button
               onClick={fetchBookings}
               variant="outline"
-              className="h-10 w-10 p-0 rounded-xl border-slate-200 text-slate-600 hover:text-[#f05e23]"
+              className="h-10 w-10 p-0 rounded-xl border-slate-200 text-slate-600 hover:text-[#BF4B24]"
             >
               {loading ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -11861,7 +11861,7 @@ export function AdminBookingsTab() {
           <div className="flex gap-3 w-full lg:w-auto mt-4 lg:mt-0">
             <Button
               onClick={handleExportExcel}
-              className="flex-1 lg:flex-none bg-[#f05e23] hover:bg-[#d6521e] text-white font-bold h-10 shadow-sm"
+              className="flex-1 lg:flex-none bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold h-10 shadow-sm"
             >
               <FileSpreadsheet className="w-4 h-4 mr-2" /> Exportar Excel
             </Button>
@@ -11878,7 +11878,7 @@ export function AdminBookingsTab() {
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col relative">
         {loading && (
           <div className="absolute inset-0 bg-white/50 backdrop-blur-sm z-10 flex items-center justify-center">
-            <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+            <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
           </div>
         )}
 
@@ -11931,7 +11931,7 @@ export function AdminBookingsTab() {
                       </p>
                     </td>
                     <td className="px-6 py-4">
-                      <p className="font-bold text-[#f05e23]">
+                      <p className="font-bold text-[#BF4B24]">
                         {booking.specialist_name}
                       </p>
                     </td>
@@ -12401,7 +12401,7 @@ export function AvailabilityConfig({
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[50vh] gap-4">
-        <Loader2 className="h-10 w-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="h-10 w-10 animate-spin text-[#BF4B24]" />
         <p className="text-slate-500 font-medium">
           Carregando mapa de horários...
         </p>
@@ -12441,7 +12441,7 @@ export function AvailabilityConfig({
         <Button
           onClick={handleSaveConfigToDatabase}
           disabled={saving}
-          className="bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-sm font-bold h-10 px-6 transition-colors border-none"
+          className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-sm font-bold h-10 px-6 transition-colors border-none"
         >
           {saving ? "Salvando..." : "Salvar Configuração"}
         </Button>
@@ -12470,7 +12470,7 @@ export function AvailabilityConfig({
                     <Switch
                       checked={config.enabled}
                       onCheckedChange={() => handleToggleDay(config.day)}
-                      className="data-[state=checked]:bg-[#f05e23]"
+                      className="data-[state=checked]:bg-[#BF4B24]"
                     />
                     <span
                       className={`font-bold ${config.enabled ? "text-slate-900" : "text-slate-400"}`}
@@ -12481,7 +12481,7 @@ export function AvailabilityConfig({
                   {config.enabled && (
                     <button
                       onClick={() => setConfirmCopyDay(config.day)}
-                      className="text-xs font-bold flex items-center gap-1 text-[#f05e23] hover:underline"
+                      className="text-xs font-bold flex items-center gap-1 text-[#BF4B24] hover:underline"
                     >
                       <Copy className="w-3.5 h-3.5" /> Copiar p/ todos
                     </button>
@@ -12499,7 +12499,7 @@ export function AvailabilityConfig({
                           onClick={() =>
                             handleChangeRentalType(config.day, "hourly")
                           }
-                          className={`flex-1 py-2 rounded-lg border font-bold text-sm transition-all ${config.rentalType === "hourly" ? "border-[#f05e23] bg-orange-50 text-[#f05e23]" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                          className={`flex-1 py-2 rounded-lg border font-bold text-sm transition-all ${config.rentalType === "hourly" ? "border-[#BF4B24] bg-orange-50 text-[#BF4B24]" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
                         >
                           Por Hora
                         </button>
@@ -12507,7 +12507,7 @@ export function AvailabilityConfig({
                           onClick={() =>
                             handleChangeRentalType(config.day, "shift")
                           }
-                          className={`flex-1 py-2 rounded-lg border font-bold text-sm transition-all ${config.rentalType === "shift" ? "border-[#f05e23] bg-orange-50 text-[#f05e23]" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                          className={`flex-1 py-2 rounded-lg border font-bold text-sm transition-all ${config.rentalType === "shift" ? "border-[#BF4B24] bg-orange-50 text-[#BF4B24]" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
                         >
                           Por Turno
                         </button>
@@ -12542,7 +12542,7 @@ export function AvailabilityConfig({
                                 onClick={() =>
                                   handleToggleHour(config.day, hour)
                                 }
-                                className={`py-2 text-xs font-bold rounded-lg transition-all ${isSelected ? "bg-[#f05e23] text-white shadow-sm" : "bg-white text-slate-500 hover:bg-slate-200 border border-slate-200"}`}
+                                className={`py-2 text-xs font-bold rounded-lg transition-all ${isSelected ? "bg-[#BF4B24] text-white shadow-sm" : "bg-white text-slate-500 hover:bg-slate-200 border border-slate-200"}`}
                               >
                                 {hour.split("-")[0]}
                               </button>
@@ -12565,17 +12565,17 @@ export function AvailabilityConfig({
                               onClick={() =>
                                 handleToggleShift(config.day, shift.id)
                               }
-                              className={`p-4 rounded-xl border-2 transition-all flex flex-col items-start gap-2 ${isSelected ? "border-[#f05e23] bg-orange-50/40" : "border-slate-200 bg-white hover:border-slate-300"}`}
+                              className={`p-4 rounded-xl border-2 transition-all flex flex-col items-start gap-2 ${isSelected ? "border-[#BF4B24] bg-orange-50/40" : "border-slate-200 bg-white hover:border-slate-300"}`}
                             >
                               <div className="flex w-full justify-between items-center">
                                 <span className="text-2xl">{shift.icon}</span>
                                 {isSelected && (
-                                  <Check className="w-5 h-5 text-[#f05e23]" />
+                                  <Check className="w-5 h-5 text-[#BF4B24]" />
                                 )}
                               </div>
                               <div className="text-left">
                                 <p
-                                  className={`font-black ${isSelected ? "text-[#f05e23]" : "text-slate-900"}`}
+                                  className={`font-black ${isSelected ? "text-[#BF4B24]" : "text-slate-900"}`}
                                 >
                                   {shift.label}
                                 </p>
@@ -12631,7 +12631,7 @@ export function AvailabilityConfig({
                   }}
                   modifiersClassNames={{
                     holiday:
-                      "text-[#f05e23] font-black underline decoration-[#f05e23]/30 underline-offset-4",
+                      "text-[#BF4B24] font-black underline decoration-[#BF4B24]/30 underline-offset-4",
                   }}
                   className="bg-white rounded-lg shadow-sm w-full pointer-events-auto"
                 />
@@ -12900,7 +12900,7 @@ export function AvailabilityConfig({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 animate-in zoom-in-95">
             <div className="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center mb-4 mx-auto">
-              <AlertTriangle className="w-6 h-6 text-[#f05e23]" />
+              <AlertTriangle className="w-6 h-6 text-[#BF4B24]" />
             </div>
             <h3 className="text-xl font-black text-center text-slate-900 mb-2">
               Atenção
@@ -12921,7 +12921,7 @@ export function AvailabilityConfig({
                 Cancelar
               </Button>
               <Button
-                className="flex-1 font-bold h-12 rounded-xl bg-[#f05e23] hover:bg-[#d6521e] text-white"
+                className="flex-1 font-bold h-12 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white"
                 onClick={executeCopyAction}
               >
                 Sim, Copiar
@@ -12985,7 +12985,7 @@ export function AvailabilityTab({ onSelectSpace }: AvailabilityTabProps) {
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center p-12 min-h-[40vh]">
-        <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
         <p className="mt-4 text-slate-500 font-medium">
           Carregando seus espaços...
         </p>
@@ -13033,7 +13033,7 @@ export function AvailabilityTab({ onSelectSpace }: AvailabilityTabProps) {
               return (
                 <div
                   key={space.id}
-                  className="bg-white rounded-2xl overflow-hidden shadow-sm border border-slate-200 hover:border-[#f05e23] transition-all group"
+                  className="bg-white rounded-2xl overflow-hidden shadow-sm border border-slate-200 hover:border-[#BF4B24] transition-all group"
                 >
                   <div className="flex flex-col sm:flex-row gap-4 p-4">
                     <div className="relative w-full sm:w-28 h-32 sm:h-28 rounded-xl overflow-hidden shrink-0 bg-slate-100">
@@ -13052,14 +13052,14 @@ export function AvailabilityTab({ onSelectSpace }: AvailabilityTabProps) {
                           {space.name}
                         </h3>
                         <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium mb-4">
-                          <MapPin className="w-3.5 h-3.5 shrink-0 text-[#f05e23]" />
+                          <MapPin className="w-3.5 h-3.5 shrink-0 text-[#BF4B24]" />
                           <span className="line-clamp-1">{fullAddress}</span>
                         </div>
                       </div>
 
                       <Button
                         onClick={() => onSelectSpace(space.id)}
-                        className="w-full bg-[#f05e23] hover:bg-[#d6521e] text-white font-bold h-10 shadow-sm transition-colors border-none"
+                        className="w-full bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold h-10 shadow-sm transition-colors border-none"
                       >
                         <Clock className="w-4 h-4 mr-2" />
                         Ajustar Disponibilidade
@@ -13252,7 +13252,7 @@ export function HostBookingsTab() {
   if (loading) {
     return (
       <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -13319,12 +13319,12 @@ export function HostBookingsTab() {
           filteredBookings.map((booking) => (
             <div
               key={booking.id}
-              className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 hover:border-[#f05e23]/30 transition-colors"
+              className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 hover:border-[#BF4B24]/30 transition-colors"
             >
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 {/* Info do Médico e Sala */}
                 <div className="flex items-start gap-4">
-                  <div className="w-12 h-12 bg-orange-50 text-[#f05e23] rounded-full flex items-center justify-center shrink-0">
+                  <div className="w-12 h-12 bg-orange-50 text-[#BF4B24] rounded-full flex items-center justify-center shrink-0">
                     <User className="w-6 h-6" />
                   </div>
                   <div>
@@ -13345,12 +13345,12 @@ export function HostBookingsTab() {
                 <div className="flex flex-col md:items-end gap-2 border-t md:border-t-0 border-slate-100 pt-4 md:pt-0">
                   <div className="flex items-center gap-4 text-sm font-bold text-slate-700 bg-slate-50 px-4 py-2 rounded-xl border border-slate-100">
                     <div className="flex items-center gap-1.5">
-                      <CalendarIcon className="w-4 h-4 text-[#f05e23]" />
+                      <CalendarIcon className="w-4 h-4 text-[#BF4B24]" />
                       {booking.date}
                     </div>
                     <div className="w-px h-4 bg-slate-300"></div>
                     <div className="flex items-center gap-1.5">
-                      <Clock className="w-4 h-4 text-[#f05e23]" />
+                      <Clock className="w-4 h-4 text-[#BF4B24]" />
                       {booking.time}
                     </div>
                   </div>
@@ -13608,7 +13608,7 @@ export function HostChatTab() {
   if (loading)
     return (
       <div className="flex justify-center py-20">
-        <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
       </div>
     );
 
@@ -13638,7 +13638,7 @@ export function HostChatTab() {
                 <div
                   key={chat.id}
                   onClick={() => setActiveChat(chat)}
-                  className={`p-4 border-b border-slate-50 cursor-pointer transition-colors ${activeChat?.id === chat.id ? "bg-orange-50 border-l-4 border-l-[#f05e23]" : "hover:bg-slate-50 border-l-4 border-l-transparent"} ${isLocked ? "opacity-60 grayscale" : ""}`}
+                  className={`p-4 border-b border-slate-50 cursor-pointer transition-colors ${activeChat?.id === chat.id ? "bg-orange-50 border-l-4 border-l-[#BF4B24]" : "hover:bg-slate-50 border-l-4 border-l-transparent"} ${isLocked ? "opacity-60 grayscale" : ""}`}
                 >
                   <div className="flex justify-between items-start mb-1">
                     <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1">
@@ -13646,7 +13646,7 @@ export function HostChatTab() {
                       {getDisplayName(chat)}
                     </h4>
                   </div>
-                  <p className="text-xs font-semibold text-[#f05e23] truncate">
+                  <p className="text-xs font-semibold text-[#BF4B24] truncate">
                     {chat.room_name}
                   </p>
 
@@ -13705,7 +13705,7 @@ export function HostChatTab() {
               <div className="m-4 p-4 bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col sm:flex-row justify-between sm:items-center gap-4 shrink-0">
                 <div className="flex items-start gap-3">
                   <div className="w-10 h-10 rounded-full bg-orange-50 flex items-center justify-center shrink-0">
-                    <Calendar className="w-5 h-5 text-[#f05e23]" />
+                    <Calendar className="w-5 h-5 text-[#BF4B24]" />
                   </div>
                   <div>
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">
@@ -13719,7 +13719,7 @@ export function HostChatTab() {
                       )}
                     </p>
                     <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500 mt-1">
-                      <Clock className="w-3.5 h-3.5 text-[#f05e23]" />
+                      <Clock className="w-3.5 h-3.5 text-[#BF4B24]" />
                       {format(
                         parseISO(activeChat.booking.start_time),
                         "HH:mm",
@@ -13819,7 +13819,7 @@ export function HostChatTab() {
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
                   placeholder="Escreva sua resposta..."
-                  className="h-12 bg-slate-50 border-slate-200 pr-14 rounded-xl focus-visible:ring-[#f05e23]"
+                  className="h-12 bg-slate-50 border-slate-200 pr-14 rounded-xl focus-visible:ring-[#BF4B24]"
                   autoComplete="off"
                 />
                 <Button
@@ -13915,7 +13915,7 @@ export function OnboardingTutorial() {
   const steps = [
     {
       id: "welcome",
-      icon: <Building2 className="w-16 h-16 text-[#f05e23]" />,
+      icon: <Building2 className="w-16 h-16 text-[#BF4B24]" />,
       title: "Bem-vindo à Fusion Clinic",
       subtitle: "A nova forma de gerenciar seus atendimentos.",
       description:
@@ -13999,7 +13999,7 @@ export function OnboardingTutorial() {
             <h2 className="text-2xl font-black text-slate-900 mb-2 tracking-tight">
               {step.title}
             </h2>
-            <p className="text-xs sm:text-sm font-bold text-[#f05e23] uppercase tracking-wider mb-3">
+            <p className="text-xs sm:text-sm font-bold text-[#BF4B24] uppercase tracking-wider mb-3">
               {step.subtitle}
             </p>
             <p className="text-sm font-medium text-slate-600 leading-relaxed">
@@ -14029,7 +14029,7 @@ export function OnboardingTutorial() {
                 id="dontShowAgain"
                 checked={dontShowAgain}
                 onChange={(e) => setDontShowAgain(e.target.checked)}
-                className="w-4 h-4 mt-0.5 rounded text-[#f05e23] border-slate-300 focus:ring-[#f05e23]"
+                className="w-4 h-4 mt-0.5 rounded text-[#BF4B24] border-slate-300 focus:ring-[#BF4B24]"
               />
               <label
                 htmlFor="dontShowAgain"
@@ -14046,7 +14046,7 @@ export function OnboardingTutorial() {
             {steps.map((_, idx) => (
               <div
                 key={idx}
-                className={`h-2 rounded-full transition-all duration-300 ${idx === currentStep ? "w-6 bg-[#f05e23]" : "w-2 bg-slate-200"}`}
+                className={`h-2 rounded-full transition-all duration-300 ${idx === currentStep ? "w-6 bg-[#BF4B24]" : "w-2 bg-slate-200"}`}
               />
             ))}
           </div>
@@ -14145,7 +14145,7 @@ export function RoomQRScanner({
   if (checkingLocation) {
     return (
       <div className="fixed top-0 left-0 w-screen h-[100dvh] z-[9999] bg-slate-900 flex flex-col items-center justify-center p-6 text-center">
-        <MapPin className="w-16 h-16 text-[#f05e23] animate-bounce mb-4" />
+        <MapPin className="w-16 h-16 text-[#BF4B24] animate-bounce mb-4" />
         <h2 className="text-xl font-black text-white mb-2">
           Preparando Scanner...
         </h2>
@@ -14208,12 +14208,12 @@ export function RoomQRScanner({
 
       <div className="absolute inset-0 z-10 pointer-events-none flex flex-col items-center justify-center">
         <div className="w-64 h-64 border-2 border-white/20 rounded-[2rem] relative flex items-center justify-center overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.5)]">
-          <div className="absolute top-0 left-0 w-12 h-12 border-t-4 border-l-4 border-[#f05e23] rounded-tl-[2rem]"></div>
-          <div className="absolute top-0 right-0 w-12 h-12 border-t-4 border-r-4 border-[#f05e23] rounded-tr-[2rem]"></div>
-          <div className="absolute bottom-0 left-0 w-12 h-12 border-b-4 border-l-4 border-[#f05e23] rounded-bl-[2rem]"></div>
-          <div className="absolute bottom-0 right-0 w-12 h-12 border-b-4 border-r-4 border-[#f05e23] rounded-br-[2rem]"></div>
+          <div className="absolute top-0 left-0 w-12 h-12 border-t-4 border-l-4 border-[#BF4B24] rounded-tl-[2rem]"></div>
+          <div className="absolute top-0 right-0 w-12 h-12 border-t-4 border-r-4 border-[#BF4B24] rounded-tr-[2rem]"></div>
+          <div className="absolute bottom-0 left-0 w-12 h-12 border-b-4 border-l-4 border-[#BF4B24] rounded-bl-[2rem]"></div>
+          <div className="absolute bottom-0 right-0 w-12 h-12 border-b-4 border-r-4 border-[#BF4B24] rounded-br-[2rem]"></div>
 
-          <div className="w-full h-1 bg-[#f05e23] opacity-70 shadow-[0_0_15px_#f05e23] absolute top-1/2 animate-[scan_2s_ease-in-out_infinite]"></div>
+          <div className="w-full h-1 bg-[#BF4B24] opacity-70 shadow-[0_0_15px_#BF4B24] absolute top-1/2 animate-[scan_2s_ease-in-out_infinite]"></div>
         </div>
 
         <div className="mt-8 bg-black/60 backdrop-blur-md px-6 py-4 rounded-2xl border border-white/10 text-center mx-4">
@@ -15018,7 +15018,7 @@ export function AdminPartnersTab() {
   if (loading)
     return (
       <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
 
@@ -15097,7 +15097,7 @@ export function AdminPartnersTab() {
         <div className="p-8 max-w-6xl mx-auto w-full space-y-6">
           {/* CARTÃO DE IDENTIFICAÇÃO DO ANFITRIÃO */}
           <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm flex flex-col md:flex-row items-center md:items-start gap-8 relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-64 h-64 bg-[#f05e23]/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
+            <div className="absolute top-0 right-0 w-64 h-64 bg-[#BF4B24]/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
 
             <div className="w-32 h-32 rounded-3xl bg-slate-100 border-4 border-white shadow-lg overflow-hidden shrink-0 flex items-center justify-center text-slate-300">
               {selectedProfile.avatar_url ? (
@@ -15132,15 +15132,15 @@ export function AdminPartnersTab() {
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="flex items-center justify-center md:justify-start gap-3 text-sm font-medium text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                  <Mail className="w-4 h-4 text-[#f05e23]" />{" "}
+                  <Mail className="w-4 h-4 text-[#BF4B24]" />{" "}
                   {selectedProfile.email}
                 </div>
                 <div className="flex items-center justify-center md:justify-start gap-3 text-sm font-medium text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                  <Phone className="w-4 h-4 text-[#f05e23]" />{" "}
+                  <Phone className="w-4 h-4 text-[#BF4B24]" />{" "}
                   {selectedProfile.phone}
                 </div>
                 <div className="flex items-center justify-center md:justify-start gap-3 text-sm font-medium text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                  <MapPin className="w-4 h-4 text-[#f05e23]" />{" "}
+                  <MapPin className="w-4 h-4 text-[#BF4B24]" />{" "}
                   {selectedProfile.city} - {selectedProfile.state}
                 </div>
               </div>
@@ -15167,7 +15167,7 @@ export function AdminPartnersTab() {
             </div>
 
             <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-3xl p-6 text-white shadow-lg relative overflow-hidden group">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-[#f05e23]/20 rounded-full blur-2xl transition-transform group-hover:scale-150"></div>
+              <div className="absolute top-0 right-0 w-32 h-32 bg-[#BF4B24]/20 rounded-full blur-2xl transition-transform group-hover:scale-150"></div>
               <div className="relative z-10">
                 <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
                   <Wallet className="w-4 h-4" /> Receita Fusion (Take Rate)
@@ -15209,13 +15209,13 @@ export function AdminPartnersTab() {
             <div className="flex border-b border-slate-100">
               <button
                 onClick={() => setDossierTab("bookings")}
-                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "bookings" ? "border-[#f05e23] text-[#f05e23] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
+                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "bookings" ? "border-[#BF4B24] text-[#BF4B24] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
               >
                 Histórico de Repasses (Reservas)
               </button>
               <button
                 onClick={() => setDossierTab("rooms")}
-                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "rooms" ? "border-[#f05e23] text-[#f05e23] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
+                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "rooms" ? "border-[#BF4B24] text-[#BF4B24] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
               >
                 Inventário de Salas
               </button>
@@ -15223,14 +15223,14 @@ export function AdminPartnersTab() {
 
             {profileLoading ? (
               <div className="flex justify-center py-20">
-                <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+                <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
               </div>
             ) : dossierTab === "bookings" ? (
               <div className="p-6">
                 <div className="flex flex-col xl:flex-row xl:items-center justify-between mb-6 gap-4 border-b border-slate-100 pb-6">
                   <div>
                     <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                      <TrendingUp className="w-5 h-5 text-[#f05e23]" /> Extrato
+                      <TrendingUp className="w-5 h-5 text-[#BF4B24]" /> Extrato
                       de Operação
                     </h3>
                     <p className="text-xs font-medium text-slate-500 mt-1">
@@ -15358,7 +15358,7 @@ export function AdminPartnersTab() {
               <div className="p-6">
                 <div className="flex items-center justify-between mb-6">
                   <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                    <Building2 className="w-5 h-5 text-[#f05e23]" />{" "}
+                    <Building2 className="w-5 h-5 text-[#BF4B24]" />{" "}
                     Infraestrutura do Parceiro
                   </h3>
                 </div>
@@ -15422,7 +15422,7 @@ export function AdminPartnersTab() {
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-2">
-            <ShieldCheck className="w-8 h-8 text-[#f05e23]" />
+            <ShieldCheck className="w-8 h-8 text-[#BF4B24]" />
             Parceiros (Anfitriões)
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-1">
@@ -15468,7 +15468,7 @@ export function AdminPartnersTab() {
           </div>
         </div>
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center text-[#f05e23] shrink-0">
+          <div className="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center text-[#BF4B24] shrink-0">
             <Wallet className="w-6 h-6" />
           </div>
           <div>
@@ -15655,7 +15655,7 @@ interface HostOverviewProps {
 }
 
 const shiftLabels = ["08h-12h", "12h-15h", "15h-18h", "18h-22h"];
-const COLORS = ["#f05e23", "#8b5cf6", "#10b981", "#3b82f6", "#f59e0b"];
+const COLORS = ["#BF4B24", "#8b5cf6", "#10b981", "#3b82f6", "#f59e0b"];
 
 export function HostOverview({ onNavigate }: HostOverviewProps) {
   const supabase = createClient();
@@ -15876,7 +15876,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
     if (intensity <= 5)
       return "bg-orange-300 border-orange-400 text-orange-900";
     if (intensity <= 10) return "bg-orange-500 border-orange-600 text-white";
-    return "bg-[#d6521e] border-[#b03d12] text-white shadow-inner";
+    return "bg-[#9A3C1D] border-[#b03d12] text-white shadow-inner";
   };
 
   const handlePrintPDF = () => {
@@ -15886,7 +15886,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
   if (loading) {
     return (
       <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -15948,10 +15948,10 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
         </div>
 
         <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-6 rounded-2xl shadow-xl relative overflow-hidden group print:bg-white print:border print:border-slate-200 print:shadow-none">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-[#f05e23]/20 rounded-full blur-2xl -mr-8 -mt-8 transition-transform group-hover:scale-150 print:hidden"></div>
+          <div className="absolute top-0 right-0 w-32 h-32 bg-[#BF4B24]/20 rounded-full blur-2xl -mr-8 -mt-8 transition-transform group-hover:scale-150 print:hidden"></div>
           <div className="relative z-10">
             <div className="flex justify-between items-start mb-4">
-              <div className="w-10 h-10 rounded-xl bg-[#f05e23]/20 flex items-center justify-center text-[#f05e23]">
+              <div className="w-10 h-10 rounded-xl bg-[#BF4B24]/20 flex items-center justify-center text-[#BF4B24]">
                 <Maximize className="w-5 h-5" />
               </div>
             </div>
@@ -16027,8 +16027,8 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
               >
                 <defs>
                   <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f05e23" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#f05e23" stopOpacity={0} />
+                    <stop offset="5%" stopColor="#BF4B24" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#BF4B24" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid
@@ -16069,7 +16069,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
                 <Area
                   type="monotone"
                   dataKey="revenue"
-                  stroke="#f05e23"
+                  stroke="#BF4B24"
                   strokeWidth={3}
                   fillOpacity={1}
                   fill="url(#colorRevenue)"
@@ -16083,7 +16083,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 flex flex-col">
           <div className="mb-6">
             <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
-              <Map className="w-5 h-5 text-[#f05e23]" /> Mapa de Ocupação
+              <Map className="w-5 h-5 text-[#BF4B24]" /> Mapa de Ocupação
             </h2>
             <p className="text-xs font-medium text-slate-500 mt-1">
               Horários de maior fluxo.
@@ -16163,7 +16163,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           <Button
             onClick={handlePrintPDF}
             variant="outline"
-            className="font-bold text-slate-600 h-10 rounded-xl print:hidden flex items-center gap-2 hover:text-[#f05e23] hover:bg-orange-50"
+            className="font-bold text-slate-600 h-10 rounded-xl print:hidden flex items-center gap-2 hover:text-[#BF4B24] hover:bg-orange-50"
           >
             <Printer className="w-4 h-4" /> Exportar para PDF
           </Button>
@@ -16177,7 +16177,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
                 <th className="px-6 py-4 text-center">Tamanho (m²)</th>
                 <th className="px-6 py-4 text-center">Ocupação Est.</th>
                 <th className="px-6 py-4 text-right">Rendimento Bruto</th>
-                <th className="px-6 py-4 text-right bg-orange-50/50 text-[#f05e23]">
+                <th className="px-6 py-4 text-right bg-orange-50/50 text-[#BF4B24]">
                   Rendimento / m²
                 </th>
               </tr>
@@ -16244,7 +16244,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
                       </td>
                       <td className="px-6 py-5 text-right font-black text-slate-900 bg-orange-50/20">
                         <div className="flex items-center justify-end gap-1">
-                          <span className="text-xs text-[#f05e23] font-bold">
+                          <span className="text-xs text-[#BF4B24] font-bold">
                             R$
                           </span>
                           <span className="text-lg">
@@ -16271,7 +16271,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           <Button
             onClick={() => onNavigate("create_space")}
             variant="outline"
-            className="h-auto flex-col items-center justify-center gap-3 p-6 rounded-2xl border-slate-200 text-slate-600 hover:border-[#f05e23] hover:text-[#f05e23] hover:bg-orange-50"
+            className="h-auto flex-col items-center justify-center gap-3 p-6 rounded-2xl border-slate-200 text-slate-600 hover:border-[#BF4B24] hover:text-[#BF4B24] hover:bg-orange-50"
           >
             <PlusCircle className="w-8 h-8" />
             <span className="font-bold">Adicionar Sala</span>
@@ -16527,7 +16527,7 @@ export function HostReviewsTab() {
   if (loading) {
     return (
       <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -16587,7 +16587,7 @@ export function HostReviewsTab() {
           onClick={() => setFilter("all")}
           className={`rounded-xl font-bold px-6 ${
             filter === "all"
-              ? "bg-[#f05e23] text-white shadow-sm"
+              ? "bg-[#BF4B24] text-white shadow-sm"
               : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
           }`}
         >
@@ -16599,7 +16599,7 @@ export function HostReviewsTab() {
             onClick={() => setFilter(rating.toString() as any)}
             className={`rounded-xl font-bold px-4 ${
               filter === rating.toString()
-                ? "bg-[#f05e23] text-white shadow-sm"
+                ? "bg-[#BF4B24] text-white shadow-sm"
                 : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
             }`}
           >
@@ -16630,7 +16630,7 @@ export function HostReviewsTab() {
                     </h3>
                     <p className="text-xs font-medium text-slate-500">
                       {review.created_at} •{" "}
-                      <span className="text-[#f05e23] font-bold">
+                      <span className="text-[#BF4B24] font-bold">
                         {review.room_name}
                       </span>
                     </p>
@@ -16652,8 +16652,8 @@ export function HostReviewsTab() {
               </p>
 
               {review.host_reply ? (
-                <div className="bg-slate-50 border-l-4 border-[#f05e23] p-4 rounded-r-xl mt-4">
-                  <p className="text-xs font-black text-[#f05e23] uppercase tracking-wider mb-1">
+                <div className="bg-slate-50 border-l-4 border-[#BF4B24] p-4 rounded-r-xl mt-4">
+                  <p className="text-xs font-black text-[#BF4B24] uppercase tracking-wider mb-1">
                     Sua Resposta:
                   </p>
                   <p className="text-sm text-slate-700 font-medium">
@@ -16683,7 +16683,7 @@ export function HostReviewsTab() {
                     <Button
                       onClick={() => handleSubmitReply(review.id)}
                       disabled={!replyText.trim() || isSubmittingReply}
-                      className="bg-[#f05e23] hover:bg-[#d6521e] text-white font-bold"
+                      className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold"
                     >
                       {isSubmittingReply ? (
                         <Loader2 className="w-4 h-4 animate-spin mr-2" />
@@ -16699,7 +16699,7 @@ export function HostReviewsTab() {
                   <Button
                     variant="outline"
                     onClick={() => setReplyingTo(review.id)}
-                    className="text-[#f05e23] border-[#f05e23]/20 hover:bg-[#f05e23]/5 font-bold"
+                    className="text-[#BF4B24] border-[#BF4B24]/20 hover:bg-[#BF4B24]/5 font-bold"
                   >
                     <MessageSquare className="w-4 h-4 mr-2" /> Responder
                     Avaliação
@@ -16875,7 +16875,7 @@ export function HostSpaceList() {
             setEditingRoom(null);
             fetchRooms();
           }}
-          className="text-slate-500 hover:text-[#f05e23] p-0 hover:bg-transparent font-bold"
+          className="text-slate-500 hover:text-[#BF4B24] p-0 hover:bg-transparent font-bold"
         >
           <ArrowLeft className="w-4 h-4 mr-2" /> Voltar para meus espaços
         </Button>
@@ -16923,7 +16923,7 @@ export function HostSpaceList() {
         </div>
         <Button
           onClick={() => setIsCreating(true)}
-          className="bg-[#f05e23] hover:bg-[#d6521e] text-white rounded-xl font-bold h-11"
+          className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white rounded-xl font-bold h-11"
         >
           <PlusCircle className="w-4 h-4 mr-2" /> Nova Sala
         </Button>
@@ -16965,7 +16965,7 @@ export function HostSpaceList() {
                     ? "opacity-75 bg-slate-50 border-slate-200"
                     : isPartner
                       ? "border-amber-400 shadow-amber-500/10 hover:shadow-amber-500/20 hover:border-amber-500 bg-gradient-to-r from-amber-50/40 to-white"
-                      : "border-slate-200 hover:border-[#f05e23]/30 bg-white"
+                      : "border-slate-200 hover:border-[#BF4B24]/30 bg-white"
                 }`}
               >
                 <CardContent className="p-0">
@@ -17090,14 +17090,14 @@ export function HostSpaceList() {
                           <Button
                             variant="outline"
                             onClick={() => handlePrintQR(room.id)}
-                            className="flex-1 xl:flex-none border-[#f05e23]/20 text-[#f05e23] hover:bg-[#f05e23] hover:text-white font-bold bg-orange-50/50"
+                            className="flex-1 xl:flex-none border-[#BF4B24]/20 text-[#BF4B24] hover:bg-[#BF4B24] hover:text-white font-bold bg-orange-50/50"
                           >
                             <QrCode className="w-4 h-4 mr-2" /> QR Code
                           </Button>
                           <Button
                             variant="outline"
                             onClick={() => setEditingRoom(room)}
-                            className="flex-1 xl:flex-none border-slate-200 text-slate-700 hover:text-[#f05e23] hover:bg-orange-50 font-bold"
+                            className="flex-1 xl:flex-none border-slate-200 text-slate-700 hover:text-[#BF4B24] hover:bg-orange-50 font-bold"
                           >
                             <Edit3 className="w-4 h-4 mr-2" /> Editar
                           </Button>
@@ -17313,7 +17313,7 @@ export function PWAPrompt() {
                 disabled={!isReady}
                 className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
                   isReady
-                    ? "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/20"
+                    ? "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/20"
                     : "bg-slate-800 text-slate-500 cursor-not-allowed"
                 }`}
               >
@@ -17417,7 +17417,7 @@ export default function AdminDashboardPage() {
     <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
       <aside className="w-64 bg-slate-900 text-white flex flex-col shrink-0">
         <div className="p-6 border-b border-white/10 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f05e23] font-black text-xl shadow-lg">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#BF4B24] font-black text-xl shadow-lg">
             F
           </div>
           <div>
@@ -17439,7 +17439,7 @@ export default function AdminDashboardPage() {
                 onClick={() => setActiveTab(item.id)}
                 className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl font-bold transition-all ${
                   isActive
-                    ? "bg-[#f05e23] text-white shadow-md shadow-orange-500/20"
+                    ? "bg-[#BF4B24] text-white shadow-md shadow-orange-500/20"
                     : "text-slate-400 hover:bg-white/5 hover:text-white"
                 }`}
               >
@@ -18037,7 +18037,7 @@ function AdminRoomsTab() {
             onClick={() => !isPast && toggleBlockDate(cloneDay)}
             className={`
               h-14 border flex items-center justify-center text-sm font-bold transition-all rounded-xl cursor-pointer relative overflow-hidden
-              ${!isCurrentMonth ? "text-slate-300 bg-slate-50 border-slate-100" : "bg-white border-slate-200 hover:border-[#f05e23] hover:shadow-md"}
+              ${!isCurrentMonth ? "text-slate-300 bg-slate-50 border-slate-100" : "bg-white border-slate-200 hover:border-[#BF4B24] hover:shadow-md"}
               ${isPast ? "opacity-40 cursor-not-allowed hover:border-slate-200 hover:shadow-none" : ""}
               ${isBlocked && !isPast ? "bg-red-50 border-red-200 text-red-700" : "text-slate-700"}
             `}
@@ -18082,7 +18082,7 @@ function AdminRoomsTab() {
   if (loading)
     return (
       <div className="flex justify-center py-20">
-        <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
       </div>
     );
 
@@ -18158,19 +18158,19 @@ function AdminRoomsTab() {
             </p>
             <button
               onClick={() => setAuditTab("auditoria")}
-              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "auditoria" ? "bg-[#f05e23]/10 text-[#f05e23]" : "text-slate-500 hover:bg-slate-50"}`}
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "auditoria" ? "bg-[#BF4B24]/10 text-[#BF4B24]" : "text-slate-500 hover:bg-slate-50"}`}
             >
               <ShieldCheck className="w-5 h-5" /> Auditoria & Selos
             </button>
             <button
               onClick={() => setAuditTab("editar")}
-              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "editar" ? "bg-[#f05e23]/10 text-[#f05e23]" : "text-slate-500 hover:bg-slate-50"}`}
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "editar" ? "bg-[#BF4B24]/10 text-[#BF4B24]" : "text-slate-500 hover:bg-slate-50"}`}
             >
               <FileText className="w-5 h-5" /> Editar Informações
             </button>
             <button
               onClick={() => setAuditTab("agenda")}
-              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "agenda" ? "bg-[#f05e23]/10 text-[#f05e23]" : "text-slate-500 hover:bg-slate-50"}`}
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "agenda" ? "bg-[#BF4B24]/10 text-[#BF4B24]" : "text-slate-500 hover:bg-slate-50"}`}
             >
               <CalendarIcon className="w-5 h-5" /> Gerenciar Agenda
             </button>
@@ -18226,7 +18226,7 @@ function AdminRoomsTab() {
                         </p>
                         <p className="text-sm font-medium text-slate-500">
                           Valor Base (Hora):{" "}
-                          <strong className="text-[#f05e23]">
+                          <strong className="text-[#BF4B24]">
                             R$ {evalPricing.hourly || "0"}
                           </strong>
                         </p>
@@ -18324,7 +18324,7 @@ function AdminRoomsTab() {
 
                     <div className="p-6 border border-orange-200 bg-orange-50/50 rounded-2xl mb-8 flex flex-col md:flex-row md:items-center justify-between gap-6">
                       <div className="flex items-start gap-4">
-                        <div className="p-3 bg-white rounded-xl shadow-sm text-[#f05e23] shrink-0">
+                        <div className="p-3 bg-white rounded-xl shadow-sm text-[#BF4B24] shrink-0">
                           <Sparkles className="w-6 h-6" />
                         </div>
                         <div>
@@ -18355,7 +18355,7 @@ function AdminRoomsTab() {
                           onChange={(e) => setIsPartner(e.target.checked)}
                           className="sr-only peer"
                         />
-                        <div className="w-14 h-7 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-[#f05e23]"></div>
+                        <div className="w-14 h-7 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-[#BF4B24]"></div>
                       </label>
                     </div>
 
@@ -18447,7 +18447,7 @@ function AdminRoomsTab() {
                       <Button
                         onClick={handleSaveInfoEdit}
                         disabled={actionLoading}
-                        className="w-full h-14 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black text-base shadow-lg"
+                        className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black text-base shadow-lg"
                       >
                         {actionLoading ? (
                           "Salvando..."
@@ -18469,7 +18469,7 @@ function AdminRoomsTab() {
                   <div className="flex items-start justify-between bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
                     <div>
                       <h3 className="text-xl font-black text-slate-900 mb-2 flex items-center gap-2">
-                        <CalendarIcon className="w-6 h-6 text-[#f05e23]" />{" "}
+                        <CalendarIcon className="w-6 h-6 text-[#BF4B24]" />{" "}
                         Central de Reservas e Bloqueios
                       </h3>
                       <p className="text-sm font-medium text-slate-500 max-w-lg">
@@ -18875,7 +18875,7 @@ function AdminRoomsTab() {
                     </td>
                     <td className="px-6 py-4">
                       {room.is_partner && (
-                        <Badge className="bg-[#f05e23] text-white mr-2 text-[10px] uppercase border-0">
+                        <Badge className="bg-[#BF4B24] text-white mr-2 text-[10px] uppercase border-0">
                           Partner
                         </Badge>
                       )}
@@ -18981,7 +18981,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#f05e23",
+  themeColor: "#BF4B24",
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
@@ -19167,7 +19167,7 @@ export default function AppPage() {
   if (isCheckingAuth) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-slate-50">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -19438,7 +19438,7 @@ export function CheckoutModal({
                 />
               </div>
               <div className="flex flex-col justify-center">
-                <p className="text-xs font-bold text-[#f05e23] uppercase tracking-wider mb-1">
+                <p className="text-xs font-bold text-[#BF4B24] uppercase tracking-wider mb-1">
                   {room.specialty || "Consultório"}
                 </p>
                 <h4 className="font-bold text-lg text-slate-900 leading-tight">
@@ -19466,14 +19466,14 @@ export function CheckoutModal({
               <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-sm mt-4">
                 <div className="flex justify-between items-start mb-3 border-b border-slate-100 pb-3">
                   <div className="flex items-center gap-2">
-                    <CalendarIcon className="w-4 h-4 text-[#f05e23]" />
+                    <CalendarIcon className="w-4 h-4 text-[#BF4B24]" />
                     <p className="font-bold text-slate-900 text-sm">
                       Data e Horários
                     </p>
                   </div>
                   <button
                     onClick={onClose}
-                    className="text-xs font-bold text-[#f05e23] hover:underline underline-offset-2"
+                    className="text-xs font-bold text-[#BF4B24] hover:underline underline-offset-2"
                   >
                     Alterar Horas
                   </button>
@@ -19549,15 +19549,15 @@ export function CheckoutModal({
 
               <div
                 onClick={() => setPaymentMethod("wallet")}
-                className={`p-4 rounded-xl border-2 cursor-pointer flex items-center justify-between transition-all ${paymentMethod === "wallet" ? "bg-orange-50 border-[#f05e23]" : "bg-white border-slate-200 hover:border-slate-300"}`}
+                className={`p-4 rounded-xl border-2 cursor-pointer flex items-center justify-between transition-all ${paymentMethod === "wallet" ? "bg-orange-50 border-[#BF4B24]" : "bg-white border-slate-200 hover:border-slate-300"}`}
               >
                 <div className="flex items-center gap-3">
                   <Wallet
-                    className={`w-5 h-5 ${paymentMethod === "wallet" ? "text-[#f05e23]" : "text-slate-500"}`}
+                    className={`w-5 h-5 ${paymentMethod === "wallet" ? "text-[#BF4B24]" : "text-slate-500"}`}
                   />
                   <div>
                     <p
-                      className={`text-sm font-bold ${paymentMethod === "wallet" ? "text-[#f05e23]" : "text-slate-700"}`}
+                      className={`text-sm font-bold ${paymentMethod === "wallet" ? "text-[#BF4B24]" : "text-slate-700"}`}
                     >
                       Usar Créditos da Carteira
                     </p>
@@ -19567,25 +19567,25 @@ export function CheckoutModal({
                   </div>
                 </div>
                 <div
-                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMethod === "wallet" ? "border-[#f05e23]" : "border-slate-300"}`}
+                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMethod === "wallet" ? "border-[#BF4B24]" : "border-slate-300"}`}
                 >
                   {paymentMethod === "wallet" && (
-                    <div className="w-2.5 h-2.5 bg-[#f05e23] rounded-full" />
+                    <div className="w-2.5 h-2.5 bg-[#BF4B24] rounded-full" />
                   )}
                 </div>
               </div>
 
               <div
                 onClick={() => setPaymentMethod("pix")}
-                className={`p-4 rounded-xl border-2 cursor-pointer flex items-center justify-between transition-all ${paymentMethod === "pix" ? "bg-orange-50 border-[#f05e23]" : "bg-white border-slate-200 hover:border-slate-300"}`}
+                className={`p-4 rounded-xl border-2 cursor-pointer flex items-center justify-between transition-all ${paymentMethod === "pix" ? "bg-orange-50 border-[#BF4B24]" : "bg-white border-slate-200 hover:border-slate-300"}`}
               >
                 <div className="flex items-center gap-3">
                   <QrCode
-                    className={`w-5 h-5 ${paymentMethod === "pix" ? "text-[#f05e23]" : "text-slate-500"}`}
+                    className={`w-5 h-5 ${paymentMethod === "pix" ? "text-[#BF4B24]" : "text-slate-500"}`}
                   />
                   <div>
                     <p
-                      className={`text-sm font-bold ${paymentMethod === "pix" ? "text-[#f05e23]" : "text-slate-700"}`}
+                      className={`text-sm font-bold ${paymentMethod === "pix" ? "text-[#BF4B24]" : "text-slate-700"}`}
                     >
                       Pix
                     </p>
@@ -19595,25 +19595,25 @@ export function CheckoutModal({
                   </div>
                 </div>
                 <div
-                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMethod === "pix" ? "border-[#f05e23]" : "border-slate-300"}`}
+                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMethod === "pix" ? "border-[#BF4B24]" : "border-slate-300"}`}
                 >
                   {paymentMethod === "pix" && (
-                    <div className="w-2.5 h-2.5 bg-[#f05e23] rounded-full" />
+                    <div className="w-2.5 h-2.5 bg-[#BF4B24] rounded-full" />
                   )}
                 </div>
               </div>
 
               <div
                 onClick={() => setPaymentMethod("card")}
-                className={`p-4 rounded-xl border-2 cursor-pointer flex items-center justify-between transition-all ${paymentMethod === "card" ? "bg-orange-50 border-[#f05e23]" : "bg-white border-slate-200 hover:border-slate-300"}`}
+                className={`p-4 rounded-xl border-2 cursor-pointer flex items-center justify-between transition-all ${paymentMethod === "card" ? "bg-orange-50 border-[#BF4B24]" : "bg-white border-slate-200 hover:border-slate-300"}`}
               >
                 <div className="flex items-center gap-3">
                   <CreditCard
-                    className={`w-5 h-5 ${paymentMethod === "card" ? "text-[#f05e23]" : "text-slate-500"}`}
+                    className={`w-5 h-5 ${paymentMethod === "card" ? "text-[#BF4B24]" : "text-slate-500"}`}
                   />
                   <div>
                     <p
-                      className={`text-sm font-bold ${paymentMethod === "card" ? "text-[#f05e23]" : "text-slate-700"}`}
+                      className={`text-sm font-bold ${paymentMethod === "card" ? "text-[#BF4B24]" : "text-slate-700"}`}
                     >
                       Cartão de Crédito
                     </p>
@@ -19623,10 +19623,10 @@ export function CheckoutModal({
                   </div>
                 </div>
                 <div
-                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMethod === "card" ? "border-[#f05e23]" : "border-slate-300"}`}
+                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMethod === "card" ? "border-[#BF4B24]" : "border-slate-300"}`}
                 >
                   {paymentMethod === "card" && (
-                    <div className="w-2.5 h-2.5 bg-[#f05e23] rounded-full" />
+                    <div className="w-2.5 h-2.5 bg-[#BF4B24] rounded-full" />
                   )}
                 </div>
               </div>
@@ -19650,7 +19650,7 @@ export function CheckoutModal({
                 <Button
                   onClick={() => onConfirm(paymentMethod)}
                   disabled={loading || timeLeft === 0}
-                  className="w-full h-14 rounded-xl font-black bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-md transition-all text-base disabled:opacity-50"
+                  className="w-full h-14 rounded-xl font-black bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-md transition-all text-base disabled:opacity-50"
                 >
                   {loading ? (
                     "Processando..."
@@ -19758,7 +19758,7 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center pt-32 pb-20">
-        <Loader2 className="h-8 w-8 animate-spin text-[#f05e23]" />
+        <Loader2 className="h-8 w-8 animate-spin text-[#BF4B24]" />
         <p className="text-sm font-medium text-slate-500 mt-4">
           Buscando seus espaços favoritos...
         </p>
@@ -19770,7 +19770,7 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
     return (
       <div className="flex flex-col items-center justify-center pt-32 pb-20 px-6 text-center">
         <div className="flex h-16 w-16 items-center justify-center rounded-full bg-orange-50 mb-4">
-          <Heart className="h-8 w-8 text-[#f05e23]" />
+          <Heart className="h-8 w-8 text-[#BF4B24]" />
         </div>
         <h2 className="text-lg font-bold text-slate-900 mb-2">
           Faça login para ver seus favoritos
@@ -19871,7 +19871,7 @@ export function FavoritesTab({ onOpenRoom }: FavoritesTabProps) {
 
                     <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 mt-1 truncate">
                       <MapPin
-                        className={`h-3 w-3 shrink-0 ${isAvailable ? "text-[#f05e23]" : "text-slate-400"}`}
+                        className={`h-3 w-3 shrink-0 ${isAvailable ? "text-[#BF4B24]" : "text-slate-400"}`}
                       />
                       <span className="truncate">{locationStr}</span>
                     </div>
@@ -20011,7 +20011,7 @@ export function ReviewModal({
         <div className="p-8 text-center flex flex-col items-center">
           {/* Header Visual Clean */}
           <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center mb-6 shadow-inner">
-            <Star className="w-8 h-8 text-[#f05e23] fill-[#f05e23]" />
+            <Star className="w-8 h-8 text-[#BF4B24] fill-[#BF4B24]" />
           </div>
 
           <DialogTitle className="text-2xl font-black text-slate-900 mb-2 tracking-tight">
@@ -20072,7 +20072,7 @@ export function ReviewModal({
               placeholder="Deixe um comentário elogiando ou sugerindo melhorias... (Opcional)"
               value={comment}
               onChange={(e) => setComment(e.target.value)}
-              className="bg-slate-50 border-slate-200 resize-none h-24 rounded-xl text-sm placeholder:text-slate-400 focus-visible:ring-[#f05e23]/20"
+              className="bg-slate-50 border-slate-200 resize-none h-24 rounded-xl text-sm placeholder:text-slate-400 focus-visible:ring-[#BF4B24]/20"
             />
 
             <div className="flex flex-col gap-2 pt-4">
@@ -20081,7 +20081,7 @@ export function ReviewModal({
                 disabled={loading || rating === 0}
                 className={`w-full h-14 rounded-xl font-black shadow-lg transition-all text-base ${
                   rating > 0
-                    ? "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-orange-500/20"
+                    ? "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-orange-500/20"
                     : "bg-slate-100 text-slate-400 shadow-none"
                 }`}
               >
@@ -20839,7 +20839,7 @@ export function ChatTab() {
   if (loading) {
     return (
       <div className="flex justify-center items-center h-[calc(100vh-100px)]">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -20873,7 +20873,7 @@ export function ChatTab() {
               </button>
               <button
                 onClick={() => setActiveFilter("unread")}
-                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${activeFilter === "unread" ? "bg-[#f05e23] text-white shadow-md shadow-orange-500/20" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${activeFilter === "unread" ? "bg-[#BF4B24] text-white shadow-md shadow-orange-500/20" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
               >
                 Não Lidas
                 {chats.some((c) => c.unread_count > 0) && (
@@ -20940,7 +20940,7 @@ export function ChatTab() {
                           </h4>
                           {chat.last_message_date && (
                             <span
-                              className={`text-[10px] whitespace-nowrap ${hasUnread ? "font-bold text-[#f05e23]" : "text-slate-400"}`}
+                              className={`text-[10px] whitespace-nowrap ${hasUnread ? "font-bold text-[#BF4B24]" : "text-slate-400"}`}
                             >
                               {format(
                                 parseISO(chat.last_message_date),
@@ -21015,7 +21015,7 @@ export function ChatTab() {
                       F
                     </div>
                   ) : (
-                    <div className="w-full h-full flex items-center justify-center bg-orange-50 text-[#f05e23]">
+                    <div className="w-full h-full flex items-center justify-center bg-orange-50 text-[#BF4B24]">
                       <User className="w-5 h-5" />
                     </div>
                   )}
@@ -21079,7 +21079,7 @@ export function ChatTab() {
                       </p>
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] sm:text-xs font-bold text-slate-500 mt-0.5">
                         <span className="flex items-center gap-1">
-                          <CalendarIcon className="w-3 h-3 text-[#f05e23]" />
+                          <CalendarIcon className="w-3 h-3 text-[#BF4B24]" />
                           {format(
                             parseISO(selectedChat.booking_start),
                             "dd MMM, yyyy",
@@ -21088,7 +21088,7 @@ export function ChatTab() {
                         </span>
                         <span className="hidden sm:inline w-1 h-1 bg-slate-300 rounded-full"></span>
                         <span className="flex items-center gap-1">
-                          <Clock className="w-3 h-3 text-[#f05e23]" />
+                          <Clock className="w-3 h-3 text-[#BF4B24]" />
                           {format(
                             parseISO(selectedChat.booking_start),
                             "HH:mm",
@@ -21142,7 +21142,7 @@ export function ChatTab() {
                       className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}
                     >
                       <div
-                        className={`max-w-[85%] md:max-w-[70%] rounded-2xl px-4 py-3 shadow-sm ${isMe ? "bg-[#f05e23] text-white rounded-tr-sm" : "bg-white border border-slate-200 text-slate-800 rounded-tl-sm"}`}
+                        className={`max-w-[85%] md:max-w-[70%] rounded-2xl px-4 py-3 shadow-sm ${isMe ? "bg-[#BF4B24] text-white rounded-tr-sm" : "bg-white border border-slate-200 text-slate-800 rounded-tl-sm"}`}
                       >
                         <p className="text-sm leading-relaxed whitespace-pre-wrap word-break">
                           {msg.content}
@@ -21169,7 +21169,7 @@ export function ChatTab() {
               <div className="p-4 bg-white border-t border-slate-200 shrink-0">
                 <form
                   onSubmit={handleSendMessage}
-                  className="flex items-end gap-3 bg-slate-50 border border-slate-200 p-2 rounded-2xl focus-within:ring-2 ring-[#f05e23]/20 transition-all"
+                  className="flex items-end gap-3 bg-slate-50 border border-slate-200 p-2 rounded-2xl focus-within:ring-2 ring-[#BF4B24]/20 transition-all"
                 >
                   <textarea
                     value={newMessage}
@@ -21187,7 +21187,7 @@ export function ChatTab() {
                   <Button
                     type="submit"
                     disabled={!newMessage.trim() || sending}
-                    className="w-12 h-12 rounded-xl bg-[#f05e23] hover:bg-[#d6521e] text-white shrink-0 shadow-md mb-0.5"
+                    className="w-12 h-12 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shrink-0 shadow-md mb-0.5"
                   >
                     {sending ? (
                       <Loader2 className="w-5 h-5 animate-spin" />
@@ -21472,7 +21472,7 @@ export default function LoginPage() {
       </div>
 
       <Card className="w-full max-w-md shadow-2xl border-slate-100 rounded-[2rem] overflow-hidden">
-        <div className="h-2 w-full bg-gradient-to-r from-[#f05e23] to-[#d6521e]" />
+        <div className="h-2 w-full bg-gradient-to-r from-[#BF4B24] to-[#9A3C1D]" />
 
         <CardHeader className="space-y-2 text-center pt-8 pb-6">
           <div className="mx-auto relative w-20 h-20 mb-2 drop-shadow-md">
@@ -21535,7 +21535,7 @@ export default function LoginPage() {
 
               <Button
                 onClick={() => setStep("login")}
-                className="w-full h-14 justify-start text-left bg-[#f05e23] hover:bg-[#d6521e] text-white rounded-xl shadow-sm transition-colors"
+                className="w-full h-14 justify-start text-left bg-[#BF4B24] hover:bg-[#9A3C1D] text-white rounded-xl shadow-sm transition-colors"
               >
                 <LogIn className="w-5 h-5 mr-3 text-white/80" />
                 <div>
@@ -21549,9 +21549,9 @@ export default function LoginPage() {
               <Button
                 onClick={() => setStep("register_professional")}
                 variant="outline"
-                className="w-full h-14 justify-start text-left border-slate-200 hover:bg-slate-50 hover:text-[#f05e23] rounded-xl group"
+                className="w-full h-14 justify-start text-left border-slate-200 hover:bg-slate-50 hover:text-[#BF4B24] rounded-xl group"
               >
-                <Stethoscope className="w-5 h-5 mr-3 text-slate-400 group-hover:text-[#f05e23]" />
+                <Stethoscope className="w-5 h-5 mr-3 text-slate-400 group-hover:text-[#BF4B24]" />
                 <div>
                   <div className="font-bold">Sou Profissional</div>
                   <div className="text-xs text-slate-500 font-normal">
@@ -21564,9 +21564,9 @@ export default function LoginPage() {
                 type="button"
                 onClick={() => window.location.assign("/host/register")}
                 variant="outline"
-                className="w-full h-14 justify-start text-left border-slate-200 hover:bg-slate-50 hover:text-[#f05e23] rounded-xl group"
+                className="w-full h-14 justify-start text-left border-slate-200 hover:bg-slate-50 hover:text-[#BF4B24] rounded-xl group"
               >
-                <Building2 className="w-5 h-5 mr-3 text-slate-400 group-hover:text-[#f05e23]" />
+                <Building2 className="w-5 h-5 mr-3 text-slate-400 group-hover:text-[#BF4B24]" />
                 <div>
                   <div className="font-bold">Sou Anfitrião</div>
                   <div className="text-xs text-slate-500 font-normal">
@@ -21603,7 +21603,7 @@ export default function LoginPage() {
               </div>
               <Button
                 type="submit"
-                className="w-full h-12 rounded-xl mt-2 font-bold bg-[#f05e23] hover:bg-[#d6521e] text-white"
+                className="w-full h-12 rounded-xl mt-2 font-bold bg-[#BF4B24] hover:bg-[#9A3C1D] text-white"
                 disabled={loading}
               >
                 {loading ? (
@@ -21652,7 +21652,7 @@ export default function LoginPage() {
               </div>
               <Button
                 type="submit"
-                className="w-full h-12 rounded-xl mt-2 font-bold bg-[#f05e23] hover:bg-[#d6521e] text-white"
+                className="w-full h-12 rounded-xl mt-2 font-bold bg-[#BF4B24] hover:bg-[#9A3C1D] text-white"
                 disabled={loading}
               >
                 {loading ? (
@@ -22159,7 +22159,7 @@ export function AdminSpecialistsTab() {
   if (loading)
     return (
       <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
 
@@ -22251,7 +22251,7 @@ export function AdminSpecialistsTab() {
 
         <div className="p-8 max-w-6xl mx-auto w-full space-y-6">
           <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm flex flex-col md:flex-row gap-8 relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-64 h-64 bg-[#f05e23]/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
+            <div className="absolute top-0 right-0 w-64 h-64 bg-[#BF4B24]/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
 
             <div className="w-32 h-32 rounded-full bg-slate-100 border-4 border-white shadow-lg overflow-hidden shrink-0 mx-auto md:mx-0">
               <img
@@ -22346,7 +22346,7 @@ export function AdminSpecialistsTab() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
-            <div className="bg-[#f05e23] rounded-3xl p-6 text-white shadow-lg relative overflow-hidden group md:col-span-6 lg:col-span-5">
+            <div className="bg-[#BF4B24] rounded-3xl p-6 text-white shadow-lg relative overflow-hidden group md:col-span-6 lg:col-span-5">
               <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl transition-transform group-hover:scale-150"></div>
               <div className="relative z-10 flex flex-col justify-between h-full gap-6">
                 <div>
@@ -22433,13 +22433,13 @@ export function AdminSpecialistsTab() {
             <div className="flex border-b border-slate-100">
               <button
                 onClick={() => setDossierTab("bookings")}
-                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "bookings" ? "border-[#f05e23] text-[#f05e23] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
+                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "bookings" ? "border-[#BF4B24] text-[#BF4B24] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
               >
                 Histórico de Reservas
               </button>
               <button
                 onClick={() => setDossierTab("transactions")}
-                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "transactions" ? "border-[#f05e23] text-[#f05e23] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
+                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "transactions" ? "border-[#BF4B24] text-[#BF4B24] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
               >
                 Extrato Financeiro (CR)
               </button>
@@ -22447,13 +22447,13 @@ export function AdminSpecialistsTab() {
 
             {profileLoading ? (
               <div className="flex justify-center py-20">
-                <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+                <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
               </div>
             ) : dossierTab === "bookings" ? (
               <div className="p-6">
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-6 gap-4 border-b border-slate-100 pb-6">
                   <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-[#f05e23]" /> Reservas
+                    <TrendingUp className="w-5 h-5 text-[#BF4B24]" /> Reservas
                     do Profissional
                   </h3>
 
@@ -22556,7 +22556,7 @@ export function AdminSpecialistsTab() {
               <div className="p-6">
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-6 gap-4 border-b border-slate-100 pb-6">
                   <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                    <Receipt className="w-5 h-5 text-[#f05e23]" /> Movimentações
+                    <Receipt className="w-5 h-5 text-[#BF4B24]" /> Movimentações
                     Financeiras
                   </h3>
 
@@ -22654,7 +22654,7 @@ export function AdminSpecialistsTab() {
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm px-4">
             <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 w-full max-w-md animate-in zoom-in-95">
               <div className="flex items-center gap-3 mb-6">
-                <div className="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center text-[#f05e23]">
+                <div className="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center text-[#BF4B24]">
                   <CreditCard className="w-6 h-6" />
                 </div>
                 <div>
@@ -22718,7 +22718,7 @@ export function AdminSpecialistsTab() {
                 <Button
                   disabled={!creditAmount || actionLoading}
                   onClick={handleAddCredits}
-                  className="flex-1 h-12 bg-[#f05e23] hover:bg-[#d6521e] text-white font-bold shadow-lg"
+                  className="flex-1 h-12 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold shadow-lg"
                 >
                   {actionLoading ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -22742,7 +22742,7 @@ export function AdminSpecialistsTab() {
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-2">
-            <Stethoscope className="w-8 h-8 text-[#f05e23]" />
+            <Stethoscope className="w-8 h-8 text-[#BF4B24]" />
             Especialistas (Profissionais)
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-1">
@@ -22779,7 +22779,7 @@ export function AdminSpecialistsTab() {
           </div>
         </div>
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center text-[#f05e23] shrink-0">
+          <div className="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center text-[#BF4B24] shrink-0">
             <Wallet className="w-6 h-6" />
           </div>
           <div>
@@ -23486,7 +23486,7 @@ export function HostSpaceForm({
       <Card className="border-slate-100 shadow-sm rounded-2xl overflow-hidden mb-8">
         <CardHeader className="bg-slate-50/50 pb-4 border-b border-slate-100">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-[#f05e23] text-white rounded-lg">
+            <div className="p-2 bg-[#BF4B24] text-white rounded-lg">
               <Building2 className="w-5 h-5" />
             </div>
             <div>
@@ -23517,8 +23517,8 @@ export function HostSpaceForm({
                 <div className="flex flex-col items-center justify-center pt-5 pb-6">
                   {isProcessingImages ? (
                     <>
-                      <Loader2 className="w-8 h-8 mb-2 text-[#f05e23] animate-spin" />
-                      <p className="text-sm font-semibold text-[#f05e23]">
+                      <Loader2 className="w-8 h-8 mb-2 text-[#BF4B24] animate-spin" />
+                      <p className="text-sm font-semibold text-[#BF4B24]">
                         Processando fotos para Alta Qualidade...
                       </p>
                     </>
@@ -23526,7 +23526,7 @@ export function HostSpaceForm({
                     <>
                       <UploadCloud className="w-8 h-8 mb-2 text-slate-400" />
                       <p className="text-sm text-slate-500">
-                        <span className="font-semibold text-[#f05e23]">
+                        <span className="font-semibold text-[#BF4B24]">
                           Clique para buscar fotos
                         </span>{" "}
                         ou arraste
@@ -23557,7 +23557,7 @@ export function HostSpaceForm({
                         className="w-full h-full object-cover"
                       />
                       {img.isCover && (
-                        <div className="absolute top-2 left-2 bg-[#f05e23] text-white text-[10px] font-bold px-2 py-1 rounded-md uppercase tracking-wider z-10 shadow-sm">
+                        <div className="absolute top-2 left-2 bg-[#BF4B24] text-white text-[10px] font-bold px-2 py-1 rounded-md uppercase tracking-wider z-10 shadow-sm">
                           Capa
                         </div>
                       )}
@@ -23566,7 +23566,7 @@ export function HostSpaceForm({
                           type="button"
                           onClick={() => setCover(img.id)}
                           title="Capa"
-                          className={`p-2 rounded-full ${img.isCover ? "bg-[#f05e23]" : "bg-white/20 hover:bg-[#f05e23]"} text-white`}
+                          className={`p-2 rounded-full ${img.isCover ? "bg-[#BF4B24]" : "bg-white/20 hover:bg-[#BF4B24]"} text-white`}
                         >
                           <Star className="w-4 h-4" />
                         </button>
@@ -23628,7 +23628,7 @@ export function HostSpaceForm({
                         key={spec}
                         type="button"
                         onClick={() => setSpecialty(spec)}
-                        className={`p-3 rounded-xl border-2 text-sm font-bold transition-all text-left flex justify-between items-center ${specialty === spec ? "border-[#f05e23] bg-orange-50 text-[#f05e23]" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
+                        className={`p-3 rounded-xl border-2 text-sm font-bold transition-all text-left flex justify-between items-center ${specialty === spec ? "border-[#BF4B24] bg-orange-50 text-[#BF4B24]" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
                       >
                         <span className="truncate pr-2">{spec}</span>
                         {specialty === spec && (
@@ -23708,7 +23708,7 @@ export function HostSpaceForm({
                   <span className="text-red-500">*</span>
                 </Label>
                 <div className="relative flex items-center">
-                  <MapPin className="absolute left-3.5 h-5 w-5 text-[#f05e23]" />
+                  <MapPin className="absolute left-3.5 h-5 w-5 text-[#BF4B24]" />
                   <Input
                     placeholder="Digite a rua, bairro ou nome do prédio comercial..."
                     value={addressSearch}
@@ -23752,7 +23752,7 @@ export function HostSpaceForm({
                   />
                 </div>
                 <div className="space-y-2 md:col-span-3">
-                  <Label className="font-black text-[#f05e23]">
+                  <Label className="font-black text-[#BF4B24]">
                     Nº do Prédio *
                   </Label>
                   <Input
@@ -23860,7 +23860,7 @@ export function HostSpaceForm({
                       key={am.id}
                       type="button"
                       onClick={() => toggleAmenity(am.id)}
-                      className={`flex items-center justify-between p-3.5 rounded-xl border-2 transition-all ${amenities.includes(am.id) ? "border-[#f05e23] bg-orange-50/50 text-[#f05e23]" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
+                      className={`flex items-center justify-between p-3.5 rounded-xl border-2 transition-all ${amenities.includes(am.id) ? "border-[#BF4B24] bg-orange-50/50 text-[#BF4B24]" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
                     >
                       <div className="flex items-center gap-3">
                         <am.icon className="w-5 h-5" />
@@ -23964,7 +23964,7 @@ export function HostSpaceForm({
                               <TooltipTrigger asChild>
                                 <button
                                   type="button"
-                                  className="text-slate-400 hover:text-[#f05e23] transition-colors p-1"
+                                  className="text-slate-400 hover:text-[#BF4B24] transition-colors p-1"
                                 >
                                   <Info className="w-5 h-5" />
                                 </button>
@@ -23993,9 +23993,9 @@ export function HostSpaceForm({
                     <div className="pt-2 animate-in fade-in slide-in-from-top-2">
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
-                          <div className="absolute top-0 left-0 w-1 h-full bg-[#f05e23]" />
+                          <div className="absolute top-0 left-0 w-1 h-full bg-[#BF4B24]" />
                           <div className="flex items-center gap-2 mb-1">
-                            <Sun className="w-4 h-4 text-[#f05e23]" />
+                            <Sun className="w-4 h-4 text-[#BF4B24]" />
                             <h4 className="font-bold text-slate-900 text-sm">
                               Comercial
                             </h4>
@@ -24203,7 +24203,7 @@ export function HostSpaceForm({
             <Button
               type="submit"
               disabled={loading || isProcessingImages}
-              className="w-full h-14 text-lg rounded-xl font-bold bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/20 transition-all active:scale-95"
+              className="w-full h-14 text-lg rounded-xl font-bold bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/20 transition-all active:scale-95"
             >
               {loading || isProcessingImages
                 ? "Processando..."
@@ -24242,7 +24242,7 @@ export function HostSpaceForm({
             </Button>
             <Button
               onClick={applyCrop}
-              className="bg-[#f05e23] hover:bg-[#d6521e] text-white"
+              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white"
             >
               Aplicar Corte
             </Button>
@@ -24815,7 +24815,7 @@ export function ProfileTab() {
   if (loading) {
     return (
       <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -24841,7 +24841,7 @@ export function ProfileTab() {
         </div>
 
         <div className="bg-slate-900 p-8 rounded-3xl text-white shadow-xl relative overflow-hidden mb-8">
-          <div className="absolute top-0 right-0 w-40 h-40 bg-[#f05e23]/30 rounded-full blur-3xl -mr-10 -mt-10"></div>
+          <div className="absolute top-0 right-0 w-40 h-40 bg-[#BF4B24]/30 rounded-full blur-3xl -mr-10 -mt-10"></div>
           <div className="relative z-10 flex flex-col md:flex-row gap-8 justify-between">
             <div>
               <p className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
@@ -24855,7 +24855,7 @@ export function ProfileTab() {
               </h3>
               <Button
                 onClick={() => toast({ title: "Em breve" })}
-                className="w-full sm:w-auto h-12 px-6 rounded-xl font-black bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg text-sm"
+                className="w-full sm:w-auto h-12 px-6 rounded-xl font-black bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg text-sm"
               >
                 <PlusCircle className="w-4 h-4 mr-2" /> Comprar Pass
               </Button>
@@ -24915,7 +24915,7 @@ export function ProfileTab() {
 
         <div>
           <h3 className="text-lg font-black text-slate-900 mb-4 flex items-center gap-2">
-            <History className="w-5 h-5 text-[#f05e23]" /> Extrato de Créditos
+            <History className="w-5 h-5 text-[#BF4B24]" /> Extrato de Créditos
           </h3>
           <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
             {loadingWallet ? (
@@ -25219,7 +25219,7 @@ export function ProfileTab() {
 
         <div className="bg-white border border-slate-200 p-6 md:p-8 rounded-[2rem] shadow-sm">
           <h3 className="text-lg font-black text-slate-900 mb-6 flex items-center gap-2">
-            <User className="w-5 h-5 text-[#f05e23]" /> Dados Pessoais
+            <User className="w-5 h-5 text-[#BF4B24]" /> Dados Pessoais
           </h3>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -25332,7 +25332,7 @@ export function ProfileTab() {
 
         <div className="bg-white border border-slate-200 p-6 md:p-8 rounded-[2rem] shadow-sm">
           <h3 className="text-lg font-black text-slate-900 mb-6 flex items-center gap-2">
-            <MapPin className="w-5 h-5 text-[#f05e23]" /> Endereço Residencial
+            <MapPin className="w-5 h-5 text-[#BF4B24]" /> Endereço Residencial
           </h3>
 
           <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
@@ -25921,7 +25921,7 @@ export function BookingsTab({
   if (loading) {
     return (
       <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -25932,7 +25932,7 @@ export function BookingsTab({
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-2 pr-16 md:pr-0">
           <div>
             <h2 className="text-2xl font-black text-zinc-950 tracking-tight flex items-center gap-2">
-              <CalendarDays className="w-6 h-6 text-[#f05e23]" /> Minhas
+              <CalendarDays className="w-6 h-6 text-[#BF4B24]" /> Minhas
               Reservas
             </h2>
             <p className="text-sm font-medium text-zinc-500 mt-1">
@@ -25966,7 +25966,7 @@ export function BookingsTab({
             </button>
             <button
               onClick={() => setDateFilter("today")}
-              className={`px-4 py-1.5 rounded-full text-xs font-bold border transition-colors whitespace-nowrap ${dateFilter === "today" ? "bg-[#f05e23] text-white border-[#f05e23]" : "bg-white text-zinc-500 border-zinc-200 hover:bg-zinc-50"}`}
+              className={`px-4 py-1.5 rounded-full text-xs font-bold border transition-colors whitespace-nowrap ${dateFilter === "today" ? "bg-[#BF4B24] text-white border-[#BF4B24]" : "bg-white text-zinc-500 border-zinc-200 hover:bg-zinc-50"}`}
             >
               Apenas Hoje
             </button>
@@ -26034,7 +26034,7 @@ export function BookingsTab({
               return (
                 <div
                   key={booking.id}
-                  className={`bg-white rounded-[2rem] border shadow-sm overflow-hidden flex flex-col md:flex-row group transition-all ${isInProgress ? "border-amber-400 ring-2 ring-amber-400/20" : isReadyForCheckin ? "border-[#f05e23]/50 hover:border-[#f05e23]" : "border-zinc-200 hover:shadow-md"}`}
+                  className={`bg-white rounded-[2rem] border shadow-sm overflow-hidden flex flex-col md:flex-row group transition-all ${isInProgress ? "border-amber-400 ring-2 ring-amber-400/20" : isReadyForCheckin ? "border-[#BF4B24]/50 hover:border-[#BF4B24]" : "border-zinc-200 hover:shadow-md"}`}
                 >
                   <div
                     className={`md:w-48 p-6 flex flex-col justify-center border-b md:border-b-0 md:border-r border-zinc-100 border-dashed relative ${isSameDay(startObj, now) ? "bg-orange-50/50" : "bg-zinc-50/50"}`}
@@ -26052,7 +26052,7 @@ export function BookingsTab({
                       className={`flex items-center justify-center md:justify-start gap-2 border py-2 px-3 rounded-lg shadow-sm ${isInProgress ? "bg-amber-50 border-amber-200" : "bg-white border-zinc-200"}`}
                     >
                       <Clock
-                        className={`w-4 h-4 ${isInProgress ? "text-amber-500" : "text-[#f05e23]"}`}
+                        className={`w-4 h-4 ${isInProgress ? "text-amber-500" : "text-[#BF4B24]"}`}
                       />
                       <span
                         className={`text-xs font-black ${isInProgress ? "text-amber-800" : "text-zinc-800"}`}
@@ -26071,7 +26071,7 @@ export function BookingsTab({
                           </Badge>
                         )}
                         {isReadyForCheckin && !isInProgress && (
-                          <Badge className="bg-[#f05e23] text-white border-0 mb-2 font-bold px-2 py-0.5 animate-pulse mr-2">
+                          <Badge className="bg-[#BF4B24] text-white border-0 mb-2 font-bold px-2 py-0.5 animate-pulse mr-2">
                             Liberada para Check-in
                           </Badge>
                         )}
@@ -26119,7 +26119,7 @@ export function BookingsTab({
                                   `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${address.street}, ${address.number}, ${address.city}`)}`,
                                 )
                               }
-                              className="w-10 h-10 rounded-full bg-[#f05e23] hover:bg-[#d6521e] flex items-center justify-center shrink-0 transition-colors shadow-lg"
+                              className="w-10 h-10 rounded-full bg-[#BF4B24] hover:bg-[#9A3C1D] flex items-center justify-center shrink-0 transition-colors shadow-lg"
                             >
                               <Navigation className="w-4 h-4 fill-white" />
                             </button>
@@ -26186,7 +26186,7 @@ export function BookingsTab({
                                 booking,
                               })
                             }
-                            className="w-full h-12 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
+                            className="w-full h-12 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
                           >
                             <QrCode className="w-4 h-4 mr-2" /> Fazer Check-in
                           </Button>
@@ -26393,7 +26393,7 @@ const BASE_PACKAGE_INFO = {
     icon: Star,
     cardStyle: "bg-zinc-900 border-zinc-800 text-white",
     iconStyle: "bg-white/10 text-white",
-    buttonStyle: "bg-[#f05e23] hover:bg-[#d6521e] text-white",
+    buttonStyle: "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white",
     optionStyle: "bg-white/10 border-white/20 text-white hover:bg-white/20",
     benefits: [
       "Acesso a Salas VIP e Basic por 30 dias",
@@ -26881,7 +26881,7 @@ export function SearchTab({
       textClass = "text-white";
       descClass = "text-zinc-400";
       buttonClass =
-        "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-orange-500/20";
+        "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-orange-500/20";
       highlightText = "Salas VIP";
       discount = "40%";
     } else if (activeTier === "master") {
@@ -26958,13 +26958,13 @@ export function SearchTab({
   if (loading)
     return (
       <div className="flex justify-center items-center min-h-screen bg-zinc-50">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
 
   return (
     <div className="flex flex-col pb-24 bg-zinc-50 min-h-screen relative font-sans">
-      <header className="bg-gradient-to-r from-[#f05e23] to-[#d6521e] px-4 pb-12 pt-10 lg:px-8 lg:pt-12 rounded-b-3xl shadow-md">
+      <header className="bg-gradient-to-r from-[#BF4B24] to-[#9A3C1D] px-4 pb-12 pt-10 lg:px-8 lg:pt-12 rounded-b-3xl shadow-md">
         {!isPublic && (
           <div className="mx-auto max-w-5xl flex items-center justify-between">
             <div>
@@ -27154,7 +27154,7 @@ export function SearchTab({
           <div className="mx-auto w-full max-w-5xl px-4 -mt-6 relative z-20 sticky top-4 animate-in fade-in duration-300">
             <div className="flex flex-col gap-3">
               <div className="flex items-center gap-2">
-                <div className="relative flex items-center flex-1 bg-white rounded-2xl border border-zinc-200 shadow-[0_4px_20px_rgb(0,0,0,0.03)] h-14 transition-all focus-within:ring-2 focus-within:ring-[#f05e23]/20">
+                <div className="relative flex items-center flex-1 bg-white rounded-2xl border border-zinc-200 shadow-[0_4px_20px_rgb(0,0,0,0.03)] h-14 transition-all focus-within:ring-2 focus-within:ring-[#BF4B24]/20">
                   <Search className="absolute left-4 h-5 w-5 text-zinc-400" />
                   <Input
                     placeholder="Buscar por cidade, clínica ou especialidade..."
@@ -27169,7 +27169,7 @@ export function SearchTab({
                 >
                   <SlidersHorizontal className="h-5 w-5" />
                   {usingLocation && (
-                    <span className="absolute top-3 right-3 w-2 h-2 bg-[#f05e23] rounded-full"></span>
+                    <span className="absolute top-3 right-3 w-2 h-2 bg-[#BF4B24] rounded-full"></span>
                   )}
                 </button>
               </div>
@@ -27225,7 +27225,7 @@ export function SearchTab({
                 <button
                   key={cat}
                   onClick={() => setSelectedCategory(cat)}
-                  className={`shrink-0 whitespace-nowrap px-4 py-2 rounded-full text-xs font-semibold transition-all border ${selectedCategory === cat ? "bg-[#f05e23] text-white border-[#f05e23]" : "bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50"}`}
+                  className={`shrink-0 whitespace-nowrap px-4 py-2 rounded-full text-xs font-semibold transition-all border ${selectedCategory === cat ? "bg-[#BF4B24] text-white border-[#BF4B24]" : "bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50"}`}
                 >
                   {cat}
                 </button>
@@ -27363,7 +27363,7 @@ export function SearchTab({
               ) : (
                 <section className="pt-4 pb-8">
                   <div className="flex items-center gap-3 mb-6">
-                    <Building2 className="w-6 h-6 text-[#f05e23]" />
+                    <Building2 className="w-6 h-6 text-[#BF4B24]" />
                     <div>
                       <h2 className="text-xl font-bold text-zinc-900 capitalize">
                         Espaços Disponíveis
@@ -27410,11 +27410,11 @@ export function SearchTab({
               </Label>
               <button
                 onClick={requestLocation}
-                className={`w-full flex items-center justify-between p-4 rounded-xl border-2 transition-all ${usingLocation ? "border-[#f05e23] bg-orange-50/50 text-[#f05e23]" : "border-zinc-200 hover:border-zinc-300 text-zinc-700"}`}
+                className={`w-full flex items-center justify-between p-4 rounded-xl border-2 transition-all ${usingLocation ? "border-[#BF4B24] bg-orange-50/50 text-[#BF4B24]" : "border-zinc-200 hover:border-zinc-300 text-zinc-700"}`}
               >
                 <div className="flex items-center gap-3">
                   <Navigation
-                    className={`w-5 h-5 ${usingLocation ? "fill-[#f05e23]" : ""}`}
+                    className={`w-5 h-5 ${usingLocation ? "fill-[#BF4B24]" : ""}`}
                   />
                   <div className="text-left">
                     <span className="font-bold text-sm block">
@@ -27426,7 +27426,7 @@ export function SearchTab({
                   </div>
                 </div>
                 {usingLocation && (
-                  <Badge className="bg-[#f05e23] text-white border-0 font-bold">
+                  <Badge className="bg-[#BF4B24] text-white border-0 font-bold">
                     Ativado
                   </Badge>
                 )}
@@ -27575,20 +27575,20 @@ function RoomCard({
       <div className="flex flex-col p-4 flex-1 bg-white">
         <div>
           <div className="flex justify-between items-start mb-3 gap-2">
-            <h3 className="font-bold text-lg text-slate-900 leading-tight line-clamp-2 group-hover:text-[#f05e23] transition-colors">
+            <h3 className="font-bold text-lg text-slate-900 leading-tight line-clamp-2 group-hover:text-[#BF4B24] transition-colors">
               {room.name}
             </h3>
 
             {room.reviews_count > 0 || (room.rating && room.rating > 0) ? (
               <div className="flex items-center gap-1 bg-slate-50 px-2 py-1 rounded-md shrink-0 border border-slate-100">
-                <Star className="w-3.5 h-3.5 fill-[#f05e23] text-[#f05e23]" />
+                <Star className="w-3.5 h-3.5 fill-[#BF4B24] text-[#BF4B24]" />
                 <span className="text-sm font-black text-slate-900">
                   {Number(room.rating).toFixed(1)}
                 </span>
               </div>
             ) : (
               <div className="bg-orange-50 px-2 py-1 rounded-md shrink-0 border border-orange-100">
-                <span className="text-[10px] font-black text-[#f05e23] uppercase tracking-wider">
+                <span className="text-[10px] font-black text-[#BF4B24] uppercase tracking-wider">
                   Novo
                 </span>
               </div>
@@ -27633,7 +27633,7 @@ function RoomCard({
               {room.priceLabel}
             </p>
           </div>
-          <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center group-hover:bg-[#f05e23] group-hover:text-white transition-colors border border-slate-100 text-slate-400">
+          <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center group-hover:bg-[#BF4B24] group-hover:text-white transition-colors border border-slate-100 text-slate-400">
             <ArrowRight className="w-5 h-5" />
           </div>
         </div>
@@ -28604,7 +28604,7 @@ export function RoomDetail(props: RoomDetailProps) {
   if (loading) {
     return (
       <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-6 text-center">
-        <Loader2 className="h-12 w-12 animate-spin text-[#f05e23]" />
+        <Loader2 className="h-12 w-12 animate-spin text-[#BF4B24]" />
         <h2 className="text-xl font-black text-slate-900 mb-2">
           Preparando o espaço...
         </h2>
@@ -28721,7 +28721,7 @@ export function RoomDetail(props: RoomDetailProps) {
           </div>
           <div className="flex items-center gap-4 text-xs md:text-sm font-medium text-slate-600">
             <div className="flex items-center gap-1.5 font-bold">
-              <MapPin className="w-4 h-4 text-[#f05e23]" />
+              <MapPin className="w-4 h-4 text-[#BF4B24]" />
               {address.city
                 ? `${address.city}, ${address.state}`
                 : "Localização protegida"}
@@ -28829,7 +28829,7 @@ export function RoomDetail(props: RoomDetailProps) {
                       key={amId}
                       className="flex items-center gap-3 p-3.5 rounded-xl bg-white border border-slate-200 shadow-sm hover:border-slate-300 transition-colors"
                     >
-                      <Icon className="w-5 h-5 text-[#f05e23]" />
+                      <Icon className="w-5 h-5 text-[#BF4B24]" />
                       <span className="text-xs font-bold text-slate-700">
                         {amenityDef.label}
                       </span>
@@ -28928,7 +28928,7 @@ export function RoomDetail(props: RoomDetailProps) {
             {activeTab === "hora" && (
               <section className="animate-in fade-in">
                 <div className="flex items-center gap-2 mb-4">
-                  <CalendarIcon className="w-5 h-5 text-[#f05e23]" />
+                  <CalendarIcon className="w-5 h-5 text-[#BF4B24]" />
                   <h2 className="text-lg font-black text-slate-900">
                     Agendamento
                   </h2>
@@ -28939,7 +28939,7 @@ export function RoomDetail(props: RoomDetailProps) {
                     <button
                       onClick={prevMonth}
                       disabled={!canGoPrevMonth}
-                      className={`p-1.5 rounded-full transition-colors ${canGoPrevMonth ? "text-slate-500 hover:bg-slate-100 hover:text-[#f05e23]" : "text-slate-200 cursor-not-allowed"}`}
+                      className={`p-1.5 rounded-full transition-colors ${canGoPrevMonth ? "text-slate-500 hover:bg-slate-100 hover:text-[#BF4B24]" : "text-slate-200 cursor-not-allowed"}`}
                     >
                       <ChevronLeft className="w-5 h-5" />
                     </button>
@@ -28950,7 +28950,7 @@ export function RoomDetail(props: RoomDetailProps) {
                     </div>
                     <button
                       onClick={nextMonth}
-                      className="p-1.5 rounded-full text-slate-500 hover:bg-slate-100 hover:text-[#f05e23] transition-colors"
+                      className="p-1.5 rounded-full text-slate-500 hover:bg-slate-100 hover:text-[#BF4B24] transition-colors"
                     >
                       <ChevronRight className="w-5 h-5" />
                     </button>
@@ -28985,14 +28985,14 @@ export function RoomDetail(props: RoomDetailProps) {
                             if (!isPast) setSelectedDate(day);
                           }}
                           disabled={isPast || !isCurrentMonth}
-                          className={`relative h-9 w-full rounded-lg text-xs font-bold flex flex-col items-center justify-center transition-colors ${!isCurrentMonth ? "invisible" : ""} ${isPast ? "text-slate-200 cursor-not-allowed" : ""} ${isSelected ? "bg-[#f05e23] text-white shadow-md shadow-orange-500/30" : ""} ${!isSelected && !isPast && isCurrentMonth ? "text-slate-700 hover:bg-slate-100" : ""}`}
+                          className={`relative h-9 w-full rounded-lg text-xs font-bold flex flex-col items-center justify-center transition-colors ${!isCurrentMonth ? "invisible" : ""} ${isPast ? "text-slate-200 cursor-not-allowed" : ""} ${isSelected ? "bg-[#BF4B24] text-white shadow-md shadow-orange-500/30" : ""} ${!isSelected && !isPast && isCurrentMonth ? "text-slate-700 hover:bg-slate-100" : ""}`}
                         >
                           <span className="relative z-10">
                             {format(day, "d")}
                           </span>
                           {hasSelection && (
                             <span
-                              className={`absolute bottom-1 w-1 h-1 rounded-full ${isSelected ? "bg-white" : "bg-[#f05e23]"}`}
+                              className={`absolute bottom-1 w-1 h-1 rounded-full ${isSelected ? "bg-white" : "bg-[#BF4B24]"}`}
                             />
                           )}
                         </button>
@@ -29036,15 +29036,15 @@ export function RoomDetail(props: RoomDetailProps) {
                           key={slotKey}
                           onClick={() => !isUnavailable && toggleSlot(slotKey)}
                           disabled={isUnavailable}
-                          className={`h-14 rounded-xl flex flex-col items-center justify-center transition-all border-2 ${isUnavailable ? "border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed" : isSelected ? "border-[#f05e23] bg-orange-50" : "border-slate-100 bg-white hover:border-slate-300"}`}
+                          className={`h-14 rounded-xl flex flex-col items-center justify-center transition-all border-2 ${isUnavailable ? "border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed" : isSelected ? "border-[#BF4B24] bg-orange-50" : "border-slate-100 bg-white hover:border-slate-300"}`}
                         >
                           <span
-                            className={`text-xs font-bold ${isUnavailable ? "text-slate-400 line-through" : isSelected ? "text-[#f05e23]" : "text-slate-700"}`}
+                            className={`text-xs font-bold ${isUnavailable ? "text-slate-400 line-through" : isSelected ? "text-[#BF4B24]" : "text-slate-700"}`}
                           >
                             {slotTime}
                           </span>
                           <span
-                            className={`text-[10px] font-semibold mt-0.5 ${isUnavailable ? "text-slate-400" : isSelected ? "text-[#f05e23]/80" : "text-slate-400"}`}
+                            className={`text-[10px] font-semibold mt-0.5 ${isUnavailable ? "text-slate-400" : isSelected ? "text-[#BF4B24]/80" : "text-slate-400"}`}
                           >
                             {isUnavailable
                               ? "Indisponível"
@@ -29065,7 +29065,7 @@ export function RoomDetail(props: RoomDetailProps) {
                           : "A partir de"}
                       </p>
                       <div className="flex items-baseline gap-1">
-                        <span className="text-2xl font-black text-[#f05e23]">
+                        <span className="text-2xl font-black text-[#BF4B24]">
                           R${" "}
                           {selectedSlots.length > 0
                             ? totalHourlyCost
@@ -29077,7 +29077,7 @@ export function RoomDetail(props: RoomDetailProps) {
                   <Button
                     onClick={handleAction}
                     disabled={actionLoading || selectedSlots.length === 0}
-                    className={`w-full h-14 rounded-xl font-black transition-all text-base ${selectedSlots.length > 0 ? "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/25 hover:scale-[1.02]" : "bg-slate-100 text-slate-400 shadow-none"}`}
+                    className={`w-full h-14 rounded-xl font-black transition-all text-base ${selectedSlots.length > 0 ? "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/25 hover:scale-[1.02]" : "bg-slate-100 text-slate-400 shadow-none"}`}
                   >
                     {actionLoading ? "Processando..." : "Reservar Agora"}
                   </Button>
@@ -29108,11 +29108,11 @@ export function RoomDetail(props: RoomDetailProps) {
                       <button
                         key={t.id}
                         onClick={() => setSelectedShift(t.id as any)}
-                        className={`flex flex-col items-center justify-center p-3.5 rounded-xl border-2 transition-all ${selectedShift === t.id ? "border-[#f05e23] bg-orange-50 text-[#f05e23]" : "border-slate-100 hover:border-slate-200 bg-white"}`}
+                        className={`flex flex-col items-center justify-center p-3.5 rounded-xl border-2 transition-all ${selectedShift === t.id ? "border-[#BF4B24] bg-orange-50 text-[#BF4B24]" : "border-slate-100 hover:border-slate-200 bg-white"}`}
                       >
                         <span className="text-xs font-black">{t.label}</span>
                         <span
-                          className={`text-[10px] font-bold mt-1 ${selectedShift === t.id ? "text-[#f05e23]/70" : "text-slate-400"}`}
+                          className={`text-[10px] font-bold mt-1 ${selectedShift === t.id ? "text-[#BF4B24]/70" : "text-slate-400"}`}
                         >
                           {t.price ? `R$ ${t.price}` : "--"}
                         </span>
@@ -29286,7 +29286,7 @@ export function RoomDetail(props: RoomDetailProps) {
                       <div className="mt-5 p-5 bg-slate-50 rounded-2xl border border-slate-200 md:ml-12 relative">
                         <div className="absolute top-0 left-6 -mt-2 w-4 h-4 bg-slate-50 border-t border-l border-slate-200 rotate-45"></div>
                         <p className="text-xs font-black text-slate-900 mb-1 flex items-center gap-1">
-                          <Check className="w-3.5 h-3.5 text-[#f05e23]" />{" "}
+                          <Check className="w-3.5 h-3.5 text-[#BF4B24]" />{" "}
                           Resposta do Anfitrião
                         </p>
                         <p className="text-sm font-medium text-slate-600">
@@ -29323,7 +29323,7 @@ export function RoomDetail(props: RoomDetailProps) {
           </p>
           <div className="flex items-baseline gap-1">
             <span
-              className={`text-2xl font-black ${activeTab === "hora" ? "text-[#f05e23]" : "text-slate-900"}`}
+              className={`text-2xl font-black ${activeTab === "hora" ? "text-[#BF4B24]" : "text-slate-900"}`}
             >
               R${" "}
               {activeTab === "hora"
@@ -29341,7 +29341,7 @@ export function RoomDetail(props: RoomDetailProps) {
           <Button
             onClick={handleAction}
             disabled={actionLoading || selectedSlots.length === 0}
-            className={`h-14 px-6 rounded-xl font-black transition-all w-[55%] text-base ${selectedSlots.length > 0 ? "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/25 active:scale-95" : "bg-slate-100 text-slate-400 shadow-none"}`}
+            className={`h-14 px-6 rounded-xl font-black transition-all w-[55%] text-base ${selectedSlots.length > 0 ? "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/25 active:scale-95" : "bg-slate-100 text-slate-400 shadow-none"}`}
           >
             {actionLoading ? "Aguarde..." : "Reservar"}
           </Button>
@@ -29496,7 +29496,7 @@ export function RoomDetail(props: RoomDetailProps) {
                   setShowProfileModal(false);
                   if (onNavigateToProfile) onNavigateToProfile();
                 }}
-                className="w-full h-12 rounded-xl font-black bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/25"
+                className="w-full h-12 rounded-xl font-black bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/25"
               >
                 Completar Perfil
               </Button>
@@ -29802,7 +29802,7 @@ function DashboardContent() {
       {!selectedRoom && (
         <aside className="hidden lg:flex fixed inset-y-0 left-0 z-40 w-64 flex-col border-r border-slate-200 bg-white shadow-sm">
           <div className="flex items-center gap-3 px-6 py-5 border-b border-slate-100">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f05e23] font-black text-xl text-white shadow-sm">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#BF4B24] font-black text-xl text-white shadow-sm">
               F
             </div>
             <div>
@@ -29921,7 +29921,7 @@ function DesktopNavItem({ icon: Icon, label, isActive, onClick }: any) {
     <li>
       <button
         onClick={onClick}
-        className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all duration-200 ${isActive ? "bg-[#f05e23]/10 text-[#f05e23]" : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"}`}
+        className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all duration-200 ${isActive ? "bg-[#BF4B24]/10 text-[#BF4B24]" : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"}`}
       >
         <Icon
           className={`w-5 h-5 ${isActive ? "stroke-[2.5px]" : "stroke-2"}`}
@@ -29937,16 +29937,16 @@ function MobileNavItem({ icon: Icon, label, isActive, onClick }: any) {
     <li className="flex-1">
       <button
         onClick={onClick}
-        className={`flex w-full flex-col items-center justify-center gap-1.5 py-3 text-[10px] font-bold transition-all duration-200 ${isActive ? "text-[#f05e23] scale-105" : "text-slate-400 hover:text-slate-700"}`}
+        className={`flex w-full flex-col items-center justify-center gap-1.5 py-3 text-[10px] font-bold transition-all duration-200 ${isActive ? "text-[#BF4B24] scale-105" : "text-slate-400 hover:text-slate-700"}`}
       >
         <div
           className={`relative flex items-center justify-center transition-transform duration-300 ${isActive ? "-translate-y-1" : ""}`}
         >
           <Icon
-            className={`w-5 h-5 transition-colors ${isActive ? "fill-[#f05e23]/20 stroke-[2.5px]" : "stroke-2"}`}
+            className={`w-5 h-5 transition-colors ${isActive ? "fill-[#BF4B24]/20 stroke-[2.5px]" : "stroke-2"}`}
           />
           {isActive && (
-            <span className="absolute -bottom-3 w-1.5 h-1.5 bg-[#f05e23] rounded-full animate-in zoom-in" />
+            <span className="absolute -bottom-3 w-1.5 h-1.5 bg-[#BF4B24] rounded-full animate-in zoom-in" />
           )}
         </div>
         <span
@@ -29964,7 +29964,7 @@ export default function DashboardPage() {
     <Suspense
       fallback={
         <div className="flex h-screen w-full items-center justify-center bg-slate-50">
-          <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+          <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
         </div>
       }
     >

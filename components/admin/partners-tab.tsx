@@ -322,7 +322,7 @@ export function AdminPartnersTab() {
   if (loading)
     return (
       <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
 
@@ -401,7 +401,7 @@ export function AdminPartnersTab() {
         <div className="p-8 max-w-6xl mx-auto w-full space-y-6">
           {/* CARTÃO DE IDENTIFICAÇÃO DO ANFITRIÃO */}
           <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm flex flex-col md:flex-row items-center md:items-start gap-8 relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-64 h-64 bg-[#f05e23]/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
+            <div className="absolute top-0 right-0 w-64 h-64 bg-[#BF4B24]/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
 
             <div className="w-32 h-32 rounded-3xl bg-slate-100 border-4 border-white shadow-lg overflow-hidden shrink-0 flex items-center justify-center text-slate-300">
               {selectedProfile.avatar_url ? (
@@ -436,15 +436,15 @@ export function AdminPartnersTab() {
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="flex items-center justify-center md:justify-start gap-3 text-sm font-medium text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                  <Mail className="w-4 h-4 text-[#f05e23]" />{" "}
+                  <Mail className="w-4 h-4 text-[#BF4B24]" />{" "}
                   {selectedProfile.email}
                 </div>
                 <div className="flex items-center justify-center md:justify-start gap-3 text-sm font-medium text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                  <Phone className="w-4 h-4 text-[#f05e23]" />{" "}
+                  <Phone className="w-4 h-4 text-[#BF4B24]" />{" "}
                   {selectedProfile.phone}
                 </div>
                 <div className="flex items-center justify-center md:justify-start gap-3 text-sm font-medium text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                  <MapPin className="w-4 h-4 text-[#f05e23]" />{" "}
+                  <MapPin className="w-4 h-4 text-[#BF4B24]" />{" "}
                   {selectedProfile.city} - {selectedProfile.state}
                 </div>
               </div>
@@ -471,7 +471,7 @@ export function AdminPartnersTab() {
             </div>
 
             <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-3xl p-6 text-white shadow-lg relative overflow-hidden group">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-[#f05e23]/20 rounded-full blur-2xl transition-transform group-hover:scale-150"></div>
+              <div className="absolute top-0 right-0 w-32 h-32 bg-[#BF4B24]/20 rounded-full blur-2xl transition-transform group-hover:scale-150"></div>
               <div className="relative z-10">
                 <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
                   <Wallet className="w-4 h-4" /> Receita Fusion (Take Rate)
@@ -513,13 +513,13 @@ export function AdminPartnersTab() {
             <div className="flex border-b border-slate-100">
               <button
                 onClick={() => setDossierTab("bookings")}
-                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "bookings" ? "border-[#f05e23] text-[#f05e23] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
+                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "bookings" ? "border-[#BF4B24] text-[#BF4B24] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
               >
                 Histórico de Repasses (Reservas)
               </button>
               <button
                 onClick={() => setDossierTab("rooms")}
-                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "rooms" ? "border-[#f05e23] text-[#f05e23] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
+                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "rooms" ? "border-[#BF4B24] text-[#BF4B24] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
               >
                 Inventário de Salas
               </button>
@@ -527,14 +527,14 @@ export function AdminPartnersTab() {
 
             {profileLoading ? (
               <div className="flex justify-center py-20">
-                <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+                <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
               </div>
             ) : dossierTab === "bookings" ? (
               <div className="p-6">
                 <div className="flex flex-col xl:flex-row xl:items-center justify-between mb-6 gap-4 border-b border-slate-100 pb-6">
                   <div>
                     <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                      <TrendingUp className="w-5 h-5 text-[#f05e23]" /> Extrato
+                      <TrendingUp className="w-5 h-5 text-[#BF4B24]" /> Extrato
                       de Operação
                     </h3>
                     <p className="text-xs font-medium text-slate-500 mt-1">
@@ -662,7 +662,7 @@ export function AdminPartnersTab() {
               <div className="p-6">
                 <div className="flex items-center justify-between mb-6">
                   <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                    <Building2 className="w-5 h-5 text-[#f05e23]" />{" "}
+                    <Building2 className="w-5 h-5 text-[#BF4B24]" />{" "}
                     Infraestrutura do Parceiro
                   </h3>
                 </div>
@@ -726,7 +726,7 @@ export function AdminPartnersTab() {
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-2">
-            <ShieldCheck className="w-8 h-8 text-[#f05e23]" />
+            <ShieldCheck className="w-8 h-8 text-[#BF4B24]" />
             Parceiros (Anfitriões)
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-1">
@@ -772,7 +772,7 @@ export function AdminPartnersTab() {
           </div>
         </div>
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center text-[#f05e23] shrink-0">
+          <div className="w-12 h-12 rounded-full bg-orange-50 flex items-center justify-center text-[#BF4B24] shrink-0">
             <Wallet className="w-6 h-6" />
           </div>
           <div>

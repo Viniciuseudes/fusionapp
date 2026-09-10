@@ -48,7 +48,7 @@ interface HostOverviewProps {
 }
 
 const shiftLabels = ["08h-12h", "12h-15h", "15h-18h", "18h-22h"];
-const COLORS = ["#f05e23", "#8b5cf6", "#10b981", "#3b82f6", "#f59e0b"];
+const COLORS = ["#BF4B24", "#8b5cf6", "#10b981", "#3b82f6", "#f59e0b"];
 
 export function HostOverview({ onNavigate }: HostOverviewProps) {
   const supabase = createClient();
@@ -269,7 +269,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
     if (intensity <= 5)
       return "bg-orange-300 border-orange-400 text-orange-900";
     if (intensity <= 10) return "bg-orange-500 border-orange-600 text-white";
-    return "bg-[#d6521e] border-[#b03d12] text-white shadow-inner";
+    return "bg-[#9A3C1D] border-[#b03d12] text-white shadow-inner";
   };
 
   const handlePrintPDF = () => {
@@ -279,7 +279,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
   if (loading) {
     return (
       <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -341,10 +341,10 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
         </div>
 
         <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-6 rounded-2xl shadow-xl relative overflow-hidden group print:bg-white print:border print:border-slate-200 print:shadow-none">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-[#f05e23]/20 rounded-full blur-2xl -mr-8 -mt-8 transition-transform group-hover:scale-150 print:hidden"></div>
+          <div className="absolute top-0 right-0 w-32 h-32 bg-[#BF4B24]/20 rounded-full blur-2xl -mr-8 -mt-8 transition-transform group-hover:scale-150 print:hidden"></div>
           <div className="relative z-10">
             <div className="flex justify-between items-start mb-4">
-              <div className="w-10 h-10 rounded-xl bg-[#f05e23]/20 flex items-center justify-center text-[#f05e23]">
+              <div className="w-10 h-10 rounded-xl bg-[#BF4B24]/20 flex items-center justify-center text-[#BF4B24]">
                 <Maximize className="w-5 h-5" />
               </div>
             </div>
@@ -420,8 +420,8 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
               >
                 <defs>
                   <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f05e23" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#f05e23" stopOpacity={0} />
+                    <stop offset="5%" stopColor="#BF4B24" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#BF4B24" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid
@@ -462,7 +462,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
                 <Area
                   type="monotone"
                   dataKey="revenue"
-                  stroke="#f05e23"
+                  stroke="#BF4B24"
                   strokeWidth={3}
                   fillOpacity={1}
                   fill="url(#colorRevenue)"
@@ -476,7 +476,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 flex flex-col">
           <div className="mb-6">
             <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
-              <Map className="w-5 h-5 text-[#f05e23]" /> Mapa de Ocupação
+              <Map className="w-5 h-5 text-[#BF4B24]" /> Mapa de Ocupação
             </h2>
             <p className="text-xs font-medium text-slate-500 mt-1">
               Horários de maior fluxo.
@@ -556,7 +556,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           <Button
             onClick={handlePrintPDF}
             variant="outline"
-            className="font-bold text-slate-600 h-10 rounded-xl print:hidden flex items-center gap-2 hover:text-[#f05e23] hover:bg-orange-50"
+            className="font-bold text-slate-600 h-10 rounded-xl print:hidden flex items-center gap-2 hover:text-[#BF4B24] hover:bg-orange-50"
           >
             <Printer className="w-4 h-4" /> Exportar para PDF
           </Button>
@@ -570,7 +570,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
                 <th className="px-6 py-4 text-center">Tamanho (m²)</th>
                 <th className="px-6 py-4 text-center">Ocupação Est.</th>
                 <th className="px-6 py-4 text-right">Rendimento Bruto</th>
-                <th className="px-6 py-4 text-right bg-orange-50/50 text-[#f05e23]">
+                <th className="px-6 py-4 text-right bg-orange-50/50 text-[#BF4B24]">
                   Rendimento / m²
                 </th>
               </tr>
@@ -637,7 +637,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
                       </td>
                       <td className="px-6 py-5 text-right font-black text-slate-900 bg-orange-50/20">
                         <div className="flex items-center justify-end gap-1">
-                          <span className="text-xs text-[#f05e23] font-bold">
+                          <span className="text-xs text-[#BF4B24] font-bold">
                             R$
                           </span>
                           <span className="text-lg">
@@ -664,7 +664,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           <Button
             onClick={() => onNavigate("create_space")}
             variant="outline"
-            className="h-auto flex-col items-center justify-center gap-3 p-6 rounded-2xl border-slate-200 text-slate-600 hover:border-[#f05e23] hover:text-[#f05e23] hover:bg-orange-50"
+            className="h-auto flex-col items-center justify-center gap-3 p-6 rounded-2xl border-slate-200 text-slate-600 hover:border-[#BF4B24] hover:text-[#BF4B24] hover:bg-orange-50"
           >
             <PlusCircle className="w-8 h-8" />
             <span className="font-bold">Adicionar Sala</span>

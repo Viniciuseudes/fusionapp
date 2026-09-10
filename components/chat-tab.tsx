@@ -362,7 +362,7 @@ export function ChatTab() {
   if (loading) {
     return (
       <div className="flex justify-center items-center h-[calc(100vh-100px)]">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -396,7 +396,7 @@ export function ChatTab() {
               </button>
               <button
                 onClick={() => setActiveFilter("unread")}
-                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${activeFilter === "unread" ? "bg-[#f05e23] text-white shadow-md shadow-orange-500/20" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${activeFilter === "unread" ? "bg-[#BF4B24] text-white shadow-md shadow-orange-500/20" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
               >
                 Não Lidas
                 {chats.some((c) => c.unread_count > 0) && (
@@ -463,7 +463,7 @@ export function ChatTab() {
                           </h4>
                           {chat.last_message_date && (
                             <span
-                              className={`text-[10px] whitespace-nowrap ${hasUnread ? "font-bold text-[#f05e23]" : "text-slate-400"}`}
+                              className={`text-[10px] whitespace-nowrap ${hasUnread ? "font-bold text-[#BF4B24]" : "text-slate-400"}`}
                             >
                               {format(
                                 parseISO(chat.last_message_date),
@@ -538,7 +538,7 @@ export function ChatTab() {
                       F
                     </div>
                   ) : (
-                    <div className="w-full h-full flex items-center justify-center bg-orange-50 text-[#f05e23]">
+                    <div className="w-full h-full flex items-center justify-center bg-orange-50 text-[#BF4B24]">
                       <User className="w-5 h-5" />
                     </div>
                   )}
@@ -602,7 +602,7 @@ export function ChatTab() {
                       </p>
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] sm:text-xs font-bold text-slate-500 mt-0.5">
                         <span className="flex items-center gap-1">
-                          <CalendarIcon className="w-3 h-3 text-[#f05e23]" />
+                          <CalendarIcon className="w-3 h-3 text-[#BF4B24]" />
                           {format(
                             parseISO(selectedChat.booking_start),
                             "dd MMM, yyyy",
@@ -611,7 +611,7 @@ export function ChatTab() {
                         </span>
                         <span className="hidden sm:inline w-1 h-1 bg-slate-300 rounded-full"></span>
                         <span className="flex items-center gap-1">
-                          <Clock className="w-3 h-3 text-[#f05e23]" />
+                          <Clock className="w-3 h-3 text-[#BF4B24]" />
                           {format(
                             parseISO(selectedChat.booking_start),
                             "HH:mm",
@@ -665,7 +665,7 @@ export function ChatTab() {
                       className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}
                     >
                       <div
-                        className={`max-w-[85%] md:max-w-[70%] rounded-2xl px-4 py-3 shadow-sm ${isMe ? "bg-[#f05e23] text-white rounded-tr-sm" : "bg-white border border-slate-200 text-slate-800 rounded-tl-sm"}`}
+                        className={`max-w-[85%] md:max-w-[70%] rounded-2xl px-4 py-3 shadow-sm ${isMe ? "bg-[#BF4B24] text-white rounded-tr-sm" : "bg-white border border-slate-200 text-slate-800 rounded-tl-sm"}`}
                       >
                         <p className="text-sm leading-relaxed whitespace-pre-wrap word-break">
                           {msg.content}
@@ -692,7 +692,7 @@ export function ChatTab() {
               <div className="p-4 bg-white border-t border-slate-200 shrink-0">
                 <form
                   onSubmit={handleSendMessage}
-                  className="flex items-end gap-3 bg-slate-50 border border-slate-200 p-2 rounded-2xl focus-within:ring-2 ring-[#f05e23]/20 transition-all"
+                  className="flex items-end gap-3 bg-slate-50 border border-slate-200 p-2 rounded-2xl focus-within:ring-2 ring-[#BF4B24]/20 transition-all"
                 >
                   <textarea
                     value={newMessage}
@@ -710,7 +710,7 @@ export function ChatTab() {
                   <Button
                     type="submit"
                     disabled={!newMessage.trim() || sending}
-                    className="w-12 h-12 rounded-xl bg-[#f05e23] hover:bg-[#d6521e] text-white shrink-0 shadow-md mb-0.5"
+                    className="w-12 h-12 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shrink-0 shadow-md mb-0.5"
                   >
                     {sending ? (
                       <Loader2 className="w-5 h-5 animate-spin" />

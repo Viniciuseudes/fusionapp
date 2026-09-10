@@ -105,12 +105,12 @@ const BASE_PACKAGE_INFO = {
     icon: Star,
     badge: "Mais Vantajoso",
     cardStyle:
-      "bg-white border-[#f05e23] shadow-2xl shadow-orange-500/10 relative z-10 lg:scale-105",
+      "bg-white border-[#BF4B24] shadow-2xl shadow-orange-500/10 relative z-10 lg:scale-105",
     headerStyle: "text-orange-950",
-    iconStyle: "bg-orange-50 text-[#f05e23]",
-    buttonStyle: "bg-[#f05e23] hover:bg-[#d6521e] text-white",
+    iconStyle: "bg-orange-50 text-[#BF4B24]",
+    buttonStyle: "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white",
     optionStyle:
-      "text-orange-700 hover:bg-orange-100 bg-orange-50 data-[state=active]:bg-[#f05e23] data-[state=active]:text-white data-[state=active]:shadow-md",
+      "text-orange-700 hover:bg-orange-100 bg-orange-50 data-[state=active]:bg-[#BF4B24] data-[state=active]:text-white data-[state=active]:shadow-md",
     benefits: [
       "Salas VIP e Basic",
       "Economia de até 40%",
@@ -680,11 +680,11 @@ export function SearchTab({
         "Desbloqueie salas de alto padrão e economize até 40% em cada sessão.";
       Icon = Star;
       bgClass = "bg-orange-50 border-orange-200";
-      iconColorClass = "text-[#f05e23]";
+      iconColorClass = "text-[#BF4B24]";
       textClass = "text-orange-950";
       descClass = "text-orange-800";
       buttonClass =
-        "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-orange-500/20";
+        "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-orange-500/20";
       benefits = ["Economia de até 40%", "Prioridade na Agenda"];
     } else if (activeTier === "master") {
       title = "Fusion Pass Premium";
@@ -750,13 +750,13 @@ export function SearchTab({
   if (loading)
     return (
       <div className="flex justify-center items-center min-h-screen bg-zinc-50">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
 
   return (
     <div className="flex flex-col pb-24 bg-zinc-50 min-h-screen relative font-sans">
-      <header className="bg-gradient-to-r from-[#f05e23] to-[#d6521e] px-4 pb-12 pt-10 lg:px-8 lg:pt-12 rounded-b-3xl shadow-md">
+      <header className="bg-gradient-to-r from-[#BF4B24] to-[#9A3C1D] px-4 pb-12 pt-10 lg:px-8 lg:pt-12 rounded-b-3xl shadow-md">
         {!isPublic && (
           <div className="mx-auto max-w-5xl flex items-center justify-between">
             <div>
@@ -910,7 +910,7 @@ export function SearchTab({
                         </h4>
                       </div>
                       {pkg.badge && (
-                        <span className="bg-[#f05e23] text-white text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-md shadow-sm">
+                        <span className="bg-[#BF4B24] text-white text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-md shadow-sm">
                           {pkg.badge}
                         </span>
                       )}
@@ -978,7 +978,7 @@ export function SearchTab({
           <div className="mx-auto w-full max-w-5xl px-4 -mt-6 relative z-20 sticky top-4 animate-in fade-in duration-300">
             <div className="flex flex-col gap-3">
               <div className="flex items-center gap-2">
-                <div className="relative flex items-center flex-1 bg-white rounded-2xl border border-zinc-200 shadow-[0_4px_20px_rgb(0,0,0,0.03)] h-14 transition-all focus-within:ring-2 focus-within:ring-[#f05e23]/20">
+                <div className="relative flex items-center flex-1 bg-white rounded-2xl border border-zinc-200 shadow-[0_4px_20px_rgb(0,0,0,0.03)] h-14 transition-all focus-within:ring-2 focus-within:ring-[#BF4B24]/20">
                   <Search className="absolute left-4 h-5 w-5 text-zinc-400" />
                   <Input
                     placeholder="Buscar por cidade, clínica ou especialidade..."
@@ -993,7 +993,7 @@ export function SearchTab({
                 >
                   <SlidersHorizontal className="h-5 w-5" />
                   {usingLocation && (
-                    <span className="absolute top-3 right-3 w-2 h-2 bg-[#f05e23] rounded-full"></span>
+                    <span className="absolute top-3 right-3 w-2 h-2 bg-[#BF4B24] rounded-full"></span>
                   )}
                 </button>
               </div>
@@ -1055,7 +1055,7 @@ export function SearchTab({
                 </button>
                 <button
                   onClick={() => setActiveTier("vip")}
-                  className={`px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-1.5 shrink-0 border ${activeTier === "vip" ? "bg-orange-50 text-[#f05e23] border-orange-200" : "bg-white text-zinc-500 border-zinc-200 hover:bg-zinc-50"}`}
+                  className={`px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-1.5 shrink-0 border ${activeTier === "vip" ? "bg-orange-50 text-[#BF4B24] border-orange-200" : "bg-white text-zinc-500 border-zinc-200 hover:bg-zinc-50"}`}
                 >
                   <Star className="w-4 h-4" /> VIP
                 </button>
@@ -1077,7 +1077,7 @@ export function SearchTab({
                   <button
                     key={cat}
                     onClick={() => setSelectedCategory(cat)}
-                    className={`shrink-0 whitespace-nowrap px-4 py-2 rounded-xl text-xs font-semibold transition-all border ${selectedCategory === cat ? "bg-[#f05e23] text-white border-[#f05e23]" : "bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50"}`}
+                    className={`shrink-0 whitespace-nowrap px-4 py-2 rounded-xl text-xs font-semibold transition-all border ${selectedCategory === cat ? "bg-[#BF4B24] text-white border-[#BF4B24]" : "bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50"}`}
                   >
                     {cat}
                   </button>
@@ -1281,7 +1281,7 @@ export function SearchTab({
                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-0.5">
                       Mensalidade
                     </p>
-                    <p className="text-xl font-black text-[#f05e23]">
+                    <p className="text-xl font-black text-[#BF4B24]">
                       R$ {subModal.option.price}
                     </p>
                   </div>
@@ -1371,7 +1371,7 @@ export function SearchTab({
                 <Button
                   onClick={confirmSubscription}
                   disabled={isProcessingCheckout === subModal.pkg.id}
-                  className="w-full h-14 bg-[#ea580c] hover:bg-[#d6521e] text-white font-black rounded-xl text-base shadow-xl shadow-orange-500/20 transition-all active:scale-95"
+                  className="w-full h-14 bg-[#ea580c] hover:bg-[#9A3C1D] text-white font-black rounded-xl text-base shadow-xl shadow-orange-500/20 transition-all active:scale-95"
                 >
                   {isProcessingCheckout === subModal.pkg.id ? (
                     <Loader2 className="w-5 h-5 animate-spin" />
@@ -1399,11 +1399,11 @@ export function SearchTab({
               </Label>
               <button
                 onClick={requestLocation}
-                className={`w-full flex items-center justify-between p-4 rounded-xl border-2 transition-all ${usingLocation ? "border-[#f05e23] bg-orange-50/50 text-[#f05e23]" : "border-zinc-200 hover:border-zinc-300 text-zinc-700"}`}
+                className={`w-full flex items-center justify-between p-4 rounded-xl border-2 transition-all ${usingLocation ? "border-[#BF4B24] bg-orange-50/50 text-[#BF4B24]" : "border-zinc-200 hover:border-zinc-300 text-zinc-700"}`}
               >
                 <div className="flex items-center gap-3">
                   <Navigation
-                    className={`w-5 h-5 ${usingLocation ? "fill-[#f05e23]" : ""}`}
+                    className={`w-5 h-5 ${usingLocation ? "fill-[#BF4B24]" : ""}`}
                   />
                   <div className="text-left">
                     <span className="font-bold text-sm block">
@@ -1415,7 +1415,7 @@ export function SearchTab({
                   </div>
                 </div>
                 {usingLocation && (
-                  <Badge className="bg-[#f05e23] text-white border-0 font-bold">
+                  <Badge className="bg-[#BF4B24] text-white border-0 font-bold">
                     Ativado
                   </Badge>
                 )}
@@ -1534,7 +1534,7 @@ function RoomCard({
       <div className="flex flex-col p-4 flex-1 bg-white">
         <div>
           <div className="flex justify-between items-start mb-3 gap-2">
-            <h3 className="font-bold text-lg text-slate-900 leading-tight line-clamp-2 group-hover:text-[#f05e23] transition-colors">
+            <h3 className="font-bold text-lg text-slate-900 leading-tight line-clamp-2 group-hover:text-[#BF4B24] transition-colors">
               {room.name}
             </h3>
             {room.reviews_count > 0 ? (
@@ -1549,7 +1549,7 @@ function RoomCard({
               </div>
             ) : (
               <div className="bg-orange-50 px-2 py-1 rounded-md shrink-0 border border-orange-100">
-                <span className="text-[10px] font-black text-[#f05e23] uppercase tracking-wider">
+                <span className="text-[10px] font-black text-[#BF4B24] uppercase tracking-wider">
                   Novo
                 </span>
               </div>
@@ -1610,7 +1610,7 @@ function RoomCard({
               </p>
             )}
           </div>
-          <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center group-hover:bg-[#f05e23] group-hover:text-white transition-colors border border-slate-100 text-slate-400">
+          <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center group-hover:bg-[#BF4B24] group-hover:text-white transition-colors border border-slate-100 text-slate-400">
             <ArrowRight className="w-5 h-5" />
           </div>
         </div>

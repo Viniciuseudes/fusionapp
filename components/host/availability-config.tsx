@@ -393,7 +393,7 @@ export function AvailabilityConfig({
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[50vh] gap-4">
-        <Loader2 className="h-10 w-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="h-10 w-10 animate-spin text-[#BF4B24]" />
         <p className="text-slate-500 font-medium">
           Carregando mapa de horários...
         </p>
@@ -433,7 +433,7 @@ export function AvailabilityConfig({
         <Button
           onClick={handleSaveConfigToDatabase}
           disabled={saving}
-          className="bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-sm font-bold h-10 px-6 transition-colors border-none"
+          className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-sm font-bold h-10 px-6 transition-colors border-none"
         >
           {saving ? "Salvando..." : "Salvar Configuração"}
         </Button>
@@ -462,7 +462,7 @@ export function AvailabilityConfig({
                     <Switch
                       checked={config.enabled}
                       onCheckedChange={() => handleToggleDay(config.day)}
-                      className="data-[state=checked]:bg-[#f05e23]"
+                      className="data-[state=checked]:bg-[#BF4B24]"
                     />
                     <span
                       className={`font-bold ${config.enabled ? "text-slate-900" : "text-slate-400"}`}
@@ -473,7 +473,7 @@ export function AvailabilityConfig({
                   {config.enabled && (
                     <button
                       onClick={() => setConfirmCopyDay(config.day)}
-                      className="text-xs font-bold flex items-center gap-1 text-[#f05e23] hover:underline"
+                      className="text-xs font-bold flex items-center gap-1 text-[#BF4B24] hover:underline"
                     >
                       <Copy className="w-3.5 h-3.5" /> Copiar p/ todos
                     </button>
@@ -491,7 +491,7 @@ export function AvailabilityConfig({
                           onClick={() =>
                             handleChangeRentalType(config.day, "hourly")
                           }
-                          className={`flex-1 py-2 rounded-lg border font-bold text-sm transition-all ${config.rentalType === "hourly" ? "border-[#f05e23] bg-orange-50 text-[#f05e23]" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                          className={`flex-1 py-2 rounded-lg border font-bold text-sm transition-all ${config.rentalType === "hourly" ? "border-[#BF4B24] bg-orange-50 text-[#BF4B24]" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
                         >
                           Por Hora
                         </button>
@@ -499,7 +499,7 @@ export function AvailabilityConfig({
                           onClick={() =>
                             handleChangeRentalType(config.day, "shift")
                           }
-                          className={`flex-1 py-2 rounded-lg border font-bold text-sm transition-all ${config.rentalType === "shift" ? "border-[#f05e23] bg-orange-50 text-[#f05e23]" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                          className={`flex-1 py-2 rounded-lg border font-bold text-sm transition-all ${config.rentalType === "shift" ? "border-[#BF4B24] bg-orange-50 text-[#BF4B24]" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
                         >
                           Por Turno
                         </button>
@@ -534,7 +534,7 @@ export function AvailabilityConfig({
                                 onClick={() =>
                                   handleToggleHour(config.day, hour)
                                 }
-                                className={`py-2 text-xs font-bold rounded-lg transition-all ${isSelected ? "bg-[#f05e23] text-white shadow-sm" : "bg-white text-slate-500 hover:bg-slate-200 border border-slate-200"}`}
+                                className={`py-2 text-xs font-bold rounded-lg transition-all ${isSelected ? "bg-[#BF4B24] text-white shadow-sm" : "bg-white text-slate-500 hover:bg-slate-200 border border-slate-200"}`}
                               >
                                 {hour.split("-")[0]}
                               </button>
@@ -557,17 +557,17 @@ export function AvailabilityConfig({
                               onClick={() =>
                                 handleToggleShift(config.day, shift.id)
                               }
-                              className={`p-4 rounded-xl border-2 transition-all flex flex-col items-start gap-2 ${isSelected ? "border-[#f05e23] bg-orange-50/40" : "border-slate-200 bg-white hover:border-slate-300"}`}
+                              className={`p-4 rounded-xl border-2 transition-all flex flex-col items-start gap-2 ${isSelected ? "border-[#BF4B24] bg-orange-50/40" : "border-slate-200 bg-white hover:border-slate-300"}`}
                             >
                               <div className="flex w-full justify-between items-center">
                                 <span className="text-2xl">{shift.icon}</span>
                                 {isSelected && (
-                                  <Check className="w-5 h-5 text-[#f05e23]" />
+                                  <Check className="w-5 h-5 text-[#BF4B24]" />
                                 )}
                               </div>
                               <div className="text-left">
                                 <p
-                                  className={`font-black ${isSelected ? "text-[#f05e23]" : "text-slate-900"}`}
+                                  className={`font-black ${isSelected ? "text-[#BF4B24]" : "text-slate-900"}`}
                                 >
                                   {shift.label}
                                 </p>
@@ -623,7 +623,7 @@ export function AvailabilityConfig({
                   }}
                   modifiersClassNames={{
                     holiday:
-                      "text-[#f05e23] font-black underline decoration-[#f05e23]/30 underline-offset-4",
+                      "text-[#BF4B24] font-black underline decoration-[#BF4B24]/30 underline-offset-4",
                   }}
                   className="bg-white rounded-lg shadow-sm w-full pointer-events-auto"
                 />
@@ -892,7 +892,7 @@ export function AvailabilityConfig({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 animate-in zoom-in-95">
             <div className="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center mb-4 mx-auto">
-              <AlertTriangle className="w-6 h-6 text-[#f05e23]" />
+              <AlertTriangle className="w-6 h-6 text-[#BF4B24]" />
             </div>
             <h3 className="text-xl font-black text-center text-slate-900 mb-2">
               Atenção
@@ -913,7 +913,7 @@ export function AvailabilityConfig({
                 Cancelar
               </Button>
               <Button
-                className="flex-1 font-bold h-12 rounded-xl bg-[#f05e23] hover:bg-[#d6521e] text-white"
+                className="flex-1 font-bold h-12 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white"
                 onClick={executeCopyAction}
               >
                 Sim, Copiar

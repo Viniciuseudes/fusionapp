@@ -360,7 +360,7 @@ export function BookingsTab({
       toast({
         title: (
           <div className="flex items-center gap-2">
-            <BellRing className="w-4 h-4 text-[#f05e23]" /> {title}
+            <BellRing className="w-4 h-4 text-[#BF4B24]" /> {title}
           </div>
         ) as any,
         description: body,
@@ -820,7 +820,7 @@ CNPJ: 49.351.127/0001-44
     return (
       <div
         onClick={() => openDetails(booking)}
-        className={`bg-white rounded-[2rem] border shadow-sm overflow-hidden flex flex-col md:flex-row group transition-all cursor-pointer hover:shadow-md active:scale-[0.99] ${isInProgress ? "border-amber-400 ring-2 ring-amber-400/20" : isReadyForCheckin ? "border-[#f05e23]/50 hover:border-[#f05e23]" : "border-slate-200"}`}
+        className={`bg-white rounded-[2rem] border shadow-sm overflow-hidden flex flex-col md:flex-row group transition-all cursor-pointer hover:shadow-md active:scale-[0.99] ${isInProgress ? "border-amber-400 ring-2 ring-amber-400/20" : isReadyForCheckin ? "border-[#BF4B24]/50 hover:border-[#BF4B24]" : "border-slate-200"}`}
       >
         <div
           className={`md:w-48 p-6 flex flex-col justify-center border-b md:border-b-0 md:border-r border-slate-100 border-dashed relative ${isSameDay(startObj, now) ? "bg-orange-50/50" : "bg-slate-50/50"}`}
@@ -838,7 +838,7 @@ CNPJ: 49.351.127/0001-44
             className={`flex items-center justify-center md:justify-start gap-2 border py-2 px-3 rounded-lg shadow-sm ${isInProgress ? "bg-amber-50 border-amber-200" : "bg-white border-slate-200"}`}
           >
             <Clock
-              className={`w-4 h-4 ${isInProgress ? "text-amber-500" : "text-[#f05e23]"}`}
+              className={`w-4 h-4 ${isInProgress ? "text-amber-500" : "text-[#BF4B24]"}`}
             />
             <span
               className={`text-xs font-black ${isInProgress ? "text-amber-800" : "text-slate-800"}`}
@@ -857,7 +857,7 @@ CNPJ: 49.351.127/0001-44
                 </Badge>
               )}
               {isReadyForCheckin && !isInProgress && (
-                <Badge className="bg-[#f05e23] text-white border-0 mb-2 font-bold px-2 py-0.5 animate-pulse mr-2">
+                <Badge className="bg-[#BF4B24] text-white border-0 mb-2 font-bold px-2 py-0.5 animate-pulse mr-2">
                   Liberada para Check-in
                 </Badge>
               )}
@@ -867,7 +867,7 @@ CNPJ: 49.351.127/0001-44
                 </Badge>
               )}
 
-              <h3 className="text-xl font-black text-slate-900 leading-tight group-hover:text-[#f05e23] transition-colors">
+              <h3 className="text-xl font-black text-slate-900 leading-tight group-hover:text-[#BF4B24] transition-colors">
                 {booking.rooms.name}
               </h3>
               <p className="text-sm font-semibold text-slate-500 mt-1">
@@ -900,7 +900,7 @@ CNPJ: 49.351.127/0001-44
                     `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${address.street}, ${address.number}, ${address.city}`)}`,
                   )
                 }
-                className="w-10 h-10 rounded-full bg-[#f05e23] hover:bg-[#d6521e] flex items-center justify-center shrink-0 transition-colors shadow-lg"
+                className="w-10 h-10 rounded-full bg-[#BF4B24] hover:bg-[#9A3C1D] flex items-center justify-center shrink-0 transition-colors shadow-lg"
               >
                 <Navigation className="w-4 h-4 fill-white" />
               </button>
@@ -939,7 +939,7 @@ CNPJ: 49.351.127/0001-44
                   cameraFailed: false,
                 })
               }
-              className="w-full h-12 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
+              className="w-full h-12 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
             >
               <QrCode className="w-4 h-4 mr-2" /> Fazer Check-in
             </Button>
@@ -973,7 +973,7 @@ CNPJ: 49.351.127/0001-44
     return (
       <div
         onClick={() => openDetails(booking)}
-        className="flex items-center justify-between p-4 bg-white border border-slate-200 hover:border-[#f05e23]/50 rounded-2xl cursor-pointer transition-all active:scale-[0.98] shadow-sm hover:shadow-md group"
+        className="flex items-center justify-between p-4 bg-white border border-slate-200 hover:border-[#BF4B24]/50 rounded-2xl cursor-pointer transition-all active:scale-[0.98] shadow-sm hover:shadow-md group"
       >
         <div className="flex items-center gap-4 min-w-0">
           <div className="w-14 h-14 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0 overflow-hidden relative">
@@ -989,7 +989,7 @@ CNPJ: 49.351.127/0001-44
             )}
           </div>
           <div className="min-w-0">
-            <h4 className="font-black text-slate-900 truncate text-base group-hover:text-[#f05e23] transition-colors leading-tight">
+            <h4 className="font-black text-slate-900 truncate text-base group-hover:text-[#BF4B24] transition-colors leading-tight">
               {booking.rooms?.name || "Sala Indisponível"}
             </h4>
             <p className="text-xs font-bold text-slate-500 mt-1">
@@ -1014,7 +1014,7 @@ CNPJ: 49.351.127/0001-44
         <div className="flex flex-col items-end gap-1 shrink-0 ml-2">
           <div className="flex items-center text-slate-900 font-black text-sm">
             {paymentData.value}
-            <ChevronRight className="w-4 h-4 ml-1 opacity-50 group-hover:opacity-100 group-hover:translate-x-1 group-hover:text-[#f05e23] transition-all" />
+            <ChevronRight className="w-4 h-4 ml-1 opacity-50 group-hover:opacity-100 group-hover:translate-x-1 group-hover:text-[#BF4B24] transition-all" />
           </div>
           <span className="text-[10px] font-bold text-slate-400">
             {paymentData.method}
@@ -1048,7 +1048,7 @@ CNPJ: 49.351.127/0001-44
   if (loading) {
     return (
       <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -1059,7 +1059,7 @@ CNPJ: 49.351.127/0001-44
         {/* HEADER & TABS */}
         <div className="sticky top-0 bg-slate-50 z-20 pb-4">
           <h2 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2 mb-6">
-            <CalendarDays className="w-6 h-6 text-[#f05e23]" /> Suas Reservas
+            <CalendarDays className="w-6 h-6 text-[#BF4B24]" /> Suas Reservas
           </h2>
 
           <div className="bg-slate-200/60 p-1 rounded-xl flex items-center mb-4">
@@ -1099,7 +1099,7 @@ CNPJ: 49.351.127/0001-44
                 <Popover>
                   <PopoverTrigger asChild>
                     <Badge
-                      className={`cursor-pointer px-4 py-1.5 text-xs font-bold border-0 transition-colors flex items-center gap-1 ${upcomingFilter === "custom" ? "bg-[#f05e23] text-white" : "bg-white text-slate-600 hover:bg-slate-100 shadow-sm"}`}
+                      className={`cursor-pointer px-4 py-1.5 text-xs font-bold border-0 transition-colors flex items-center gap-1 ${upcomingFilter === "custom" ? "bg-[#BF4B24] text-white" : "bg-white text-slate-600 hover:bg-slate-100 shadow-sm"}`}
                     >
                       <CalendarIcon className="w-3 h-3" />
                       {upcomingFilter === "custom" && customDate
@@ -1268,7 +1268,7 @@ CNPJ: 49.351.127/0001-44
                           }
                           className="bg-white/90 backdrop-blur text-slate-900 text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-2 shadow-lg"
                         >
-                          <Navigation className="w-3.5 h-3.5 text-[#f05e23]" />{" "}
+                          <Navigation className="w-3.5 h-3.5 text-[#BF4B24]" />{" "}
                           Ver no Mapa
                         </button>
                       </div>
@@ -1282,7 +1282,7 @@ CNPJ: 49.351.127/0001-44
                       variant="outline"
                       className="w-full h-12 rounded-xl font-bold border-slate-200 text-slate-700 bg-white shadow-sm mb-2"
                     >
-                      <MessageCircle className="w-4 h-4 mr-2 text-[#f05e23]" />{" "}
+                      <MessageCircle className="w-4 h-4 mr-2 text-[#BF4B24]" />{" "}
                       Acionar Anfitrião / Suporte
                     </Button>
                   )}
@@ -1306,8 +1306,8 @@ CNPJ: 49.351.127/0001-44
                       {(selectedBooking.checkin_time ||
                         selectedBooking.checkout_time) && (
                         <div className="relative">
-                          <div className="absolute -left-[1.6rem] top-1.5 w-2.5 h-2.5 rounded-full bg-[#f05e23] ring-4 ring-white" />
-                          <p className="text-xs font-bold text-[#f05e23] uppercase">
+                          <div className="absolute -left-[1.6rem] top-1.5 w-2.5 h-2.5 rounded-full bg-[#BF4B24] ring-4 ring-white" />
+                          <p className="text-xs font-bold text-[#BF4B24] uppercase">
                             Uso Efetivo
                           </p>
                           <div className="flex gap-6 mt-1">
@@ -1387,7 +1387,7 @@ CNPJ: 49.351.127/0001-44
                                 cameraFailed: false,
                               });
                             }}
-                            className="w-full h-14 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl shadow-lg"
+                            className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl shadow-lg"
                           >
                             <QrCode className="w-5 h-5 mr-2" /> Fazer Check-in
                             Agora
@@ -1414,7 +1414,7 @@ CNPJ: 49.351.127/0001-44
                           onClick={() =>
                             handleBookAgain(selectedBooking.room_id)
                           }
-                          className="w-full h-14 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
+                          className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
                         >
                           <RotateCcw className="w-5 h-5 mr-2" /> Reservar
                           Novamente
@@ -1483,7 +1483,7 @@ CNPJ: 49.351.127/0001-44
       >
         <DialogContent className="sm:max-w-md rounded-[2rem] p-6 bg-white border-0">
           <DialogTitle className="text-xl font-black text-slate-900 flex items-center gap-2">
-            <Timer className="w-6 h-6 text-[#f05e23]" /> Estender Sessão?
+            <Timer className="w-6 h-6 text-[#BF4B24]" /> Estender Sessão?
           </DialogTitle>
           <DialogDescription className="text-sm font-medium text-slate-500 mb-6">
             O seu horário já acabou e notamos que você ainda não fez o checkout.
@@ -1508,7 +1508,7 @@ CNPJ: 49.351.127/0001-44
               onClick={() => {
                 if (extendModal.booking) handleAutoExtend(extendModal.booking);
               }}
-              className="flex-1 h-12 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl"
+              className="flex-1 h-12 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl"
             >
               Estender (+1 CR)
             </Button>
@@ -1871,7 +1871,7 @@ CNPJ: 49.351.127/0001-44
                     }
                     handleCheckinSuccess();
                   }}
-                  className="w-full h-14 bg-[#f05e23] hover:bg-[#d6521e] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
+                  className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
                 >
                   Confirmar Check-in
                 </Button>

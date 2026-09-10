@@ -100,7 +100,7 @@ export function ReviewModal({
         <div className="p-8 text-center flex flex-col items-center">
           {/* Header Visual Clean */}
           <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center mb-6 shadow-inner">
-            <Star className="w-8 h-8 text-[#f05e23] fill-[#f05e23]" />
+            <Star className="w-8 h-8 text-[#BF4B24] fill-[#BF4B24]" />
           </div>
 
           <DialogTitle className="text-2xl font-black text-slate-900 mb-2 tracking-tight">
@@ -161,7 +161,7 @@ export function ReviewModal({
               placeholder="Deixe um comentário elogiando ou sugerindo melhorias... (Opcional)"
               value={comment}
               onChange={(e) => setComment(e.target.value)}
-              className="bg-slate-50 border-slate-200 resize-none h-24 rounded-xl text-sm placeholder:text-slate-400 focus-visible:ring-[#f05e23]/20"
+              className="bg-slate-50 border-slate-200 resize-none h-24 rounded-xl text-sm placeholder:text-slate-400 focus-visible:ring-[#BF4B24]/20"
             />
 
             <div className="flex flex-col gap-2 pt-4">
@@ -170,7 +170,7 @@ export function ReviewModal({
                 disabled={loading || rating === 0}
                 className={`w-full h-14 rounded-xl font-black shadow-lg transition-all text-base ${
                   rating > 0
-                    ? "bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-orange-500/20"
+                    ? "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-orange-500/20"
                     : "bg-slate-100 text-slate-400 shadow-none"
                 }`}
               >

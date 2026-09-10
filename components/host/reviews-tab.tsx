@@ -206,7 +206,7 @@ export function HostReviewsTab() {
   if (loading) {
     return (
       <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -266,7 +266,7 @@ export function HostReviewsTab() {
           onClick={() => setFilter("all")}
           className={`rounded-xl font-bold px-6 ${
             filter === "all"
-              ? "bg-[#f05e23] text-white shadow-sm"
+              ? "bg-[#BF4B24] text-white shadow-sm"
               : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
           }`}
         >
@@ -278,7 +278,7 @@ export function HostReviewsTab() {
             onClick={() => setFilter(rating.toString() as any)}
             className={`rounded-xl font-bold px-4 ${
               filter === rating.toString()
-                ? "bg-[#f05e23] text-white shadow-sm"
+                ? "bg-[#BF4B24] text-white shadow-sm"
                 : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
             }`}
           >
@@ -309,7 +309,7 @@ export function HostReviewsTab() {
                     </h3>
                     <p className="text-xs font-medium text-slate-500">
                       {review.created_at} •{" "}
-                      <span className="text-[#f05e23] font-bold">
+                      <span className="text-[#BF4B24] font-bold">
                         {review.room_name}
                       </span>
                     </p>
@@ -331,8 +331,8 @@ export function HostReviewsTab() {
               </p>
 
               {review.host_reply ? (
-                <div className="bg-slate-50 border-l-4 border-[#f05e23] p-4 rounded-r-xl mt-4">
-                  <p className="text-xs font-black text-[#f05e23] uppercase tracking-wider mb-1">
+                <div className="bg-slate-50 border-l-4 border-[#BF4B24] p-4 rounded-r-xl mt-4">
+                  <p className="text-xs font-black text-[#BF4B24] uppercase tracking-wider mb-1">
                     Sua Resposta:
                   </p>
                   <p className="text-sm text-slate-700 font-medium">
@@ -362,7 +362,7 @@ export function HostReviewsTab() {
                     <Button
                       onClick={() => handleSubmitReply(review.id)}
                       disabled={!replyText.trim() || isSubmittingReply}
-                      className="bg-[#f05e23] hover:bg-[#d6521e] text-white font-bold"
+                      className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold"
                     >
                       {isSubmittingReply ? (
                         <Loader2 className="w-4 h-4 animate-spin mr-2" />
@@ -378,7 +378,7 @@ export function HostReviewsTab() {
                   <Button
                     variant="outline"
                     onClick={() => setReplyingTo(review.id)}
-                    className="text-[#f05e23] border-[#f05e23]/20 hover:bg-[#f05e23]/5 font-bold"
+                    className="text-[#BF4B24] border-[#BF4B24]/20 hover:bg-[#BF4B24]/5 font-bold"
                   >
                     <MessageSquare className="w-4 h-4 mr-2" /> Responder
                     Avaliação

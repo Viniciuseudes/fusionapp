@@ -84,11 +84,11 @@ export default function AdminLoginPage() {
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-3xl p-8 shadow-2xl relative overflow-hidden">
         {/* Detalhe visual laranja no topo */}
-        <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-[#f05e23] to-[#d6521e]" />
+        <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-[#BF4B24] to-[#9A3C1D]" />
 
         <div className="flex flex-col items-center mb-8">
           <div className="w-16 h-16 bg-slate-900 rounded-2xl flex items-center justify-center mb-4 shadow-lg">
-            <ShieldCheck className="w-8 h-8 text-[#f05e23]" />
+            <ShieldCheck className="w-8 h-8 text-[#BF4B24]" />
           </div>
           <h1 className="text-2xl font-black text-slate-900">Fusion Admin</h1>
           <p className="text-sm font-medium text-slate-500 mt-1">
@@ -107,7 +107,7 @@ export default function AdminLoginPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="admin@fusionclinic.com.br"
-              className="h-12 rounded-xl bg-slate-50 border-slate-200 focus-visible:ring-[#f05e23]/20"
+              className="h-12 rounded-xl bg-slate-50 border-slate-200 focus-visible:ring-[#BF4B24]/20"
             />
           </div>
 
@@ -119,14 +119,14 @@ export default function AdminLoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
-              className="h-12 rounded-xl bg-slate-50 border-slate-200 focus-visible:ring-[#f05e23]/20"
+              className="h-12 rounded-xl bg-slate-50 border-slate-200 focus-visible:ring-[#BF4B24]/20"
             />
           </div>
 
           <Button
             type="submit"
             disabled={loading || !email || !password}
-            className="w-full h-12 rounded-xl font-black bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/20"
+            className="w-full h-12 rounded-xl font-black bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/20"
           >
             {loading ? (
               <Loader2 className="w-5 h-5 animate-spin" />

@@ -564,7 +564,7 @@ export function HostSpaceForm({
       <Card className="border-slate-100 shadow-sm rounded-2xl overflow-hidden mb-8">
         <CardHeader className="bg-slate-50/50 pb-4 border-b border-slate-100">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-[#f05e23] text-white rounded-lg">
+            <div className="p-2 bg-[#BF4B24] text-white rounded-lg">
               <Building2 className="w-5 h-5" />
             </div>
             <div>
@@ -595,8 +595,8 @@ export function HostSpaceForm({
                 <div className="flex flex-col items-center justify-center pt-5 pb-6">
                   {isProcessingImages ? (
                     <>
-                      <Loader2 className="w-8 h-8 mb-2 text-[#f05e23] animate-spin" />
-                      <p className="text-sm font-semibold text-[#f05e23]">
+                      <Loader2 className="w-8 h-8 mb-2 text-[#BF4B24] animate-spin" />
+                      <p className="text-sm font-semibold text-[#BF4B24]">
                         Processando fotos para Alta Qualidade...
                       </p>
                     </>
@@ -604,7 +604,7 @@ export function HostSpaceForm({
                     <>
                       <UploadCloud className="w-8 h-8 mb-2 text-slate-400" />
                       <p className="text-sm text-slate-500">
-                        <span className="font-semibold text-[#f05e23]">
+                        <span className="font-semibold text-[#BF4B24]">
                           Clique para buscar fotos
                         </span>{" "}
                         ou arraste
@@ -635,7 +635,7 @@ export function HostSpaceForm({
                         className="w-full h-full object-cover"
                       />
                       {img.isCover && (
-                        <div className="absolute top-2 left-2 bg-[#f05e23] text-white text-[10px] font-bold px-2 py-1 rounded-md uppercase tracking-wider z-10 shadow-sm">
+                        <div className="absolute top-2 left-2 bg-[#BF4B24] text-white text-[10px] font-bold px-2 py-1 rounded-md uppercase tracking-wider z-10 shadow-sm">
                           Capa
                         </div>
                       )}
@@ -644,7 +644,7 @@ export function HostSpaceForm({
                           type="button"
                           onClick={() => setCover(img.id)}
                           title="Capa"
-                          className={`p-2 rounded-full ${img.isCover ? "bg-[#f05e23]" : "bg-white/20 hover:bg-[#f05e23]"} text-white`}
+                          className={`p-2 rounded-full ${img.isCover ? "bg-[#BF4B24]" : "bg-white/20 hover:bg-[#BF4B24]"} text-white`}
                         >
                           <Star className="w-4 h-4" />
                         </button>
@@ -706,7 +706,7 @@ export function HostSpaceForm({
                         key={spec}
                         type="button"
                         onClick={() => setSpecialty(spec)}
-                        className={`p-3 rounded-xl border-2 text-sm font-bold transition-all text-left flex justify-between items-center ${specialty === spec ? "border-[#f05e23] bg-orange-50 text-[#f05e23]" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
+                        className={`p-3 rounded-xl border-2 text-sm font-bold transition-all text-left flex justify-between items-center ${specialty === spec ? "border-[#BF4B24] bg-orange-50 text-[#BF4B24]" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
                       >
                         <span className="truncate pr-2">{spec}</span>
                         {specialty === spec && (
@@ -786,7 +786,7 @@ export function HostSpaceForm({
                   <span className="text-red-500">*</span>
                 </Label>
                 <div className="relative flex items-center">
-                  <MapPin className="absolute left-3.5 h-5 w-5 text-[#f05e23]" />
+                  <MapPin className="absolute left-3.5 h-5 w-5 text-[#BF4B24]" />
                   <Input
                     placeholder="Digite a rua, bairro ou nome do prédio comercial..."
                     value={addressSearch}
@@ -830,7 +830,7 @@ export function HostSpaceForm({
                   />
                 </div>
                 <div className="space-y-2 md:col-span-3">
-                  <Label className="font-black text-[#f05e23]">
+                  <Label className="font-black text-[#BF4B24]">
                     Nº do Prédio *
                   </Label>
                   <Input
@@ -938,7 +938,7 @@ export function HostSpaceForm({
                       key={am.id}
                       type="button"
                       onClick={() => toggleAmenity(am.id)}
-                      className={`flex items-center justify-between p-3.5 rounded-xl border-2 transition-all ${amenities.includes(am.id) ? "border-[#f05e23] bg-orange-50/50 text-[#f05e23]" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
+                      className={`flex items-center justify-between p-3.5 rounded-xl border-2 transition-all ${amenities.includes(am.id) ? "border-[#BF4B24] bg-orange-50/50 text-[#BF4B24]" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
                     >
                       <div className="flex items-center gap-3">
                         <am.icon className="w-5 h-5" />
@@ -1042,7 +1042,7 @@ export function HostSpaceForm({
                               <TooltipTrigger asChild>
                                 <button
                                   type="button"
-                                  className="text-slate-400 hover:text-[#f05e23] transition-colors p-1"
+                                  className="text-slate-400 hover:text-[#BF4B24] transition-colors p-1"
                                 >
                                   <Info className="w-5 h-5" />
                                 </button>
@@ -1071,9 +1071,9 @@ export function HostSpaceForm({
                     <div className="pt-2 animate-in fade-in slide-in-from-top-2">
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
-                          <div className="absolute top-0 left-0 w-1 h-full bg-[#f05e23]" />
+                          <div className="absolute top-0 left-0 w-1 h-full bg-[#BF4B24]" />
                           <div className="flex items-center gap-2 mb-1">
-                            <Sun className="w-4 h-4 text-[#f05e23]" />
+                            <Sun className="w-4 h-4 text-[#BF4B24]" />
                             <h4 className="font-bold text-slate-900 text-sm">
                               Comercial
                             </h4>
@@ -1281,7 +1281,7 @@ export function HostSpaceForm({
             <Button
               type="submit"
               disabled={loading || isProcessingImages}
-              className="w-full h-14 text-lg rounded-xl font-bold bg-[#f05e23] hover:bg-[#d6521e] text-white shadow-lg shadow-orange-500/20 transition-all active:scale-95"
+              className="w-full h-14 text-lg rounded-xl font-bold bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/20 transition-all active:scale-95"
             >
               {loading || isProcessingImages
                 ? "Processando..."
@@ -1320,7 +1320,7 @@ export function HostSpaceForm({
             </Button>
             <Button
               onClick={applyCrop}
-              className="bg-[#f05e23] hover:bg-[#d6521e] text-white"
+              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white"
             >
               Aplicar Corte
             </Button>

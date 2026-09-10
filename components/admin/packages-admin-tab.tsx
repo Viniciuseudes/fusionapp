@@ -132,7 +132,7 @@ export function PackagesAdminTab() {
   if (loading) {
     return (
       <div className="flex justify-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
@@ -171,7 +171,7 @@ export function PackagesAdminTab() {
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
         <div>
           <h2 className="text-3xl font-black text-slate-900 flex items-center gap-3 tracking-tight">
-            <Tags className="w-8 h-8 text-[#f05e23]" /> Precificação de Pacotes
+            <Tags className="w-8 h-8 text-[#BF4B24]" /> Precificação de Pacotes
           </h2>
           <p className="text-sm font-medium text-slate-500 mt-2">
             Altere os valores dos pacotes em tempo real para campanhas e

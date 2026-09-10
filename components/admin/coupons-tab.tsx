@@ -245,7 +245,7 @@ export function AdminCouponsTab() {
   if (loading)
     return (
       <div className="flex justify-center py-20">
-        <Loader2 className="w-8 h-8 animate-spin text-[#f05e23]" />
+        <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
       </div>
     );
 
@@ -700,7 +700,7 @@ export function AdminCouponsTab() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
         <div>
           <h2 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
-            <Ticket className="w-7 h-7 text-[#f05e23]" /> Gestão de Cupons
+            <Ticket className="w-7 h-7 text-[#BF4B24]" /> Gestão de Cupons
           </h2>
           <p className="text-sm font-medium text-slate-500 mt-1">
             Motor promocional, controle de salas permitidas e afiliados.

@@ -150,7 +150,7 @@ export function HostSpaceList() {
             setEditingRoom(null);
             fetchRooms();
           }}
-          className="text-slate-500 hover:text-[#f05e23] p-0 hover:bg-transparent font-bold"
+          className="text-slate-500 hover:text-[#BF4B24] p-0 hover:bg-transparent font-bold"
         >
           <ArrowLeft className="w-4 h-4 mr-2" /> Voltar para meus espaços
         </Button>
@@ -198,7 +198,7 @@ export function HostSpaceList() {
         </div>
         <Button
           onClick={() => setIsCreating(true)}
-          className="bg-[#f05e23] hover:bg-[#d6521e] text-white rounded-xl font-bold h-11"
+          className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white rounded-xl font-bold h-11"
         >
           <PlusCircle className="w-4 h-4 mr-2" /> Nova Sala
         </Button>
@@ -240,7 +240,7 @@ export function HostSpaceList() {
                     ? "opacity-75 bg-slate-50 border-slate-200"
                     : isPartner
                       ? "border-amber-400 shadow-amber-500/10 hover:shadow-amber-500/20 hover:border-amber-500 bg-gradient-to-r from-amber-50/40 to-white"
-                      : "border-slate-200 hover:border-[#f05e23]/30 bg-white"
+                      : "border-slate-200 hover:border-[#BF4B24]/30 bg-white"
                 }`}
               >
                 <CardContent className="p-0">
@@ -365,14 +365,14 @@ export function HostSpaceList() {
                           <Button
                             variant="outline"
                             onClick={() => handlePrintQR(room.id)}
-                            className="flex-1 xl:flex-none border-[#f05e23]/20 text-[#f05e23] hover:bg-[#f05e23] hover:text-white font-bold bg-orange-50/50"
+                            className="flex-1 xl:flex-none border-[#BF4B24]/20 text-[#BF4B24] hover:bg-[#BF4B24] hover:text-white font-bold bg-orange-50/50"
                           >
                             <QrCode className="w-4 h-4 mr-2" /> QR Code
                           </Button>
                           <Button
                             variant="outline"
                             onClick={() => setEditingRoom(room)}
-                            className="flex-1 xl:flex-none border-slate-200 text-slate-700 hover:text-[#f05e23] hover:bg-orange-50 font-bold"
+                            className="flex-1 xl:flex-none border-slate-200 text-slate-700 hover:text-[#BF4B24] hover:bg-orange-50 font-bold"
                           >
                             <Edit3 className="w-4 h-4 mr-2" /> Editar
                           </Button>
