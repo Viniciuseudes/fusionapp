@@ -26,6 +26,7 @@ import {
   Stethoscope,
   Info,
   Zap,
+  Wallet,
   RefreshCw,
   Unlock,
 } from "lucide-react";
