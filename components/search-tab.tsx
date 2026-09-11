@@ -951,7 +951,7 @@ export function SearchTab({
                     numberOfMonths={6}
                     disableNavigation
                     showOutsideDays={false}
-                    className="p-0 w-full [&_.rdp-months]:flex-col [&_.rdp-month]:mb-10 [&_.rdp-caption]:mb-4 [&_.rdp-nav]:hidden [&_.rdp-caption_label]:text-lg [&_.rdp-caption_label]:font-black [&_.rdp-caption_label]:capitalize [&_.rdp-head_cell]:text-slate-400 [&_.rdp-head_cell]:font-bold [&_.rdp-head_cell]:text-[11px] [&_.rdp-head_cell]:uppercase [&_.rdp-table]:w-full"
+                    className="p-0 w-full [&_.rdp-months]:flex-col [&_.rdp-month]:mb-10 [&_.rdp-nav]:hidden [&_.rdp-caption_label]:text-lg [&_.rdp-caption_label]:font-black [&_.rdp-caption_label]:capitalize [&_.rdp-head_cell]:text-slate-400 [&_.rdp-head_cell]:font-bold [&_.rdp-head_cell]:text-[11px] [&_.rdp-head_cell]:uppercase [&_.rdp-table]:w-full"
                     modifiersClassNames={{
                       today: "font-normal bg-transparent text-slate-900", // Remove o outline do dia atual
                     }}
@@ -1533,7 +1533,7 @@ export function SearchTab({
                         modifiersClassNames={{
                           today: "font-normal bg-transparent text-slate-900",
                         }}
-                        className="p-0 w-full [&_.rdp-months]:flex-col [&_.rdp-month]:mb-10 [&_.rdp-nav]:hidden [&_.rdp-caption_label]:text-lg [&_.rdp-caption_label]:font-black [&_.rdp-caption_label]:capitalize [&_.rdp-caption]:mb-4 [&_.rdp-head_cell]:text-slate-400 [&_.rdp-head_cell]:font-bold [&_.rdp-head_cell]:text-[11px] [&_.rdp-head_cell]:uppercase [&_.rdp-table]:w-full"
+                        className="p-0"
                       />
                     </div>
 
@@ -1858,14 +1858,14 @@ export function SearchTab({
             <div className="px-0 md:px-4 max-w-5xl mx-auto w-full space-y-12 pb-12 mt-6">
               {(activeTier === "all" || activeTier === "master") &&
                 masterRooms.length > 0 && (
-                  <section className="bg-slate-900 px-4 py-8 lg:rounded-3xl border border-slate-800 shadow-2xl">
-                    <div className="flex items-center gap-2 mb-4">
+                  <section className="pt-8">
+                    <div className="flex items-center gap-2 mb-4 px-4 sm:px-0">
                       <Crown className="w-6 h-6 text-amber-500" />
                       <div>
-                        <h2 className="text-xl font-bold text-white">
+                        <h2 className="text-xl font-bold text-slate-900">
                           Salas Premium
                         </h2>
-                        <p className="text-xs font-medium text-slate-400">
+                        <p className="text-xs font-medium text-slate-500">
                           O mais alto padrão de sofisticação e conforto.
                         </p>
                       </div>
@@ -1874,12 +1874,11 @@ export function SearchTab({
                       appliedFilters.modality === "hora" &&
                       renderFusionPassBanner()}
 
-                    {/* SÊNIOR: SPACER E PADDING PARA NÃO COLAR NA TELA NO MOBILE (16px) */}
                     <div
                       className={
                         masterRooms.length === 1
-                          ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5"
-                          : "flex overflow-x-auto gap-4 pb-6 snap-x scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0"
+                          ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 px-4 sm:px-0"
+                          : "flex overflow-x-auto gap-4 pb-6 snap-x scrollbar-hide px-4 sm:px-0"
                       }
                     >
                       {masterRooms.map((room) => (
@@ -1899,7 +1898,7 @@ export function SearchTab({
                         />
                       ))}
                       {masterRooms.length > 1 && (
-                        <div className="w-1 shrink-0 sm:hidden"></div>
+                        <div className="w-1 shrink-0 sm:hidden block"></div>
                       )}
                     </div>
                   </section>
@@ -1907,8 +1906,8 @@ export function SearchTab({
 
               {(activeTier === "all" || activeTier === "vip") &&
                 vipRooms.length > 0 && (
-                  <section className="pt-8 px-4 md:px-0">
-                    <div className="flex items-center gap-2 mb-4">
+                  <section className="pt-8">
+                    <div className="flex items-center gap-2 mb-4 px-4 sm:px-0">
                       <Star className="w-6 h-6 text-slate-900" />
                       <div>
                         <h2 className="text-xl font-bold text-slate-900">
@@ -1923,12 +1922,11 @@ export function SearchTab({
                       appliedFilters.modality === "hora" &&
                       renderFusionPassBanner()}
 
-                    {/* SÊNIOR: SPACER E PADDING PARA NÃO COLAR NA TELA NO MOBILE (16px) */}
                     <div
                       className={
                         vipRooms.length === 1
-                          ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5"
-                          : "flex overflow-x-auto gap-4 pb-6 snap-x scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0"
+                          ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 px-4 sm:px-0"
+                          : "flex overflow-x-auto gap-4 pb-6 snap-x scrollbar-hide px-4 sm:px-0"
                       }
                     >
                       {vipRooms.map((room) => (
@@ -1948,7 +1946,7 @@ export function SearchTab({
                         />
                       ))}
                       {vipRooms.length > 1 && (
-                        <div className="w-1 shrink-0 sm:hidden"></div>
+                        <div className="w-1 shrink-0 sm:hidden block"></div>
                       )}
                     </div>
                   </section>
@@ -1956,8 +1954,8 @@ export function SearchTab({
 
               {(activeTier === "all" || activeTier === "start") &&
                 startRooms.length > 0 && (
-                  <section className="border-t border-slate-200 pt-8 pb-8 mt-8 px-4 md:px-0">
-                    <div className="flex items-center gap-2 mb-4">
+                  <section className="border-t border-slate-200 pt-8 pb-8 mt-8">
+                    <div className="flex items-center gap-2 mb-4 px-4 sm:px-0">
                       <Shield className="w-6 h-6 text-slate-400" />
                       <div>
                         <h2 className="text-xl font-bold text-slate-900">
@@ -1972,12 +1970,11 @@ export function SearchTab({
                       appliedFilters.modality === "hora" &&
                       renderFusionPassBanner()}
 
-                    {/* SÊNIOR: SPACER E PADDING PARA NÃO COLAR NA TELA NO MOBILE (16px) */}
                     <div
                       className={
                         startRooms.length === 1
-                          ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5"
-                          : "flex overflow-x-auto gap-4 pb-6 snap-x scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0"
+                          ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 px-4 sm:px-0"
+                          : "flex overflow-x-auto gap-4 pb-6 snap-x scrollbar-hide px-4 sm:px-0"
                       }
                     >
                       {startRooms.map((room) => (
@@ -1997,7 +1994,7 @@ export function SearchTab({
                         />
                       ))}
                       {startRooms.length > 1 && (
-                        <div className="w-1 shrink-0 sm:hidden"></div>
+                        <div className="w-1 shrink-0 sm:hidden block"></div>
                       )}
                     </div>
                   </section>
