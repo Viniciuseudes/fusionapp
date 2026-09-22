@@ -16,9 +16,12 @@ import {
   Loader2,
   Percent,
   ArrowDownRight,
+  ShieldCheck,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label"; // <-- Import corrigido aqui
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useToast } from "@/hooks/use-toast";
@@ -35,12 +38,21 @@ export interface CheckoutSummary {
   usedTier?: string;
 }
 
+export interface CardData {
+  number: string;
+  name: string;
+  expiry: string;
+  cvv: string;
+  cpf: string;
+}
+
 interface CheckoutModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: (
     paymentMethod: "wallet" | "pix" | "card",
     appliedCoupon?: any,
+    cardData?: CardData,
   ) => void;
   loading: boolean;
   summary: CheckoutSummary | null;
@@ -78,6 +90,15 @@ export function CheckoutModal({
     type: "error" | "success";
   } | null>(null);
 
+  // Estado para armazenar os dados do cartão de crédito
+  const [cardData, setCardData] = useState<CardData>({
+    number: "",
+    name: "",
+    expiry: "",
+    cvv: "",
+    cpf: "",
+  });
+
   // 1. Escudo PWA (Android Back Button)
   useEffect(() => {
     if (isOpen) {
@@ -98,10 +119,6 @@ export function CheckoutModal({
     }
   }, [isOpen, onClose]);
 
-  // ==========================================
-  // ARQUITETURA DE CRONÔMETRO REACT 18 (SEM BUGS)
-  // ==========================================
-
   // 2. Sempre que abrir, reseta tudo e prepara o terreno
   useEffect(() => {
     if (isOpen) {
@@ -110,10 +127,11 @@ export function CheckoutModal({
       setCouponCode("");
       setCouponFeedback(null);
       setPaymentMethod("wallet");
+      setCardData({ number: "", name: "", expiry: "", cvv: "", cpf: "" });
     }
   }, [isOpen]);
 
-  // 3. O Relógio (Apenas diminui o número, puramente)
+  // 3. O Relógio
   useEffect(() => {
     if (!isOpen) return;
 
@@ -124,7 +142,7 @@ export function CheckoutModal({
     return () => clearInterval(timer);
   }, [isOpen]);
 
-  // 4. O Fiscalizador (Escuta o tempo e dispara ações colaterais de forma segura)
+  // 4. O Fiscalizador
   useEffect(() => {
     if (isOpen && timeLeft === 0) {
       onClose();
@@ -183,7 +201,6 @@ export function CheckoutModal({
         type: "success",
       });
 
-      // SÊNIOR: Se aplicou cupom mas estava em "Wallet", muda pra PIX automaticamente
       if (paymentMethod === "wallet") {
         setPaymentMethod("pix");
         toast({
@@ -205,7 +222,6 @@ export function CheckoutModal({
     setCouponFeedback(null);
   };
 
-  // SÊNIOR: Troca de Pagamento Inteligente
   const handlePaymentSelect = (method: "wallet" | "pix" | "card") => {
     if (method === "wallet" && appliedCoupon) {
       removeCoupon();
@@ -218,9 +234,31 @@ export function CheckoutModal({
     setPaymentMethod(method);
   };
 
+  const handleSubmit = () => {
+    if (paymentMethod === "card") {
+      if (
+        !cardData.number ||
+        !cardData.name ||
+        !cardData.expiry ||
+        !cardData.cvv ||
+        !cardData.cpf
+      ) {
+        return toast({
+          variant: "destructive",
+          title: "Dados Incompletos",
+          description: "Preencha todos os dados do cartão de crédito.",
+        });
+      }
+    }
+    onConfirm(
+      paymentMethod,
+      appliedCoupon,
+      paymentMethod === "card" ? cardData : undefined,
+    );
+  };
+
   if (!isOpen || !summary || !room) return null;
 
-  // Lógica do Efeito Cascata
   const getTierWeight = (tier: string) => {
     const t = tier.toLowerCase();
     if (t === "master") return 3;
@@ -232,8 +270,7 @@ export function CheckoutModal({
   const usedTier = summary.usedTier || "start";
   const isCascading = getTierWeight(usedTier) > getTierWeight(roomTier);
 
-  // RECÁLCULO SEPARANDO MUNDOS: CR vs BRL
-  const finalCredits = summary.creditsRequired; // Em CR, nunca tem desconto
+  const finalCredits = summary.creditsRequired;
   const isMoneyMode = paymentMethod === "pix" || paymentMethod === "card";
 
   let subtotalBRL = totalBaseBRL + summary.upgradeFeeBRL;
@@ -246,11 +283,10 @@ export function CheckoutModal({
     } else if (appliedCoupon.type === "fixed") {
       discountBRL = appliedCoupon.discount_value;
     } else if (appliedCoupon.type === "bogo") {
-      // Valor proporcional de 1 hora
       discountBRL = subtotalBRL / summary.durationHours;
     }
 
-    if (discountBRL > subtotalBRL) discountBRL = subtotalBRL; // Impede valor negativo
+    if (discountBRL > subtotalBRL) discountBRL = subtotalBRL;
     finalBRL = subtotalBRL - discountBRL;
   }
 
@@ -443,10 +479,9 @@ export function CheckoutModal({
               Resumo de Compra
             </h3>
 
-            {/* RESUMO DINÂMICO (Muda dependendo se é Carteira ou Dinheiro) */}
+            {/* RESUMO DINÂMICO */}
             <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 mb-8">
               {!isMoneyMode ? (
-                // MODO CARTEIRA (CR)
                 <div className="flex justify-between items-center">
                   <span className="text-sm font-medium text-slate-600">
                     Total a Pagar
@@ -456,7 +491,6 @@ export function CheckoutModal({
                   </span>
                 </div>
               ) : (
-                // MODO DINHEIRO (R$)
                 <>
                   <div className="flex justify-between items-center pb-3 border-b border-slate-200 mb-3">
                     <span className="text-sm font-medium text-slate-600">
@@ -503,11 +537,12 @@ export function CheckoutModal({
               )}
             </div>
 
-            <div className="mb-8 space-y-3">
+            <div className="mb-8 space-y-3 flex-1 overflow-y-auto pr-1">
               <p className="text-sm font-bold text-slate-900">
                 Como você deseja pagar?
               </p>
 
+              {/* OPÇÃO 1: WALLET */}
               <div
                 onClick={() => handlePaymentSelect("wallet")}
                 className={`p-4 rounded-xl border-2 cursor-pointer flex flex-col gap-2 transition-all ${paymentMethod === "wallet" ? "bg-orange-50 border-[#BF4B24]" : "bg-white border-slate-200 hover:border-slate-300"}`}
@@ -537,7 +572,6 @@ export function CheckoutModal({
                   </div>
                 </div>
 
-                {/* ALERTA DE EFEITO CASCATA */}
                 {isCascading && paymentMethod === "wallet" && (
                   <div className="mt-1 bg-amber-100/50 border border-amber-200 p-2 rounded-lg flex items-start gap-2">
                     <ArrowDownRight className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
@@ -550,6 +584,7 @@ export function CheckoutModal({
                 )}
               </div>
 
+              {/* OPÇÃO 2: PIX */}
               <div
                 onClick={() => handlePaymentSelect("pix")}
                 className={`p-4 rounded-xl border-2 cursor-pointer flex items-center justify-between transition-all ${paymentMethod === "pix" ? "bg-orange-50 border-[#BF4B24]" : "bg-white border-slate-200 hover:border-slate-300"}`}
@@ -578,36 +613,131 @@ export function CheckoutModal({
                 </div>
               </div>
 
+              {/* OPÇÃO 3: CARTÃO DE CRÉDITO COM FORMULÁRIO TRANSPARENTE */}
               <div
-                onClick={() => handlePaymentSelect("card")}
-                className={`p-4 rounded-xl border-2 cursor-pointer flex items-center justify-between transition-all ${paymentMethod === "card" ? "bg-orange-50 border-[#BF4B24]" : "bg-white border-slate-200 hover:border-slate-300"}`}
+                className={`border-2 rounded-xl transition-all overflow-hidden ${paymentMethod === "card" ? "bg-orange-50/30 border-[#BF4B24]" : "bg-white border-slate-200 hover:border-slate-300"}`}
               >
-                <div className="flex items-center gap-3">
-                  <CreditCard
-                    className={`w-5 h-5 ${paymentMethod === "card" ? "text-[#BF4B24]" : "text-slate-500"}`}
-                  />
-                  <div>
-                    <p
-                      className={`text-sm font-bold ${paymentMethod === "card" ? "text-[#BF4B24]" : "text-slate-700"}`}
-                    >
-                      Cartão de Crédito
-                    </p>
-                    <p className="text-xs font-medium text-slate-500">
-                      Até 3x sem juros
-                    </p>
+                <div
+                  onClick={() => handlePaymentSelect("card")}
+                  className="p-4 cursor-pointer flex items-center justify-between"
+                >
+                  <div className="flex items-center gap-3">
+                    <CreditCard
+                      className={`w-5 h-5 ${paymentMethod === "card" ? "text-[#BF4B24]" : "text-slate-500"}`}
+                    />
+                    <div>
+                      <p
+                        className={`text-sm font-bold ${paymentMethod === "card" ? "text-[#BF4B24]" : "text-slate-700"}`}
+                      >
+                        Cartão de Crédito
+                      </p>
+                      <p className="text-xs font-medium text-slate-500">
+                        Pagamento 100% Seguro
+                      </p>
+                    </div>
+                  </div>
+                  <div
+                    className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMethod === "card" ? "border-[#BF4B24]" : "border-slate-300"}`}
+                  >
+                    {paymentMethod === "card" && (
+                      <div className="w-2.5 h-2.5 bg-[#BF4B24] rounded-full" />
+                    )}
                   </div>
                 </div>
-                <div
-                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMethod === "card" ? "border-[#BF4B24]" : "border-slate-300"}`}
-                >
-                  {paymentMethod === "card" && (
-                    <div className="w-2.5 h-2.5 bg-[#BF4B24] rounded-full" />
-                  )}
-                </div>
+
+                {/* FORMULÁRIO DO CARTÃO (Expande apenas se selecionado) */}
+                {paymentMethod === "card" && (
+                  <div className="px-4 pb-4 animate-in slide-in-from-top-2">
+                    <div className="bg-white border border-[#BF4B24]/30 rounded-xl p-4 space-y-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs font-bold text-slate-700">
+                          Número do Cartão
+                        </Label>
+                        <Input
+                          placeholder="0000 0000 0000 0000"
+                          maxLength={19}
+                          value={cardData.number}
+                          onChange={(e) =>
+                            setCardData({ ...cardData, number: e.target.value })
+                          }
+                          className="h-10 bg-slate-50 rounded-lg font-mono text-sm"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs font-bold text-slate-700">
+                          Nome do Titular
+                        </Label>
+                        <Input
+                          placeholder="NOME IMPRESSO NO CARTÃO"
+                          value={cardData.name}
+                          onChange={(e) =>
+                            setCardData({
+                              ...cardData,
+                              name: e.target.value.toUpperCase(),
+                            })
+                          }
+                          className="h-10 bg-slate-50 rounded-lg text-sm uppercase"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <Label className="text-xs font-bold text-slate-700">
+                            Validade
+                          </Label>
+                          <Input
+                            placeholder="MM/AA"
+                            maxLength={5}
+                            value={cardData.expiry}
+                            onChange={(e) =>
+                              setCardData({
+                                ...cardData,
+                                expiry: e.target.value,
+                              })
+                            }
+                            className="h-10 bg-slate-50 rounded-lg text-center font-mono"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs font-bold text-slate-700">
+                            CVV
+                          </Label>
+                          <Input
+                            type="password"
+                            placeholder="123"
+                            maxLength={4}
+                            value={cardData.cvv}
+                            onChange={(e) =>
+                              setCardData({ ...cardData, cvv: e.target.value })
+                            }
+                            className="h-10 bg-slate-50 rounded-lg text-center font-mono"
+                          />
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs font-bold text-slate-700">
+                          CPF do Titular
+                        </Label>
+                        <Input
+                          placeholder="000.000.000-00"
+                          maxLength={14}
+                          value={cardData.cpf}
+                          onChange={(e) =>
+                            setCardData({ ...cardData, cpf: e.target.value })
+                          }
+                          className="h-10 bg-slate-50 rounded-lg font-mono text-sm"
+                        />
+                      </div>
+                      <div className="flex items-center gap-1.5 justify-center mt-2 text-[10px] font-bold text-emerald-600 bg-emerald-50 py-1.5 rounded-md">
+                        <ShieldCheck className="w-3 h-3" /> Processado com
+                        segurança pelo Asaas
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
-            <div className="mt-auto">
+            <div className="mt-auto shrink-0 pt-4">
               {paymentMethod === "wallet" && !hasEnoughCreditsNow ? (
                 <div className="space-y-3">
                   <p className="text-xs font-bold text-red-600 text-center bg-red-50 py-2 rounded-lg">
@@ -623,7 +753,7 @@ export function CheckoutModal({
                 </div>
               ) : (
                 <Button
-                  onClick={() => onConfirm(paymentMethod, appliedCoupon)}
+                  onClick={handleSubmit}
                   disabled={loading || timeLeft === 0}
                   className="w-full h-14 rounded-xl font-black bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-md transition-all text-base disabled:opacity-50"
                 >
@@ -641,7 +771,8 @@ export function CheckoutModal({
                     </>
                   ) : (
                     <>
-                      Pagar R$ {finalBRL.toFixed(2).replace(".", ",")}{" "}
+                      <Lock className="w-4 h-4 mr-2" /> Pagar R${" "}
+                      {finalBRL.toFixed(2).replace(".", ",")}{" "}
                       <ArrowRight className="w-5 h-5 ml-2" />
                     </>
                   )}

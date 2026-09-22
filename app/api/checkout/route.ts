@@ -7,13 +7,13 @@ export async function POST(req: Request) {
     const ASAAS_API_KEY = process.env.ASAAS_API_KEY;
 
     if (!ASAAS_API_URL || !ASAAS_API_KEY) {
-      throw new Error("As chaves do Asaas não estão configuradas no .env.local");
+      throw new Error("As chaves do Asaas não estão configuradas.");
     }
 
     const body = await req.json();
     const { checkoutType, packageId, hours, price, packageName, paymentRef } = body;
     
-    // Define o billingType (Se o frontend não mandar, assumimos CREDIT_CARD para pacotes)
+    // Define o billingType (Para pacotes forçamos CREDIT_CARD)
     const billingType = body.billingType || (checkoutType === 'package' ? 'CREDIT_CARD' : 'PIX');
 
     const supabase = await createClient();
@@ -31,7 +31,7 @@ export async function POST(req: Request) {
     if (!asaasCustomerId) {
       const customerName = profile?.full_name || "Dr(a). Fusion Clinic";
       const customerEmail = user.email || "medico@fusionclinic.com.br";
-      // Usando um CPF válido de teste para o Asaas não rejeitar a criação
+      // Em produção, o frontend terá de enviar o CPF real. O Asaas não aceita cartão sem CPF válido.
       const customerCpfCnpj = profile?.cpf?.replace(/\D/g, '') || "07519139045"; 
 
       const customerResponse = await fetch(`${ASAAS_API_URL}/customers`, {
@@ -47,10 +47,7 @@ export async function POST(req: Request) {
       await supabase.from("profiles").update({ asaas_customer_id: asaasCustomerId }).eq("id", user.id);
     }
 
-    // ========================================================
-    // HACK DE SANDBOX: INJEÇÃO DE CARTÃO DE CRÉDITO DE TESTES
-    // Como o frontend ainda não tem o formulário, injetamos o mock
-    // ========================================================
+    // 2. DADOS DO CARTÃO (O Frontend tem de passar o objeto creditCard real em produção)
     const creditCard = body.creditCard || {
       holderName: "FUSION TEST",
       number: "4111111111111111",
@@ -68,7 +65,7 @@ export async function POST(req: Request) {
       phone: profile?.phone?.replace(/\D/g, '') || "11999999999"
     };
 
-    // 2. ASSINATURA RECORRENTE NO CARTÃO (FUSION PASS)
+    // 3. ASSINATURA RECORRENTE NO CARTÃO (FUSION PASS)
     if (checkoutType === "package") {
       const subResponse = await fetch(`${ASAAS_API_URL}/subscriptions`, {
         method: "POST",
@@ -77,8 +74,8 @@ export async function POST(req: Request) {
           customer: asaasCustomerId,
           billingType: "CREDIT_CARD",
           value: price,
-          nextDueDate: new Date().toISOString().split('T')[0], // Começa a cobrar hoje
-          cycle: "MONTHLY", // Recorrência mensal
+          nextDueDate: new Date().toISOString().split('T')[0], // Tenta cobrar imediatamente
+          cycle: "MONTHLY", 
           description: `Fusion Pass ${packageName} - ${hours} Créditos/mês`,
           externalReference: `package|${user.id}|${packageId}|${hours}`,
           creditCard,
@@ -87,37 +84,29 @@ export async function POST(req: Request) {
       });
 
       const subData = await subResponse.json();
-      if (!subResponse.ok) throw new Error(subData.errors?.[0]?.description || "Erro ao criar assinatura.");
+      if (!subResponse.ok) throw new Error(subData.errors?.[0]?.description || "O cartão foi recusado ou inválido.");
 
-      // Grava a assinatura ativa no Supabase
       const tierFixed = packageName.toLowerCase().replace('pass ', '');
+      
+      // Regista a assinatura como PENDENTE. O Webhook altera para ACTIVE e dá os créditos.
       await supabase.from("subscriptions").insert({
         user_id: user.id,
         asaas_subscription_id: subData.id,
         tier: tierFixed, 
         hours: hours,
-        status: 'ACTIVE'
+        status: 'PENDING'
       });
       
-      // Libera os créditos na carteira IMEDIATAMENTE!
-      await supabase.from("wallet_transactions").insert({
-        user_id: user.id,
-        amount: hours,
-        type: "subscription",
-        tier: tierFixed,
-        description: `Nova Assinatura: ${packageName}`
-      });
-
-      // Retornamos invoiceUrl com o caminho do Perfil para evitar erro de redirecionamento no frontend
+      // Mantemos invoiceUrl interno para o Frontend não tentar redirecionar
       return NextResponse.json({ 
         success: true, 
-        message: "Assinatura criada!", 
+        message: "Assinatura processada! Os créditos ficarão disponíveis assim que o banco confirmar.", 
         subscriptionId: subData.id,
-        invoiceUrl: "/#profile" 
+        invoiceUrl: "/dashboard" 
       });
     }
 
-    // 3. COMPRA AVULSA (RESERVA DE SALA)
+    // 4. COMPRA AVULSA DE SALA (RESERVA)
     const paymentPayload: any = {
       customer: asaasCustomerId,
       billingType: billingType,
@@ -144,7 +133,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ 
       success: true, 
       paymentId: paymentData.id, 
-      invoiceUrl: "/#profile" 
+      invoiceUrl: "/dashboard" 
     });
 
   } catch (error: any) {

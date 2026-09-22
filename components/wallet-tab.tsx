@@ -13,13 +13,23 @@ import {
   CreditCard,
   Sparkles,
   CheckCircle2,
+  Lock,
+  ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
-// Tipos base para o nosso plano
 interface PlanPackage {
   id: string;
   tier: "start" | "vip" | "master";
@@ -78,15 +88,23 @@ export function WalletTab() {
 
   const [loading, setLoading] = useState(true);
   const [profileName, setProfileName] = useState("");
-
-  // Saldos por Categoria
-  const [balances, setBalances] = useState({
-    start: 0,
-    vip: 0,
-    master: 0,
-  });
-
+  const [userEmail, setUserEmail] = useState("");
+  const [balances, setBalances] = useState({ start: 0, vip: 0, master: 0 });
   const [transactions, setTransactions] = useState<any[]>([]);
+
+  // ESTADOS DO CHECKOUT DE ASSINATURA
+  const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+  const [selectedPackage, setSelectedPackage] = useState<PlanPackage | null>(
+    null,
+  );
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [cardData, setCardData] = useState({
+    number: "",
+    name: "",
+    expiry: "",
+    cvv: "",
+    cpf: "",
+  });
 
   useEffect(() => {
     async function fetchWalletData() {
@@ -97,7 +115,8 @@ export function WalletTab() {
         } = await supabase.auth.getUser();
         if (!user) return;
 
-        // Puxa o nome
+        setUserEmail(user.email || "");
+
         const { data: profile } = await supabase
           .from("profiles")
           .select("full_name")
@@ -105,7 +124,6 @@ export function WalletTab() {
           .single();
         if (profile) setProfileName(profile.full_name);
 
-        // Busca as transações do usuário
         const { data: txData } = await supabase
           .from("wallet_transactions")
           .select("amount, created_at, description, type, tier")
@@ -113,11 +131,9 @@ export function WalletTab() {
           .order("created_at", { ascending: false });
 
         if (txData) {
-          setTransactions(txData.slice(0, 5)); // Pega as 5 últimas para o histórico
+          setTransactions(txData.slice(0, 5));
 
-          // Tipando explicitamente o acumulador para evitar erro de índice
           type BalancesType = { start: number; vip: number; master: number };
-
           const newBalances = txData.reduce(
             (acc: BalancesType, curr: any) => {
               const tierKey =
@@ -128,10 +144,6 @@ export function WalletTab() {
             { start: 0, vip: 0, master: 0 },
           );
 
-          // Mock visual inicial (apague quando houver dados reais sendo inseridos no Supabase)
-          newBalances.vip = 5;
-          newBalances.start = 2;
-
           setBalances(newBalances);
         }
       } catch (error) {
@@ -140,20 +152,79 @@ export function WalletTab() {
         setLoading(false);
       }
     }
-
     fetchWalletData();
   }, [supabase]);
 
-  // Total unificado de horas disponíveis
   const totalHours = balances.start + balances.vip + balances.master;
 
-  // Função preparatória para o Checkout (Passo 4)
+  // Abre o modal de pagamento para o pacote selecionado
   const handleBuyPackage = (pkg: PlanPackage) => {
-    toast({
-      title: `Iniciando compra: ${pkg.title}`,
-      description: "O sistema de pagamentos será conectado no próximo passo.",
-    });
-    // Aqui chamaremos a API do Stripe/Pagar.me no próximo passo
+    setSelectedPackage(pkg);
+    setCardData({ number: "", name: "", expiry: "", cvv: "", cpf: "" });
+    setIsCheckoutOpen(true);
+  };
+
+  // Processa a Assinatura Transparente
+  const handleConfirmPurchase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPackage) return;
+
+    setIsProcessing(true);
+
+    try {
+      const [expMonth, expYear] = cardData.expiry.split("/");
+      const yearFormatted = expYear?.length === 2 ? `20${expYear}` : expYear;
+
+      const response = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          checkoutType: "package",
+          packageId: selectedPackage.id,
+          packageName: selectedPackage.title,
+          hours: selectedPackage.hours,
+          price: selectedPackage.price,
+          billingType: "CREDIT_CARD",
+          creditCard: {
+            holderName: cardData.name.toUpperCase(),
+            number: cardData.number.replace(/\D/g, ""),
+            expiryMonth: expMonth?.trim(),
+            expiryYear: yearFormatted?.trim(),
+            ccv: cardData.cvv,
+          },
+          creditCardHolderInfo: {
+            name: cardData.name.toUpperCase(),
+            email: userEmail || "suporte@fusionclinic.com.br",
+            cpfCnpj: cardData.cpf.replace(/\D/g, ""),
+            postalCode: "01310100", // CEP padrão exigido pelo Asaas
+            addressNumber: "1000",
+            phone: "11999999999",
+          },
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Erro ao processar o pagamento.");
+      }
+
+      toast({
+        title: "Assinatura Confirmada! 🎉",
+        description:
+          "A tua cobrança mensal foi ativada. Os créditos caem na carteira assim que o banco aprovar.",
+      });
+
+      setIsCheckoutOpen(false);
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Pagamento Recusado",
+        description: error.message,
+      });
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   if (loading) {
@@ -166,7 +237,7 @@ export function WalletTab() {
 
   return (
     <div className="space-y-8 max-w-5xl mx-auto animate-in fade-in pb-12">
-      {/* 1. O CARTÃO DE CRÉDITO DIGITAL (CARTEIRA UNIFICADA) */}
+      {/* 1. O CARTÃO DE CRÉDITO DIGITAL */}
       <section>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-black text-slate-900 flex items-center gap-2">
@@ -175,7 +246,6 @@ export function WalletTab() {
         </div>
 
         <div className="bg-slate-900 rounded-[2rem] p-8 text-white shadow-2xl relative overflow-hidden">
-          {/* Efeitos de fundo do cartão */}
           <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
           <div className="absolute bottom-0 left-0 w-48 h-48 bg-[#BF4B24]/20 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2" />
 
@@ -193,7 +263,6 @@ export function WalletTab() {
               </p>
             </div>
 
-            {/* Composição Sutil do Saldo */}
             <div className="bg-white/10 backdrop-blur-md border border-white/10 rounded-2xl p-5 min-w-[200px]">
               <p className="text-[10px] font-black text-white/50 uppercase tracking-widest mb-3">
                 Composição do Saldo
@@ -223,25 +292,22 @@ export function WalletTab() {
         </div>
       </section>
 
-      {/* 2. LOJA DE RECARGAS (VITRINE DE PACOTES) */}
+      {/* 2. LOJA DE ASSINATURAS */}
       <section className="pt-4">
         <div className="mb-6">
           <h3 className="text-xl font-black text-slate-900 flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-[#BF4B24]" /> Recarregar Horas
+            <Sparkles className="w-5 h-5 text-[#BF4B24]" /> Planos de Assinatura
           </h3>
           <p className="text-sm font-medium text-slate-500 mt-1">
-            Pacotes superiores (VIP/Master) podem ser usados em salas de
-            categoria inferior.
+            Garante os teus créditos mensais com renovação automática.
           </p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {PACKAGES.map((pkg) => {
             const Icon = pkg.icon;
-            // Cores dinâmicas
             const isBlue = pkg.color === "blue";
             const isPurple = pkg.color === "purple";
-            const isAmber = pkg.color === "amber";
 
             return (
               <div
@@ -249,27 +315,21 @@ export function WalletTab() {
                 className="bg-white rounded-3xl p-1 border-2 border-slate-100 hover:border-slate-300 transition-all flex flex-col group"
               >
                 <div
-                  className={`p-6 rounded-[1.25rem] h-full flex flex-col
-                  ${isBlue ? "bg-blue-50/50" : isPurple ? "bg-purple-50/50" : "bg-amber-50/50"}
-                `}
+                  className={`p-6 rounded-[1.25rem] h-full flex flex-col ${isBlue ? "bg-blue-50/50" : isPurple ? "bg-purple-50/50" : "bg-amber-50/50"}`}
                 >
                   <div className="flex items-start justify-between mb-4">
                     <div
-                      className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-sm
-                      ${isBlue ? "bg-blue-500 text-white" : isPurple ? "bg-purple-500 text-white" : "bg-amber-500 text-white"}
-                    `}
+                      className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-sm ${isBlue ? "bg-blue-500 text-white" : isPurple ? "bg-purple-500 text-white" : "bg-amber-500 text-white"}`}
                     >
                       <Icon className="w-6 h-6" />
                     </div>
                     <Badge className="bg-white text-slate-900 border-0 shadow-sm font-bold">
-                      {pkg.hours} Horas
+                      {pkg.hours} Horas/mês
                     </Badge>
                   </div>
 
                   <h4
-                    className={`text-lg font-black mb-1
-                    ${isBlue ? "text-blue-900" : isPurple ? "text-purple-900" : "text-amber-900"}
-                  `}
+                    className={`text-lg font-black mb-1 ${isBlue ? "text-blue-900" : isPurple ? "text-purple-900" : "text-amber-900"}`}
                   >
                     {pkg.title}
                   </h4>
@@ -279,7 +339,7 @@ export function WalletTab() {
                       R$ {pkg.price}
                     </span>
                     <span className="text-xs font-bold text-slate-500 uppercase">
-                      /pacote
+                      /mês
                     </span>
                   </div>
 
@@ -287,9 +347,7 @@ export function WalletTab() {
                     {pkg.benefits.map((benefit, i) => (
                       <div key={i} className="flex items-start gap-2">
                         <CheckCircle2
-                          className={`w-4 h-4 shrink-0 mt-0.5
-                          ${isBlue ? "text-blue-500" : isPurple ? "text-purple-500" : "text-amber-500"}
-                        `}
+                          className={`w-4 h-4 shrink-0 mt-0.5 ${isBlue ? "text-blue-500" : isPurple ? "text-purple-500" : "text-amber-500"}`}
                         />
                         <span className="text-sm font-medium text-slate-600">
                           {benefit}
@@ -300,11 +358,9 @@ export function WalletTab() {
 
                   <Button
                     onClick={() => handleBuyPackage(pkg)}
-                    className={`w-full h-12 font-black shadow-md transition-transform group-hover:-translate-y-1
-                      ${isBlue ? "bg-blue-600 hover:bg-blue-700" : isPurple ? "bg-purple-600 hover:bg-purple-700" : "bg-amber-600 hover:bg-amber-700"} text-white
-                    `}
+                    className={`w-full h-12 font-black shadow-md transition-transform group-hover:-translate-y-1 ${isBlue ? "bg-blue-600 hover:bg-blue-700" : isPurple ? "bg-purple-600 hover:bg-purple-700" : "bg-amber-600 hover:bg-amber-700"} text-white`}
                   >
-                    Comprar Agora
+                    Assinar Plano
                   </Button>
                 </div>
               </div>
@@ -328,9 +384,7 @@ export function WalletTab() {
                 >
                   <div className="flex items-center gap-4">
                     <div
-                      className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0
-                      ${tx.amount > 0 ? "bg-emerald-100 text-emerald-600" : "bg-slate-100 text-slate-600"}
-                    `}
+                      className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${tx.amount > 0 ? "bg-emerald-100 text-emerald-600" : "bg-slate-100 text-slate-600"}`}
                     >
                       <CreditCard className="w-4 h-4" />
                     </div>
@@ -355,12 +409,134 @@ export function WalletTab() {
               ))}
             </div>
           ) : (
-            <div className="p-8 text-center text-slate-500 font-medium">
-              Nenhuma transação recente encontrada.
+            <div className="p-8 text-center text-slate-500">
+              Nenhuma transação encontrada.
             </div>
           )}
         </div>
       </section>
+
+      {/* MODAL TRANSPARENTE DE ASSINATURA */}
+      <Dialog open={isCheckoutOpen} onOpenChange={setIsCheckoutOpen}>
+        <DialogContent className="sm:max-w-[420px] bg-white rounded-3xl p-6 border-slate-200">
+          {selectedPackage && (
+            <>
+              <DialogHeader className="mb-4">
+                <DialogTitle className="text-xl font-black text-slate-900 flex items-center gap-2">
+                  <CreditCard className="w-5 h-5 text-[#BF4B24]" />
+                  Checkout Transparente
+                </DialogTitle>
+                <DialogDescription className="text-slate-500 font-medium text-sm">
+                  Assinatura Recorrente:{" "}
+                  <strong>{selectedPackage.title}</strong> (R${" "}
+                  {selectedPackage.price.toFixed(2)}/mês)
+                </DialogDescription>
+              </DialogHeader>
+
+              <form onSubmit={handleConfirmPurchase} className="space-y-4">
+                <div className="space-y-2">
+                  <Label className="font-bold text-slate-700">
+                    Número do Cartão
+                  </Label>
+                  <Input
+                    required
+                    placeholder="0000 0000 0000 0000"
+                    maxLength={19}
+                    value={cardData.number}
+                    onChange={(e) =>
+                      setCardData({ ...cardData, number: e.target.value })
+                    }
+                    className="h-11 bg-slate-50 rounded-xl font-mono text-sm"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="font-bold text-slate-700">
+                    Nome Impresso
+                  </Label>
+                  <Input
+                    required
+                    placeholder="NOME COMPLETO"
+                    value={cardData.name}
+                    onChange={(e) =>
+                      setCardData({
+                        ...cardData,
+                        name: e.target.value.toUpperCase(),
+                      })
+                    }
+                    className="h-11 bg-slate-50 rounded-xl text-sm uppercase"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="font-bold text-slate-700">Validade</Label>
+                    <Input
+                      required
+                      placeholder="MM/AA"
+                      maxLength={5}
+                      value={cardData.expiry}
+                      onChange={(e) =>
+                        setCardData({ ...cardData, expiry: e.target.value })
+                      }
+                      className="h-11 bg-slate-50 rounded-xl text-center font-mono"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="font-bold text-slate-700">CVV</Label>
+                    <Input
+                      required
+                      type="password"
+                      placeholder="123"
+                      maxLength={4}
+                      value={cardData.cvv}
+                      onChange={(e) =>
+                        setCardData({ ...cardData, cvv: e.target.value })
+                      }
+                      className="h-11 bg-slate-50 rounded-xl text-center font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="font-bold text-slate-700">
+                    CPF do Titular
+                  </Label>
+                  <Input
+                    required
+                    placeholder="000.000.000-00"
+                    maxLength={14}
+                    value={cardData.cpf}
+                    onChange={(e) =>
+                      setCardData({ ...cardData, cpf: e.target.value })
+                    }
+                    className="h-11 bg-slate-50 rounded-xl font-mono text-sm"
+                  />
+                </div>
+
+                <div className="flex items-center justify-center gap-2 text-[10px] font-bold text-emerald-600 bg-emerald-50 p-2 rounded-lg mt-2">
+                  <ShieldCheck className="w-4 h-4" /> Encriptação de
+                  ponta-a-ponta Asaas.
+                </div>
+
+                <Button
+                  type="submit"
+                  disabled={isProcessing}
+                  className="w-full h-12 font-black bg-[#BF4B24] hover:bg-[#9A3C1D] text-white rounded-xl shadow-lg mt-2"
+                >
+                  {isProcessing ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <span className="flex items-center gap-2">
+                      <Lock className="w-4 h-4" /> Assinar Mensalidade
+                    </span>
+                  )}
+                </Button>
+              </form>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
