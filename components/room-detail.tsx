@@ -47,12 +47,26 @@ import {
   Check,
   Crown,
   TrendingUp,
+  QrCode,
+  Copy,
+  CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { CheckoutModal, CheckoutSummary } from "@/components/checkout-modal";
+import {
+  CheckoutModal,
+  CheckoutSummary,
+  CardData,
+} from "@/components/checkout-modal";
 import { useMobileBack } from "@/hooks/use-mobile-back";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 
 const AMENITIES_LIST = [
   { id: "wifi", label: "Wi-Fi de alta velocidade", icon: Wifi },
@@ -107,6 +121,12 @@ export function RoomDetail(props: RoomDetailProps) {
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [checkoutSummary, setCheckoutSummary] =
     useState<CheckoutSummary | null>(null);
+
+  // NOVO: Estado para exibir o Modal de Pix Nativo
+  const [pixData, setPixData] = useState<{
+    qrCode: string;
+    copyPaste: string;
+  } | null>(null);
 
   const [isFavorited, setIsFavorited] = useState(false);
   const [isFavoriteLoading, setIsFavoriteLoading] = useState(false);
@@ -770,11 +790,12 @@ export function RoomDetail(props: RoomDetailProps) {
   };
 
   // ==========================================
-  // CONFIRMAÇÃO DO CHECKOUT COM CUPOM E CASCATA
+  // CONFIRMAÇÃO DO CHECKOUT COM TRANSPARÊNCIA (PIX & CARTÃO)
   // ==========================================
   const handleConfirmCheckout = async (
     method: "wallet" | "pix" | "card",
     appliedCoupon?: any,
+    cardData?: CardData,
   ) => {
     if (!checkoutSummary) return;
     setActionLoading(true);
@@ -787,7 +808,6 @@ export function RoomDetail(props: RoomDetailProps) {
 
       const lockIds = (checkoutSummary as any).lockIds;
 
-      // Desconto no Backend
       let finalCreditsRequired = checkoutSummary.creditsRequired;
       let finalHourlyCost = totalHourlyCost;
 
@@ -812,7 +832,7 @@ export function RoomDetail(props: RoomDetailProps) {
 
       if (method === "wallet") {
         const creditCostPerHour = finalCreditsRequired / selectedSlots.length;
-        const usedTier = checkoutSummary.usedTier || roomData.tier || "start"; // Pegando o nível correto
+        const usedTier = checkoutSummary.usedTier || roomData.tier || "start";
 
         const { error: updateError } = await supabase
           .from("bookings")
@@ -830,7 +850,7 @@ export function RoomDetail(props: RoomDetailProps) {
             user_id: user.id,
             amount: -finalCreditsRequired,
             type: "usage",
-            tier: usedTier, // Debita da carteira que bancou
+            tier: usedTier,
             description: `Reserva em Créditos (${usedTier.toUpperCase()}): ${roomData.name}`,
           });
         if (walletError) throw walletError;
@@ -858,9 +878,10 @@ export function RoomDetail(props: RoomDetailProps) {
         setSelectedSlots([]);
         onBack();
       } else {
+        // FLUXO DE DINHEIRO (PIX ou CARTÃO DE CRÉDITO TRANSPARENTE)
         toast({
-          title: "Gerando pagamento...",
-          description: "Redirecionando para o gateway.",
+          title: "A processar pagamento...",
+          description: "Por favor, aguarde um momento.",
         });
 
         const paymentRef = `REF_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
@@ -888,6 +909,39 @@ export function RoomDetail(props: RoomDetailProps) {
           });
         }
 
+        // Prepara os dados formatados do cartão se o método for 'card'
+        let formattedCard = undefined;
+        let holderInfo = undefined;
+
+        if (method === "card" && cardData) {
+          const [expMonth, expYear] = cardData.expiry.split("/");
+          const yearFormatted =
+            expYear?.length === 2 ? `20${expYear}` : expYear;
+
+          formattedCard = {
+            holderName: cardData.name.toUpperCase(),
+            number: cardData.number.replace(/\D/g, ""),
+            expiryMonth: expMonth?.trim(),
+            expiryYear: yearFormatted?.trim(),
+            ccv: cardData.cvv,
+          };
+
+          const { data: userProfile } = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("id", user.id)
+            .single();
+
+          holderInfo = {
+            name: cardData.name.toUpperCase(),
+            email: user.email || "medico@fusionclinic.com.br",
+            cpfCnpj: cardData.cpf.replace(/\D/g, ""),
+            postalCode: userProfile?.cep?.replace(/\D/g, "") || "01310100",
+            addressNumber: userProfile?.address_number || "1000",
+            phone: userProfile?.phone?.replace(/\D/g, "") || "11999999999",
+          };
+        }
+
         const response = await fetch("/api/checkout", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -895,13 +949,35 @@ export function RoomDetail(props: RoomDetailProps) {
             checkoutType: "booking",
             price: finalHourlyCost,
             paymentRef: paymentRef,
+            billingType: method === "card" ? "CREDIT_CARD" : "PIX",
+            creditCard: formattedCard,
+            creditCardHolderInfo: holderInfo,
           }),
         });
 
         const data = await response.json();
         if (!response.ok) throw new Error(data.error);
 
-        window.location.href = data.invoiceUrl;
+        // SE FOR PIX: Interceta o QR Code e exibe na tela sem redirecionar
+        if (method === "pix" && data.pixQrCode) {
+          setPixData({
+            qrCode: `data:image/png;base64,${data.pixQrCode}`,
+            copyPaste: data.pixCopyPaste,
+          });
+          setIsCheckoutOpen(false);
+          setCheckoutSummary(null);
+          return; // 🛑 Para aqui, mostrando o QR Code nativo
+        }
+
+        // SE FOR CARTÃO DE CRÉDITO: Sucesso imediato sem sair da página
+        toast({
+          title: "Pagamento Aprovado! 🎉",
+          description: "A sua reserva foi confirmada com sucesso.",
+        });
+        setIsCheckoutOpen(false);
+        setCheckoutSummary(null);
+        setSelectedSlots([]);
+        window.location.reload();
       }
     } catch (err: any) {
       console.error(err);
@@ -1268,7 +1344,6 @@ export function RoomDetail(props: RoomDetailProps) {
         </div>
 
         <div className="px-5 py-6 max-w-5xl mx-auto flex flex-col lg:grid lg:grid-cols-12 gap-10">
-          {/* LADO ESQUERDO DA TELA: INFORMAÇÕES DA SALA E FUSION PASS */}
           <div className="order-1 lg:order-1 lg:col-span-8 space-y-10">
             <section>
               <h2 className="text-lg font-black text-slate-900 mb-3">
@@ -1361,7 +1436,6 @@ export function RoomDetail(props: RoomDetailProps) {
               </div>
             </section>
 
-            {/* SÊNIOR: FUSION PASS COMO UPSELL CLEAN */}
             {packages.length > 0 && activeTab === "hora" && (
               <section className="mt-10 animate-in fade-in slide-in-from-bottom-4">
                 <div className="bg-white rounded-3xl p-6 md:p-8 shadow-sm border border-slate-200 relative overflow-hidden group">
@@ -1481,7 +1555,6 @@ export function RoomDetail(props: RoomDetailProps) {
             <div className="w-full h-px bg-slate-100 hidden lg:block mt-10" />
           </div>
 
-          {/* LADO DIREITO (BARRA LATERAL FOCADA NO AGENDAMENTO) */}
           <div className="order-2 lg:order-2 lg:col-span-4 flex flex-col gap-6">
             <div className="bg-white md:p-6 md:border md:border-slate-200 md:rounded-2xl md:shadow-lg md:h-fit md:sticky md:top-24 flex flex-col">
               <div className="flex bg-slate-100 p-1.5 rounded-xl mb-6">
@@ -1807,7 +1880,6 @@ export function RoomDetail(props: RoomDetailProps) {
             </div>
           </div>
 
-          {/* AVALIAÇÕES */}
           <div className="order-3 lg:order-3 lg:col-span-8 lg:col-start-1 pt-8 border-t border-slate-100 lg:border-none lg:pt-0">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-black text-slate-900">Avaliações</h2>
@@ -1954,7 +2026,6 @@ export function RoomDetail(props: RoomDetailProps) {
         </div>
       </div>
 
-      {/* RODAPÉ MOBILE */}
       <div className="md:hidden flex-none bg-white border-t border-slate-200 p-4 pb-safe flex items-center justify-between shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)] z-50">
         <div>
           <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5">
@@ -2157,11 +2228,12 @@ export function RoomDetail(props: RoomDetailProps) {
         </div>
       )}
 
+      {/* MODAL DE CHECKOUT TRANSPARENTE */}
       <CheckoutModal
         isOpen={isCheckoutOpen}
         onClose={handleCheckoutClose}
-        onConfirm={(method, appliedCoupon) => {
-          handleConfirmCheckout(method, appliedCoupon);
+        onConfirm={(method, appliedCoupon, cardData) => {
+          handleConfirmCheckout(method, appliedCoupon, cardData);
         }}
         loading={actionLoading}
         summary={checkoutSummary}
@@ -2170,6 +2242,66 @@ export function RoomDetail(props: RoomDetailProps) {
         selectedDate={selectedDate || new Date()}
         totalBaseBRL={totalHourlyCost}
       />
+
+      {/* MODAL NATIVO DE PIX (QR CODE + COPIA E COLA) */}
+      <Dialog open={!!pixData} onOpenChange={() => setPixData(null)}>
+        <DialogContent className="sm:max-w-md bg-white rounded-3xl p-6 text-center border-slate-200">
+          <DialogHeader className="mb-4">
+            <DialogTitle className="text-xl font-black text-slate-900 flex justify-center items-center gap-2">
+              <QrCode className="w-6 h-6 text-[#BF4B24]" />
+              Pagamento via Pix
+            </DialogTitle>
+            <DialogDescription className="text-slate-500 font-medium text-sm">
+              Escaneia o QR Code abaixo com o teu banco para confirmar a reserva
+              instantaneamente.
+            </DialogDescription>
+          </DialogHeader>
+
+          {pixData && (
+            <div className="flex flex-col items-center gap-6">
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl shadow-sm">
+                <img
+                  src={pixData.qrCode}
+                  alt="QR Code Pix"
+                  className="w-48 h-48 mx-auto"
+                />
+              </div>
+
+              <div className="w-full space-y-2">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                  Pix Copia e Cola
+                </p>
+                <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
+                  <input
+                    readOnly
+                    value={pixData.copyPaste}
+                    className="flex-1 bg-transparent text-xs font-mono text-slate-600 outline-none truncate px-2"
+                  />
+                  <Button
+                    onClick={() => {
+                      navigator.clipboard.writeText(pixData.copyPaste);
+                      toast({
+                        title: "Copiado!",
+                        description:
+                          "Código Pix copiado para a área de transferência.",
+                      });
+                    }}
+                    variant="outline"
+                    className="shrink-0 rounded-lg text-[#BF4B24] border-[#BF4B24]/20 hover:bg-[#BF4B24]/10"
+                  >
+                    <Copy className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 text-sm font-bold text-emerald-600 bg-emerald-50 px-4 py-2 rounded-lg w-full justify-center">
+                <CheckCircle2 className="w-4 h-4" />A aguardar confirmação
+                automática...
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
