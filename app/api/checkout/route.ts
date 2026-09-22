@@ -13,7 +13,6 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { checkoutType, packageId, hours, price, packageName, paymentRef } = body;
     
-    // Define o billingType (Para pacotes forçamos CREDIT_CARD)
     const billingType = body.billingType || (checkoutType === 'package' ? 'CREDIT_CARD' : 'PIX');
 
     const supabase = await createClient();
@@ -27,11 +26,9 @@ export async function POST(req: Request) {
 
     let asaasCustomerId = profile?.asaas_customer_id;
 
-    // 1. CRIA OU RECUPERA O CLIENTE NO ASAAS
     if (!asaasCustomerId) {
       const customerName = profile?.full_name || "Dr(a). Fusion Clinic";
       const customerEmail = user.email || "medico@fusionclinic.com.br";
-      // Em produção, o frontend terá de enviar o CPF real. O Asaas não aceita cartão sem CPF válido.
       const customerCpfCnpj = profile?.cpf?.replace(/\D/g, '') || "07519139045"; 
 
       const customerResponse = await fetch(`${ASAAS_API_URL}/customers`, {
@@ -47,7 +44,6 @@ export async function POST(req: Request) {
       await supabase.from("profiles").update({ asaas_customer_id: asaasCustomerId }).eq("id", user.id);
     }
 
-    // 2. DADOS DO CARTÃO (O Frontend tem de passar o objeto creditCard real em produção)
     const creditCard = body.creditCard || {
       holderName: "FUSION TEST",
       number: "4111111111111111",
@@ -65,7 +61,7 @@ export async function POST(req: Request) {
       phone: profile?.phone?.replace(/\D/g, '') || "11999999999"
     };
 
-    // 3. ASSINATURA RECORRENTE NO CARTÃO (FUSION PASS)
+    // ASSINATURA RECORRENTE (FUSION PASS)
     if (checkoutType === "package") {
       const subResponse = await fetch(`${ASAAS_API_URL}/subscriptions`, {
         method: "POST",
@@ -74,7 +70,7 @@ export async function POST(req: Request) {
           customer: asaasCustomerId,
           billingType: "CREDIT_CARD",
           value: price,
-          nextDueDate: new Date().toISOString().split('T')[0], // Tenta cobrar imediatamente
+          nextDueDate: new Date().toISOString().split('T')[0],
           cycle: "MONTHLY", 
           description: `Fusion Pass ${packageName} - ${hours} Créditos/mês`,
           externalReference: `package|${user.id}|${packageId}|${hours}`,
@@ -84,11 +80,10 @@ export async function POST(req: Request) {
       });
 
       const subData = await subResponse.json();
-      if (!subResponse.ok) throw new Error(subData.errors?.[0]?.description || "O cartão foi recusado ou inválido.");
+      if (!subResponse.ok) throw new Error(subData.errors?.[0]?.description || "O cartão foi recusado ou é inválido.");
 
       const tierFixed = packageName.toLowerCase().replace('pass ', '');
       
-      // Regista a assinatura como PENDENTE. O Webhook altera para ACTIVE e dá os créditos.
       await supabase.from("subscriptions").insert({
         user_id: user.id,
         asaas_subscription_id: subData.id,
@@ -97,7 +92,6 @@ export async function POST(req: Request) {
         status: 'PENDING'
       });
       
-      // Mantemos invoiceUrl interno para o Frontend não tentar redirecionar
       return NextResponse.json({ 
         success: true, 
         message: "Assinatura processada! Os créditos ficarão disponíveis assim que o banco confirmar.", 
@@ -106,7 +100,7 @@ export async function POST(req: Request) {
       });
     }
 
-    // 4. COMPRA AVULSA DE SALA (RESERVA)
+    // COMPRA AVULSA DE SALA (RESERVA)
     const paymentPayload: any = {
       customer: asaasCustomerId,
       billingType: billingType,
@@ -130,10 +124,29 @@ export async function POST(req: Request) {
     const paymentData = await paymentResponse.json();
     if (!paymentResponse.ok) throw new Error(paymentData.errors?.[0]?.description || "Erro ao gerar cobrança.");
 
+    // BURACO DE MINHOCA DO PIX: Vamos buscar a imagem do QR Code
+    let pixQrCode = null;
+    let pixCopyPaste = null;
+
+    if (billingType === "PIX") {
+      const qrResponse = await fetch(`${ASAAS_API_URL}/payments/${paymentData.id}/pixQrCode`, {
+        method: "GET",
+        headers: { "access_token": ASAAS_API_KEY }
+      });
+      const qrData = await qrResponse.json();
+      
+      if (qrResponse.ok) {
+        pixQrCode = qrData.encodedImage;
+        pixCopyPaste = qrData.payload;
+      }
+    }
+
     return NextResponse.json({ 
       success: true, 
       paymentId: paymentData.id, 
-      invoiceUrl: "/dashboard" 
+      invoiceUrl: "/dashboard",
+      pixQrCode,     // Retorna a imagem do QR Code em Base64
+      pixCopyPaste   // Retorna o texto Copia e Cola
     });
 
   } catch (error: any) {
