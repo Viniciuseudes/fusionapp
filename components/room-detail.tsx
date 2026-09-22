@@ -47,9 +47,6 @@ import {
   Check,
   Crown,
   TrendingUp,
-  QrCode,
-  Copy,
-  CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -60,13 +57,6 @@ import {
   CardData,
 } from "@/components/checkout-modal";
 import { useMobileBack } from "@/hooks/use-mobile-back";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
 
 const AMENITIES_LIST = [
   { id: "wifi", label: "Wi-Fi de alta velocidade", icon: Wifi },
@@ -122,13 +112,10 @@ export function RoomDetail(props: RoomDetailProps) {
   const [checkoutSummary, setCheckoutSummary] =
     useState<CheckoutSummary | null>(null);
 
-  // ESTADO DO PIX ATUALIZADO (Adicionado bookingId e status)
-  const [pixData, setPixData] = useState<{
-    qrCode: string;
-    copyPaste: string;
-    bookingId: string;
-    status: "pending" | "success";
-  } | null>(null);
+  // ESTADOS DO PIX CORRIGIDOS
+  const [pixQrCode, setPixQrCode] = useState<string | null>(null);
+  const [pixCopyPaste, setPixCopyPaste] = useState<string | null>(null);
+  const [activeBookingId, setActiveBookingId] = useState<string | null>(null);
 
   const [isFavorited, setIsFavorited] = useState(false);
   const [isFavoriteLoading, setIsFavoriteLoading] = useState(false);
@@ -277,52 +264,6 @@ export function RoomDetail(props: RoomDetailProps) {
       if (channel) supabase.removeChannel(channel);
     };
   }, [roomData?.id, supabase]);
-
-  // ==========================================
-  // WEBSOCKET: ESCUTA O SUCESSO DO PIX
-  // ==========================================
-  useEffect(() => {
-    if (!pixData?.bookingId || pixData.status === "success") return;
-
-    const channel = supabase
-      .channel(`booking_pix_status_${pixData.bookingId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "bookings",
-          filter: `id=eq.${pixData.bookingId}`,
-        },
-        (payload) => {
-          if (payload.new.status === "confirmed") {
-            // Pagamento detectado! Muda o modal para a tela de sucesso
-            setPixData((prev) =>
-              prev ? { ...prev, status: "success" } : null,
-            );
-
-            // Aguarda 3.5 segundos para o usuário curtir a confirmação e recarrega
-            setTimeout(() => {
-              setPixData(null);
-              setSelectedSlots([]);
-              window.location.reload();
-            }, 3500);
-          } else if (payload.new.status === "cancelled") {
-            setPixData(null);
-            toast({
-              variant: "destructive",
-              title: "Tempo Esgotado",
-              description: "A reserva foi cancelada por falta de pagamento.",
-            });
-          }
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [pixData, supabase, toast]);
 
   useEffect(() => {
     async function fetchReviews() {
@@ -922,7 +863,6 @@ export function RoomDetail(props: RoomDetailProps) {
           description: "Por favor, aguarde um momento.",
         });
 
-        // Este é o ID da reserva que vamos passar como referência
         const paymentRef = lockIds[0];
 
         const { error: updateError } = await supabase
@@ -995,16 +935,12 @@ export function RoomDetail(props: RoomDetailProps) {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error);
 
-        // SE FOR PIX: Interceta os dados, joga no estado local (com status) para abrir a UI de PIX
+        // SE FOR PIX: Interceta os dados, injeta no estado e mantém o modal de Checkout aberto
         if (method === "pix" && data.pixQrCode) {
-          setPixData({
-            qrCode: `data:image/png;base64,${data.pixQrCode}`,
-            copyPaste: data.pixCopyPaste,
-            bookingId: lockIds[0],
-            status: "pending",
-          });
-          setIsCheckoutOpen(false);
-          setCheckoutSummary(null);
+          setPixQrCode(data.pixQrCode);
+          setPixCopyPaste(data.pixCopyPaste);
+          setActiveBookingId(lockIds[0]);
+          setActionLoading(false);
           return;
         }
 
@@ -1039,6 +975,9 @@ export function RoomDetail(props: RoomDetailProps) {
   const handleCheckoutClose = useCallback(() => {
     setIsCheckoutOpen(false);
     setSelectedSlots([]);
+    setPixQrCode(null);
+    setPixCopyPaste(null);
+    setActiveBookingId(null);
 
     const summary = checkoutSummaryRef.current;
     if (summary && summary.lockIds) {
@@ -1187,7 +1126,7 @@ export function RoomDetail(props: RoomDetailProps) {
       <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-6 text-center">
         <Loader2 className="h-12 w-12 animate-spin text-[#BF4B24]" />
         <h2 className="text-xl font-black text-slate-900 mb-2">
-          Preparando o espaço...
+          A preparar o espaço...
         </h2>
       </div>
     );
@@ -1569,7 +1508,7 @@ export function RoomDetail(props: RoomDetailProps) {
                               <Button
                                 onClick={() => {
                                   toast({
-                                    title: "Iniciando assinatura",
+                                    title: "A iniciar assinatura",
                                     description:
                                       "Vá em 'Saldo Fusion' no painel principal para concluir.",
                                   });
@@ -1782,7 +1721,7 @@ export function RoomDetail(props: RoomDetailProps) {
                       disabled={actionLoading || selectedSlots.length === 0}
                       className={`w-full h-14 rounded-xl font-black transition-all text-base ${selectedSlots.length > 0 ? "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/25 hover:scale-[1.02]" : "bg-slate-100 text-slate-400 shadow-none"}`}
                     >
-                      {actionLoading ? "Processando..." : "Reservar Agora"}
+                      {actionLoading ? "A processar..." : "Reservar Agora"}
                     </Button>
                   </div>
                 </section>
@@ -1846,7 +1785,7 @@ export function RoomDetail(props: RoomDetailProps) {
                   <div className="bg-blue-50/50 border border-blue-100 p-4 rounded-xl flex gap-3">
                     <Shield className="w-5 h-5 text-blue-500 shrink-0" />
                     <p className="text-xs text-blue-800 font-medium leading-relaxed">
-                      Aluguéis recorrentes são fechados através do nosso{" "}
+                      Alugueres recorrentes são fechados através do nosso{" "}
                       <strong className="font-black">Chat Seguro</strong>.
                     </p>
                   </div>
@@ -1869,7 +1808,7 @@ export function RoomDetail(props: RoomDetailProps) {
                       className="w-full h-14 rounded-xl font-black bg-slate-900 hover:bg-slate-800 text-white gap-2 transition-all"
                     >
                       {actionLoading ? (
-                        "Processando..."
+                        "A processar..."
                       ) : (
                         <>
                           <MessageSquare className="w-4 h-4" /> Solicitar
@@ -1894,7 +1833,7 @@ export function RoomDetail(props: RoomDetailProps) {
                   <div className="bg-emerald-50/50 border border-emerald-100 p-4 rounded-xl flex gap-3">
                     <Shield className="w-5 h-5 text-emerald-600 shrink-0" />
                     <p className="text-xs text-emerald-800 font-medium leading-relaxed">
-                      O aluguel fixo garante exclusividade total sobre a sala.
+                      O aluguer fixo garante exclusividade total sobre a sala.
                       Inicie uma negociação segura.
                     </p>
                   </div>
@@ -1905,7 +1844,7 @@ export function RoomDetail(props: RoomDetailProps) {
                       className="w-full h-14 rounded-xl font-black bg-slate-900 hover:bg-slate-800 text-white gap-2 shadow-xl shadow-slate-900/10 transition-all"
                     >
                       {actionLoading ? (
-                        "Processando..."
+                        "A processar..."
                       ) : (
                         <>
                           <MessageSquare className="w-4 h-4" /> Iniciar
@@ -1976,7 +1915,7 @@ export function RoomDetail(props: RoomDetailProps) {
                   Ainda não há avaliações
                 </p>
                 <p className="text-sm text-slate-500 font-medium mt-1">
-                  Seja o primeiro a avaliar este espaço após seu uso!
+                  Seja o primeiro a avaliar este espaço após o seu uso!
                 </p>
               </div>
             ) : filteredReviews.length === 0 ? (
@@ -2098,7 +2037,7 @@ export function RoomDetail(props: RoomDetailProps) {
             disabled={actionLoading || selectedSlots.length === 0}
             className={`h-14 px-6 rounded-xl font-black transition-all w-[55%] text-base ${selectedSlots.length > 0 ? "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/25 active:scale-95" : "bg-slate-100 text-slate-400 shadow-none"}`}
           >
-            {actionLoading ? "Aguarde..." : "Reservar"}
+            {actionLoading ? "A aguardar..." : "Reservar"}
           </Button>
         ) : (
           <Button
@@ -2111,7 +2050,7 @@ export function RoomDetail(props: RoomDetailProps) {
             className="h-14 px-6 rounded-xl font-black bg-slate-900 text-white w-[55%] text-base flex gap-2 active:scale-95 shadow-xl shadow-slate-900/10"
           >
             {actionLoading ? (
-              "Aguarde..."
+              "A aguardar..."
             ) : (
               <>
                 <MessageSquare className="w-4 h-4" /> Negociar
@@ -2267,7 +2206,6 @@ export function RoomDetail(props: RoomDetailProps) {
         </div>
       )}
 
-      {/* MODAL DE CHECKOUT TRANSPARENTE */}
       <CheckoutModal
         isOpen={isCheckoutOpen}
         onClose={handleCheckoutClose}
@@ -2280,93 +2218,10 @@ export function RoomDetail(props: RoomDetailProps) {
         selectedSlots={selectedSlots}
         selectedDate={selectedDate || new Date()}
         totalBaseBRL={totalHourlyCost}
+        pixQrCode={pixQrCode}
+        pixCopyPaste={pixCopyPaste}
+        activeBookingId={activeBookingId}
       />
-
-      {/* MODAL NATIVO DE PIX (QR CODE + COPIA E COLA IN-APP) */}
-      <Dialog
-        open={!!pixData}
-        onOpenChange={(open) => {
-          // Impede o fechamento manual se estiver na tela de sucesso (evita cancelar o processo no meio)
-          if (!open && pixData?.status !== "success") {
-            setPixData(null);
-          }
-        }}
-      >
-        <DialogContent className="sm:max-w-md bg-white rounded-3xl p-6 text-center border-slate-200">
-          {pixData?.status === "success" ? (
-            <div className="flex flex-col items-center justify-center py-8 animate-in zoom-in-95">
-              <div className="w-24 h-24 bg-emerald-100 rounded-full flex items-center justify-center mb-6 shadow-inner">
-                <CheckCircle2 className="w-12 h-12 text-emerald-600" />
-              </div>
-              <DialogTitle className="text-2xl font-black text-slate-900 mb-2">
-                Pagamento Confirmado!
-              </DialogTitle>
-              <DialogDescription className="text-base font-medium text-slate-500 mb-6">
-                Sua reserva foi liberada instantaneamente. Redirecionando...
-              </DialogDescription>
-              <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
-            </div>
-          ) : (
-            <>
-              <DialogHeader className="mb-4">
-                <DialogTitle className="text-xl font-black text-slate-900 flex justify-center items-center gap-2">
-                  <QrCode className="w-6 h-6 text-[#BF4B24]" />
-                  Pagamento via Pix
-                </DialogTitle>
-                <DialogDescription className="text-slate-500 font-medium text-sm">
-                  Escaneie o QR Code abaixo no aplicativo do seu banco para
-                  confirmar a reserva instantaneamente.
-                </DialogDescription>
-              </DialogHeader>
-
-              {pixData && (
-                <div className="flex flex-col items-center gap-6">
-                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl shadow-sm relative overflow-hidden">
-                    <div className="absolute top-0 left-0 w-full h-2 bg-[#BF4B24]"></div>
-                    <img
-                      src={pixData.qrCode}
-                      alt="QR Code Pix"
-                      className="w-48 h-48 mx-auto object-contain"
-                    />
-                  </div>
-
-                  <div className="w-full space-y-2">
-                    <p className="text-xs font-bold text-slate-500 uppercase tracking-widest text-left pl-1">
-                      Pix Copia e Cola
-                    </p>
-                    <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
-                      <input
-                        readOnly
-                        value={pixData.copyPaste}
-                        className="flex-1 bg-transparent text-xs font-mono text-slate-600 outline-none truncate px-2"
-                      />
-                      <Button
-                        onClick={() => {
-                          navigator.clipboard.writeText(pixData.copyPaste);
-                          toast({
-                            title: "Copiado!",
-                            description:
-                              "Código Pix copiado para a área de transferência.",
-                          });
-                        }}
-                        variant="outline"
-                        className="shrink-0 rounded-lg text-[#BF4B24] border-[#BF4B24]/20 hover:bg-[#BF4B24]/10"
-                      >
-                        <Copy className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3 text-sm font-bold text-amber-600 bg-amber-50 px-4 py-3 rounded-lg border border-amber-200 w-full justify-center">
-                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-                    Aguardando a confirmação do banco...
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

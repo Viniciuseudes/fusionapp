@@ -8,6 +8,7 @@ import {
   CreditCard,
   CalendarIcon,
   MapPin,
+  Check,
   QrCode,
   ArrowRight,
   CheckCircle2,
@@ -15,7 +16,6 @@ import {
   Ticket,
   Loader2,
   Percent,
-  Check,
   ArrowDownRight,
   ShieldCheck,
   Lock,
@@ -62,7 +62,6 @@ interface CheckoutModalProps {
   selectedSlots: string[];
   selectedDate: Date;
   totalBaseBRL: number;
-  // NOVAS PROPRIEDADES INJETADAS PELO PAI APÓS O RETORNO DA API
   pixQrCode?: string | null;
   pixCopyPaste?: string | null;
   activeBookingId?: string | null;
@@ -724,7 +723,7 @@ export function CheckoutModal({
                     </div>
                   </div>
 
-                  {/* FORMULÁRIO DO CARTÃO */}
+                  {/* FORMULÁRIO DO CARTÃO (Expande apenas se selecionado) */}
                   {paymentMethod === "card" && (
                     <div className="px-4 pb-4 animate-in slide-in-from-top-2">
                       <div className="bg-white border border-[#BF4B24]/30 rounded-xl p-4 space-y-3">
@@ -868,7 +867,7 @@ export function CheckoutModal({
           </div>
         )}
 
-        {/* TELA DE PIX */}
+        {/* TELA DE PIX DENTRO DO MODAL DE CHECKOUT */}
         {step === "pix" && pixQrCode && (
           <div className="p-8 md:p-12 flex flex-col items-center text-center">
             <h2 className="text-2xl font-black text-slate-900 mb-2">
@@ -914,7 +913,7 @@ export function CheckoutModal({
 
             <div className="flex items-center gap-3 text-sm font-bold text-amber-600 bg-amber-50 px-6 py-3 rounded-xl border border-amber-200 shadow-sm">
               <Loader2 className="w-5 h-5 animate-spin shrink-0" />
-              <span>Aguardando a confirmação do pagamento no banco...</span>
+              <span>A aguardar a confirmação do pagamento no banco...</span>
             </div>
           </div>
         )}
@@ -930,10 +929,10 @@ export function CheckoutModal({
             </h2>
             <p className="text-slate-500 font-medium max-w-sm mb-10">
               O pagamento foi reconhecido instantaneamente e a sala já está
-              reservada para você na data escolhida.
+              reservada para si na data escolhida.
             </p>
             <Button
-              onClick={onClose}
+              onClick={() => window.location.reload()}
               className="w-full max-w-xs h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl text-lg shadow-md"
             >
               Concluir
