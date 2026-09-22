@@ -122,7 +122,7 @@ export function RoomDetail(props: RoomDetailProps) {
   const [checkoutSummary, setCheckoutSummary] =
     useState<CheckoutSummary | null>(null);
 
-  // NOVO: Estado para exibir o Modal de Pix Nativo
+  // Estado para exibir o Modal de Pix Nativo
   const [pixData, setPixData] = useState<{
     qrCode: string;
     copyPaste: string;
@@ -721,7 +721,6 @@ export function RoomDetail(props: RoomDetailProps) {
         let calcUsedTier = roomTier;
         const required = summaryData.creditsRequired;
 
-        // Efeito Cascata: Se não tiver saldo da sala certa, tenta puxar do nível acima
         if (roomTier === "start") {
           if (startBal >= required) calcUsedTier = "start";
           else if (vipBal >= required) calcUsedTier = "vip";
@@ -732,7 +731,6 @@ export function RoomDetail(props: RoomDetailProps) {
         } else {
           calcUsedTier = "master";
         }
-        // ==========================================================
 
         setCheckoutSummary({
           ...summaryData,
@@ -878,7 +876,6 @@ export function RoomDetail(props: RoomDetailProps) {
         setSelectedSlots([]);
         onBack();
       } else {
-        // FLUXO DE DINHEIRO (PIX ou CARTÃO DE CRÉDITO TRANSPARENTE)
         toast({
           title: "A processar pagamento...",
           description: "Por favor, aguarde um momento.",
@@ -909,7 +906,6 @@ export function RoomDetail(props: RoomDetailProps) {
           });
         }
 
-        // Prepara os dados formatados do cartão se o método for 'card'
         let formattedCard = undefined;
         let holderInfo = undefined;
 
@@ -958,7 +954,7 @@ export function RoomDetail(props: RoomDetailProps) {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error);
 
-        // SE FOR PIX: Interceta o QR Code e exibe na tela sem redirecionar
+        // SE FOR PIX: Exibe o QR Code nativo na tela sem redirecionamentos
         if (method === "pix" && data.pixQrCode) {
           setPixData({
             qrCode: `data:image/png;base64,${data.pixQrCode}`,
@@ -966,10 +962,10 @@ export function RoomDetail(props: RoomDetailProps) {
           });
           setIsCheckoutOpen(false);
           setCheckoutSummary(null);
-          return; // 🛑 Para aqui, mostrando o QR Code nativo
+          return;
         }
 
-        // SE FOR CARTÃO DE CRÉDITO: Sucesso imediato sem sair da página
+        // SE FOR CARTÃO DE CRÉDITO: Sucesso imediato in-app
         toast({
           title: "Pagamento Aprovado! 🎉",
           description: "A sua reserva foi confirmada com sucesso.",
@@ -2243,7 +2239,7 @@ export function RoomDetail(props: RoomDetailProps) {
         totalBaseBRL={totalHourlyCost}
       />
 
-      {/* MODAL NATIVO DE PIX (QR CODE + COPIA E COLA) */}
+      {/* MODAL NATIVO DE PIX (QR CODE + COPIA E COLA IN-APP) */}
       <Dialog open={!!pixData} onOpenChange={() => setPixData(null)}>
         <DialogContent className="sm:max-w-md bg-white rounded-3xl p-6 text-center border-slate-200">
           <DialogHeader className="mb-4">

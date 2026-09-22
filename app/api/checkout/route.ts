@@ -13,7 +13,6 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { checkoutType, packageId, hours, price, packageName, paymentRef } = body;
     
-    // Define o billingType (Para pacotes forçamos CREDIT_CARD, para reservas aceita PIX ou CREDIT_CARD)
     const billingType = body.billingType || (checkoutType === 'package' ? 'CREDIT_CARD' : 'PIX');
 
     const supabase = await createClient();
@@ -46,7 +45,6 @@ export async function POST(req: Request) {
       await supabase.from("profiles").update({ asaas_customer_id: asaasCustomerId }).eq("id", user.id);
     }
 
-    // 2. DADOS DO CARTÃO (Caso o frontend envie)
     const creditCard = body.creditCard || {
       holderName: "FUSION TEST",
       number: "4111111111111111",
@@ -64,7 +62,7 @@ export async function POST(req: Request) {
       phone: profile?.phone?.replace(/\D/g, '') || "11999999999"
     };
 
-    // 3. ASSINATURA RECORRENTE NO CARTÃO (FUSION PASS)
+    // 2. ASSINATURA RECORRENTE NO CARTÃO (FUSION PASS)
     if (checkoutType === "package") {
       const subResponse = await fetch(`${ASAAS_API_URL}/subscriptions`, {
         method: "POST",
@@ -78,7 +76,8 @@ export async function POST(req: Request) {
           description: `Fusion Pass ${packageName} - ${hours} Créditos/mês`,
           externalReference: `package|${user.id}|${packageId}|${hours}`,
           creditCard,
-          creditCardHolderInfo
+          creditCardHolderInfo,
+          notificationDisabled: true,
         }),
       });
 
@@ -97,13 +96,13 @@ export async function POST(req: Request) {
       
       return NextResponse.json({ 
         success: true, 
-        message: "Assinatura processada! Os créditos ficarão disponíveis assim que o banco confirmar.", 
+        message: "Assinatura processada com sucesso!", 
         subscriptionId: subData.id,
         invoiceUrl: "/dashboard" 
       });
     }
 
-    // 4. COMPRA AVULSA DE SALA (RESERVA)
+    // 3. COMPRA AVULSA DE SALA (RESERVA)
     const paymentPayload: any = {
       customer: asaasCustomerId,
       billingType: billingType,
@@ -111,6 +110,7 @@ export async function POST(req: Request) {
       dueDate: new Date().toISOString().split('T')[0], 
       description: `Reserva de Espaço - Fusion Clinic`,
       externalReference: `booking|${paymentRef}`,
+      notificationDisabled: true, // <-- Desativa o envio de e-mails automáticos pelo Asaas
     };
 
     if (billingType === "CREDIT_CARD") {
