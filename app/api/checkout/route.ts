@@ -11,9 +11,9 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json();
-    const { checkoutType, packageId, hours, price, packageName, paymentRef } = body;
+    const { checkoutType, packageId, hours, price, packageName, paymentRef, billingType: requestedBillingType } = body;
     
-    const billingType = body.billingType || (checkoutType === 'package' ? 'CREDIT_CARD' : 'PIX');
+    const billingType = requestedBillingType || body.billingType || (checkoutType === 'package' ? 'CREDIT_CARD' : 'PIX');
 
     const supabase = await createClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -110,7 +110,7 @@ export async function POST(req: Request) {
       dueDate: new Date().toISOString().split('T')[0], 
       description: `Reserva de Espaço - Fusion Clinic`,
       externalReference: `booking|${paymentRef}`,
-      notificationDisabled: true, // <-- Desativa o envio de e-mails automáticos pelo Asaas
+      notificationDisabled: true, // Impede o Asaas de enviar e-mails ao cliente
     };
 
     if (billingType === "CREDIT_CARD") {
@@ -127,7 +127,7 @@ export async function POST(req: Request) {
     const paymentData = await paymentResponse.json();
     if (!paymentResponse.ok) throw new Error(paymentData.errors?.[0]?.description || "Erro ao gerar cobrança.");
 
-    // BUSCA OS DADOS DO QR CODE SE FOR PIX
+    // 4. BUSCA OS DADOS DO QR CODE SE FOR PIX (Garante exibição in-app imediata)
     let pixQrCode = null;
     let pixCopyPaste = null;
 

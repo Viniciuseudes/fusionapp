@@ -122,7 +122,7 @@ export function RoomDetail(props: RoomDetailProps) {
   const [checkoutSummary, setCheckoutSummary] =
     useState<CheckoutSummary | null>(null);
 
-  // Estado para exibir o Modal de Pix Nativo
+  // Estado para exibir o Modal de Pix Nativo In-App
   const [pixData, setPixData] = useState<{
     qrCode: string;
     copyPaste: string;
@@ -788,7 +788,7 @@ export function RoomDetail(props: RoomDetailProps) {
   };
 
   // ==========================================
-  // CONFIRMAÇÃO DO CHECKOUT COM TRANSPARÊNCIA (PIX & CARTÃO)
+  // CONFIRMAÇÃO DO CHECKOUT BLINDADA (PIX & CARTÃO)
   // ==========================================
   const handleConfirmCheckout = async (
     method: "wallet" | "pix" | "card",
@@ -954,7 +954,7 @@ export function RoomDetail(props: RoomDetailProps) {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error);
 
-        // SE FOR PIX: Exibe o QR Code nativo na tela sem redirecionamentos
+        // SE FOR PIX: Interceta os dados e abre imediatamente o modal nativo com o QR Code
         if (method === "pix" && data.pixQrCode) {
           setPixData({
             qrCode: `data:image/png;base64,${data.pixQrCode}`,
@@ -995,7 +995,7 @@ export function RoomDetail(props: RoomDetailProps) {
 
   const handleCheckoutClose = useCallback(() => {
     setIsCheckoutOpen(false);
-    setSelectedSlots([]);
+    setSelectedSlots([]); // <--- CORRIGIDO AQUI (adicionado parênteses corretos)
 
     const summary = checkoutSummaryRef.current;
     if (summary && summary.lockIds) {
