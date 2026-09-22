@@ -13,6 +13,7 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { checkoutType, packageId, hours, price, packageName, paymentRef } = body;
     
+    // Define o billingType (Para pacotes forçamos CREDIT_CARD, para reservas aceita PIX ou CREDIT_CARD)
     const billingType = body.billingType || (checkoutType === 'package' ? 'CREDIT_CARD' : 'PIX');
 
     const supabase = await createClient();
@@ -26,6 +27,7 @@ export async function POST(req: Request) {
 
     let asaasCustomerId = profile?.asaas_customer_id;
 
+    // 1. CRIA OU RECUPERA O CLIENTE NO ASAAS
     if (!asaasCustomerId) {
       const customerName = profile?.full_name || "Dr(a). Fusion Clinic";
       const customerEmail = user.email || "medico@fusionclinic.com.br";
@@ -44,6 +46,7 @@ export async function POST(req: Request) {
       await supabase.from("profiles").update({ asaas_customer_id: asaasCustomerId }).eq("id", user.id);
     }
 
+    // 2. DADOS DO CARTÃO (Caso o frontend envie)
     const creditCard = body.creditCard || {
       holderName: "FUSION TEST",
       number: "4111111111111111",
@@ -61,7 +64,7 @@ export async function POST(req: Request) {
       phone: profile?.phone?.replace(/\D/g, '') || "11999999999"
     };
 
-    // ASSINATURA RECORRENTE (FUSION PASS)
+    // 3. ASSINATURA RECORRENTE NO CARTÃO (FUSION PASS)
     if (checkoutType === "package") {
       const subResponse = await fetch(`${ASAAS_API_URL}/subscriptions`, {
         method: "POST",
@@ -70,7 +73,7 @@ export async function POST(req: Request) {
           customer: asaasCustomerId,
           billingType: "CREDIT_CARD",
           value: price,
-          nextDueDate: new Date().toISOString().split('T')[0],
+          nextDueDate: new Date().toISOString().split('T')[0], 
           cycle: "MONTHLY", 
           description: `Fusion Pass ${packageName} - ${hours} Créditos/mês`,
           externalReference: `package|${user.id}|${packageId}|${hours}`,
@@ -100,7 +103,7 @@ export async function POST(req: Request) {
       });
     }
 
-    // COMPRA AVULSA DE SALA (RESERVA)
+    // 4. COMPRA AVULSA DE SALA (RESERVA)
     const paymentPayload: any = {
       customer: asaasCustomerId,
       billingType: billingType,
@@ -124,7 +127,7 @@ export async function POST(req: Request) {
     const paymentData = await paymentResponse.json();
     if (!paymentResponse.ok) throw new Error(paymentData.errors?.[0]?.description || "Erro ao gerar cobrança.");
 
-    // BURACO DE MINHOCA DO PIX: Vamos buscar a imagem do QR Code
+    // BUSCA OS DADOS DO QR CODE SE FOR PIX
     let pixQrCode = null;
     let pixCopyPaste = null;
 
@@ -136,8 +139,10 @@ export async function POST(req: Request) {
       const qrData = await qrResponse.json();
       
       if (qrResponse.ok) {
-        pixQrCode = qrData.encodedImage;
-        pixCopyPaste = qrData.payload;
+        pixQrCode = qrData.encodedImage; 
+        pixCopyPaste = qrData.payload;     
+      } else {
+        throw new Error("Erro ao gerar o QR Code do Pix no Asaas.");
       }
     }
 
@@ -145,8 +150,8 @@ export async function POST(req: Request) {
       success: true, 
       paymentId: paymentData.id, 
       invoiceUrl: "/dashboard",
-      pixQrCode,     // Retorna a imagem do QR Code em Base64
-      pixCopyPaste   // Retorna o texto Copia e Cola
+      pixQrCode,     
+      pixCopyPaste   
     });
 
   } catch (error: any) {
