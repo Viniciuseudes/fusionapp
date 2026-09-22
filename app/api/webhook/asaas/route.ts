@@ -54,10 +54,14 @@ export async function POST(req: Request) {
         // Fluxo B: Pagamento Avulso de Sala (Confirma a reserva diretamente)
         const paymentRef = rest[0]; 
         
+        // CORREÇÃO: O paymentRef enviado na criação é o ID da reserva, então buscamos por "id" e não "asaas_payment_id"
         await supabaseAdmin
           .from("bookings")
-          .update({ status: "confirmed" })
-          .eq("asaas_payment_id", paymentRef);
+          .update({ 
+            status: "confirmed",
+            asaas_payment_id: payment.id // Aproveita para salvar o ID do Asaas
+          })
+          .eq("id", paymentRef);
           
         console.log(`✅ Reserva ${paymentRef} confirmada com sucesso via pagamento avulso!`);
       }
