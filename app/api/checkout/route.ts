@@ -25,7 +25,7 @@ export async function POST(req: Request) {
     const { data: profile } = await supabase.from("profiles").select("*").eq("id", user.id).single();
 
     let asaasCustomerId = profile?.asaas_customer_id;
-    const blindEmail = "notificacoes@fusionclinic.com.br"; // E-mail cego para bloquear notificações do Asaas
+    const blindEmail = "notificacoes@fusionclinic.com.br"; // E-mail cego para bloquear notificações por e-mail
 
     // 1. CRIA OU RECUPERA O CLIENTE NO ASAAS
     if (!asaasCustomerId) {
@@ -35,7 +35,14 @@ export async function POST(req: Request) {
       const customerResponse = await fetch(`${ASAAS_API_URL}/customers`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "access_token": ASAAS_API_KEY },
-        body: JSON.stringify({ name: customerName, email: blindEmail, cpfCnpj: customerCpfCnpj }),
+        body: JSON.stringify({ 
+          name: customerName, 
+          email: blindEmail, 
+          cpfCnpj: customerCpfCnpj,
+          phone: "", // Força vazio para impedir SMS
+          mobilePhone: "", // Força vazio para impedir WhatsApp
+          notificationDisabled: true // Desativa no nível do cliente
+        }),
       });
 
       const customerData = await customerResponse.json();
@@ -44,13 +51,19 @@ export async function POST(req: Request) {
       asaasCustomerId = customerData.id;
       await supabase.from("profiles").update({ asaas_customer_id: asaasCustomerId }).eq("id", user.id);
     } else {
-      // SOLUÇÃO DEFINITIVA DE E-MAILS: Se o cliente já existe, forçamos um UPDATE no Asaas
-      // para apagar o e-mail real que possa estar lá guardado do passado.
+      // SOLUÇÃO DEFINITIVA ANTI-TAXAS: 
+      // Se o cliente já existe, forçamos um UPDATE no Asaas para apagar qualquer telefone ou e-mail real 
+      // que lá esteja guardado de testes passados.
       await fetch(`${ASAAS_API_URL}/customers/${asaasCustomerId}`, {
         method: "POST", // A API V3 do Asaas usa POST na URL com ID para dar Update
         headers: { "Content-Type": "application/json", "access_token": ASAAS_API_KEY },
-        body: JSON.stringify({ email: blindEmail }),
-      }).catch(err => console.error("Erro silencioso ao atualizar email do customer no Asaas:", err));
+        body: JSON.stringify({ 
+          email: blindEmail,
+          phone: "", // Apaga o telefone fixo do Asaas
+          mobilePhone: "", // Apaga o telefone móvel do Asaas
+          notificationDisabled: true // Desativa notificações na raiz do cliente
+        }),
+      }).catch(err => console.error("Erro silencioso ao atualizar cliente no Asaas:", err));
     }
 
     const creditCard = body.creditCard || {
@@ -61,9 +74,10 @@ export async function POST(req: Request) {
       ccv: "123"
     };
 
+    // O telefone real só vai aqui, camuflado no cartão, para o sistema de prevenção de fraudes. O Asaas não envia SMS para o cartão.
     const creditCardHolderInfo = body.creditCardHolderInfo || {
       name: profile?.full_name || "FUSION TEST",
-      email: blindEmail, // E-mail cego também no cartão
+      email: blindEmail, 
       cpfCnpj: profile?.cpf?.replace(/\D/g, '') || "07519139045",
       postalCode: profile?.cep?.replace(/\D/g, '') || "01310100",
       addressNumber: profile?.address_number || "1000",
@@ -85,7 +99,7 @@ export async function POST(req: Request) {
           externalReference: `package|${user.id}|${packageId}|${hours}`,
           creditCard,
           creditCardHolderInfo,
-          notificationDisabled: true,
+          notificationDisabled: true, // Desativa notificações na assinatura
         }),
       });
 
@@ -118,7 +132,7 @@ export async function POST(req: Request) {
       dueDate: new Date().toISOString().split('T')[0], 
       description: `Reserva de Espaço - Fusion Clinic`,
       externalReference: `booking|${paymentRef}`,
-      notificationDisabled: true,
+      notificationDisabled: true, // Desativa notificações na cobrança avulsa
     };
 
     if (billingType === "CREDIT_CARD") {
