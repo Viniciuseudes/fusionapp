@@ -1,3 +1,4 @@
+// components/room-detail.tsx
 "use client";
 
 import { useEffect, useState, useRef, useMemo, useCallback } from "react";
@@ -112,7 +113,6 @@ export function RoomDetail(props: RoomDetailProps) {
   const [checkoutSummary, setCheckoutSummary] =
     useState<CheckoutSummary | null>(null);
 
-  // ESTADOS DO PIX CORRIGIDOS
   const [pixQrCode, setPixQrCode] = useState<string | null>(null);
   const [pixCopyPaste, setPixCopyPaste] = useState<string | null>(null);
   const [activeBookingId, setActiveBookingId] = useState<string | null>(null);
@@ -935,7 +935,6 @@ export function RoomDetail(props: RoomDetailProps) {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error);
 
-        // SE FOR PIX: Interceta os dados, injeta no estado e mantém o modal de Checkout aberto
         if (method === "pix" && data.pixQrCode) {
           setPixQrCode(data.pixQrCode);
           setPixCopyPaste(data.pixCopyPaste);
@@ -944,7 +943,6 @@ export function RoomDetail(props: RoomDetailProps) {
           return;
         }
 
-        // SE FOR CARTÃO DE CRÉDITO: Sucesso imediato in-app
         toast({
           title: "Pagamento Aprovado! 🎉",
           description: "A sua reserva foi confirmada com sucesso.",
@@ -972,7 +970,8 @@ export function RoomDetail(props: RoomDetailProps) {
     checkoutSummaryRef.current = checkoutSummary;
   }, [checkoutSummary]);
 
-  const handleCheckoutClose = useCallback(() => {
+  // CORREÇÃO: Verifica se a reserva não foi confirmada antes de apagar
+  const handleCheckoutClose = useCallback(async () => {
     setIsCheckoutOpen(false);
     setSelectedSlots([]);
     setPixQrCode(null);
@@ -982,13 +981,24 @@ export function RoomDetail(props: RoomDetailProps) {
     const summary = checkoutSummaryRef.current;
     if (summary && summary.lockIds) {
       const lockIds = summary.lockIds;
-
-      setRoomBookings((prevBookings) =>
-        prevBookings.filter((b) => !lockIds.includes(b.id)),
-      );
-
       const supabaseClient = createClient();
-      supabaseClient.from("bookings").delete().in("id", lockIds).then();
+
+      const { data: checkBookings } = await supabaseClient
+        .from("bookings")
+        .select("id, status")
+        .in("id", lockIds);
+
+      const pendingIds =
+        checkBookings
+          ?.filter((b) => b.status === "pending_payment")
+          .map((b) => b.id) || [];
+
+      if (pendingIds.length > 0) {
+        setRoomBookings((prevBookings) =>
+          prevBookings.filter((b) => !pendingIds.includes(b.id)),
+        );
+        await supabaseClient.from("bookings").delete().in("id", pendingIds);
+      }
     }
 
     setCheckoutSummary(null);
