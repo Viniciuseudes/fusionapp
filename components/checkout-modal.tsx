@@ -158,16 +158,14 @@ export function CheckoutModal({
     }
   }, [pixQrCode, pixCopyPaste, activeBookingId]);
 
-  // ==========================================
-  // MOTOR DE BUSCA ATIVA (RESOLVE A VOLTA DO APP DO BANCO E RECONCILIAÇÃO)
-  // ==========================================
+  // MOTOR DE BUSCA ATIVA E RECONCILIAÇÃO
   useEffect(() => {
     if (step !== "pix" || !activeBookingId) return;
 
     let isChecking = false;
 
-    // Função que utiliza a Reconciliação Ativa da API de Checkout
     const checkPaymentStatus = async () => {
+      // Sem o 'step === "success"' aqui para evitar o erro do TypeScript
       if (isChecking) return;
       isChecking = true;
 
@@ -180,25 +178,23 @@ export function CheckoutModal({
           setShowCloseConfirm(false);
           toast({
             title: "Pagamento Confirmado!",
-            description:
-              "Sua reserva foi liberada com sucesso e o horário foi bloqueado.",
+            description: "Sua reserva foi liberada com sucesso.",
           });
         } else if (data.status === "cancelled") {
           toast({
             variant: "destructive",
             title: "Pagamento Expirado",
-            description: "O tempo esgotou e sua reserva foi cancelada.",
+            description: "Sua reserva foi cancelada.",
           });
           onClose();
         }
       } catch (err) {
-        console.error("Erro ao verificar status de pagamento", err);
+        console.error("Erro ao verificar status silenciosamente", err);
       } finally {
         isChecking = false;
       }
     };
 
-    // 1. WebSocket (Supabase Realtime para notificação push imediata)
     const channel = supabase
       .channel(`booking_status_${activeBookingId}`)
       .on(
@@ -209,30 +205,14 @@ export function CheckoutModal({
           table: "bookings",
           filter: `id=eq.${activeBookingId}`,
         },
-        (payload: any) => {
-          if (payload.new && payload.new.status === "confirmed") {
-            setStep("success");
-            setShowCloseConfirm(false);
-            toast({
-              title: "Pagamento Confirmado!",
-              description:
-                "Sua reserva foi liberada com sucesso e o horário foi bloqueado.",
-            });
-          } else {
-            checkPaymentStatus();
-          }
-        },
+        () => checkPaymentStatus(),
       )
       .subscribe();
 
-    // 2. Polling Ativo (Checa a cada 3 segundos)
     const interval = setInterval(checkPaymentStatus, 3000);
 
-    // 3. Sensor de Volta do App do Banco
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        checkPaymentStatus();
-      }
+      if (document.visibilityState === "visible") checkPaymentStatus();
     };
 
     window.addEventListener("visibilitychange", handleVisibilityChange);
@@ -246,7 +226,6 @@ export function CheckoutModal({
     };
   }, [step, activeBookingId, supabase, toast, onClose]);
 
-  // O Relógio Imparável
   useEffect(() => {
     if (!isOpen || step === "success" || !expiresAt) return;
 
@@ -268,11 +247,8 @@ export function CheckoutModal({
   }, [isOpen, step, expiresAt, onClose, toast]);
 
   const handleAttemptClose = () => {
-    if (step === "pix") {
-      setShowCloseConfirm(true);
-    } else {
-      onClose();
-    }
+    if (step === "pix") setShowCloseConfirm(true);
+    else onClose();
   };
 
   const handleApplyCoupon = async () => {
@@ -302,9 +278,7 @@ export function CheckoutModal({
           throw new Error("Este cupom não é válido para esta sala.");
       }
       if (coupon.type === "bogo" && selectedSlots.length < 2)
-        throw new Error(
-          "O cupom 'Leve 2' exige no mínimo 2 horas selecionadas.",
-        );
+        throw new Error("O cupom 'Leve 2' exige no mínimo 2 horas.");
 
       setAppliedCoupon(coupon);
       setCouponFeedback({
@@ -338,8 +312,7 @@ export function CheckoutModal({
       removeCoupon();
       toast({
         title: "Cupom Removido",
-        description:
-          "Não é possível aplicar cupons em pagamentos com Créditos (Horas).",
+        description: "Não é possível aplicar cupons com Créditos.",
       });
     }
     setPaymentMethod(method);
@@ -404,8 +377,7 @@ export function CheckoutModal({
       toast({
         variant: "destructive",
         title: "Atenção",
-        description:
-          "Não foi possível copiar automaticamente. Copie o código de forma manual.",
+        description: "Copie o código manualmente.",
       });
     }
   };
@@ -422,7 +394,6 @@ export function CheckoutModal({
   const roomTier = room.tier || "start";
   const usedTier = summary.usedTier || "start";
   const isCascading = getTierWeight(usedTier) > getTierWeight(roomTier);
-
   const finalCredits = summary.creditsRequired;
   const isMoneyMode = paymentMethod === "pix" || paymentMethod === "card";
 
@@ -484,12 +455,10 @@ export function CheckoutModal({
 
           {step === "confirm" && (
             <div className="grid grid-cols-1 md:grid-cols-2 overflow-y-auto">
-              {/* LADO ESQUERDO */}
               <div className="p-6 md:p-8 bg-slate-50 border-b md:border-b-0 md:border-r border-slate-100 flex flex-col">
                 <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-6">
                   Detalhes do Espaço
                 </h3>
-
                 <div className="flex gap-4 mb-8">
                   <div className="w-20 h-20 rounded-xl overflow-hidden bg-slate-200 shrink-0 border border-slate-200">
                     <img
@@ -524,7 +493,6 @@ export function CheckoutModal({
                     </div>
                   </div>
 
-                  {/* MÓDULO DE CUPOM */}
                   <div className="bg-white border border-slate-200 p-5 rounded-xl shadow-sm mb-6">
                     <h4 className="text-xs font-bold text-slate-900 flex items-center justify-between mb-3">
                       <span className="flex items-center gap-1.5">
@@ -537,7 +505,6 @@ export function CheckoutModal({
                         </span>
                       )}
                     </h4>
-
                     {!appliedCoupon ? (
                       <>
                         <div className="flex gap-2">
@@ -635,12 +602,10 @@ export function CheckoutModal({
                 </div>
               </div>
 
-              {/* LADO DIREITO */}
               <div className="p-6 md:p-8 flex flex-col bg-white">
                 <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-6">
                   Resumo de Compra
                 </h3>
-
                 <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 mb-8">
                   {!isMoneyMode ? (
                     <div className="flex justify-between items-center">
@@ -798,7 +763,6 @@ export function CheckoutModal({
                         )}
                       </div>
                     </div>
-
                     {paymentMethod === "card" && (
                       <div className="px-4 pb-4 animate-in slide-in-from-top-2">
                         <div className="bg-white border border-[#BF4B24]/30 rounded-xl p-4 space-y-3">
@@ -978,7 +942,7 @@ export function CheckoutModal({
                     Vence em {timeFormatted}
                   </p>
                   <div className="flex items-center gap-2 text-xs font-bold text-amber-600 bg-amber-50 px-4 py-2.5 rounded-lg border border-amber-200">
-                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />{" "}
                     Aguardando confirmação do banco...
                   </div>
                 </div>
@@ -1048,7 +1012,7 @@ export function CheckoutModal({
                   </div>
                 </div>
                 <div className="flex items-center gap-3 text-sm font-bold text-amber-600 bg-amber-50 px-6 py-3 rounded-xl border border-amber-200 shadow-sm">
-                  <Loader2 className="w-5 h-5 animate-spin shrink-0" />
+                  <Loader2 className="w-5 h-5 animate-spin shrink-0" />{" "}
                   <span>
                     Vence em {timeFormatted} - Aguardando pagamento...
                   </span>
