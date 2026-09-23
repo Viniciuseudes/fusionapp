@@ -5,7 +5,6 @@ import { createClient } from "@/utils/supabase/client";
 import {
   Wallet,
   X,
-  Check,
   CreditCard,
   CalendarIcon,
   MapPin,
@@ -14,6 +13,7 @@ import {
   CheckCircle2,
   Clock,
   Ticket,
+  Check,
   Loader2,
   Percent,
   ArrowDownRight,
@@ -27,6 +27,7 @@ import { Label } from "@/components/ui/label";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useToast } from "@/hooks/use-toast";
+import { Badge } from "@/components/ui/badge";
 
 export interface CheckoutSummary {
   durationHours: number;
@@ -139,7 +140,7 @@ export function CheckoutModal({
     if (isOpen) {
       setStep("confirm");
       setTimeLeft(5 * 60);
-      setExpiresAt(null);
+      setExpiresAt(Date.now() + 5 * 60 * 1000);
       setAppliedCoupon(null);
       setCouponCode("");
       setCouponFeedback(null);
@@ -156,44 +157,85 @@ export function CheckoutModal({
     }
   }, [pixQrCode, pixCopyPaste, activeBookingId]);
 
+  // ==========================================
+  // MOTOR DE BUSCA ATIVA (RESOLVE A VOLTA DO APP DO BANCO)
+  // ==========================================
   useEffect(() => {
-    if (step === "pix" && activeBookingId) {
-      const channel = supabase
-        .channel(`booking_status_${activeBookingId}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "UPDATE",
-            schema: "public",
-            table: "bookings",
-            filter: `id=eq.${activeBookingId}`,
-          },
-          (payload) => {
-            if (payload.new.status === "confirmed") {
-              setStep("success");
-              setShowCloseConfirm(false);
-              toast({
-                title: "Pagamento Confirmado!",
-                description: "Sua reserva foi liberada com sucesso.",
-              });
-            } else if (payload.new.status === "cancelled") {
-              toast({
-                variant: "destructive",
-                title: "Pagamento Expirado",
-                description: "Sua reserva foi cancelada.",
-              });
-              onClose();
-            }
-          },
-        )
-        .subscribe();
+    if (step !== "pix" || !activeBookingId) return;
 
-      return () => {
-        supabase.removeChannel(channel);
-      };
-    }
+    let isChecking = false;
+
+    // Função que vai na base de dados checar se já está pago
+    const checkPaymentStatus = async () => {
+      if (isChecking) return;
+      isChecking = true;
+
+      try {
+        const { data, error } = await supabase
+          .from("bookings")
+          .select("status")
+          .eq("id", activeBookingId)
+          .single();
+
+        if (data && data.status === "confirmed") {
+          setStep("success");
+          setShowCloseConfirm(false);
+          toast({
+            title: "Pagamento Confirmado!",
+            description: "Sua reserva foi liberada com sucesso.",
+          });
+        } else if (data && data.status === "cancelled") {
+          toast({
+            variant: "destructive",
+            title: "Pagamento Expirado",
+            description: "Sua reserva foi cancelada.",
+          });
+          onClose();
+        }
+      } catch (err) {
+        console.error("Erro ao verificar status silenciosamente", err);
+      } finally {
+        isChecking = false;
+      }
+    };
+
+    // 1. WebSocket (Para quando o usuário paga pelo PC e olha pro celular)
+    const channel = supabase
+      .channel(`booking_status_${activeBookingId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "bookings",
+          filter: `id=eq.${activeBookingId}`,
+        },
+        () => checkPaymentStatus(),
+      )
+      .subscribe();
+
+    // 2. Polling (Checa a cada 3 segundos, super leve para o banco)
+    const interval = setInterval(checkPaymentStatus, 3000);
+
+    // 3. Sensor de Volta do App do Banco (Dispara imediatamente quando o Chrome/Safari volta pra tela)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        checkPaymentStatus();
+      }
+    };
+
+    window.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", checkPaymentStatus);
+
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(interval);
+      window.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", checkPaymentStatus);
+    };
   }, [step, activeBookingId, supabase, toast, onClose]);
 
+  // O Relógio Imparável
   useEffect(() => {
     if (!isOpen || step === "success" || !expiresAt) return;
 
@@ -240,26 +282,18 @@ export function CheckoutModal({
 
       if (error || !coupon)
         throw new Error("Cupom inválido ou não encontrado.");
-
-      if (coupon.valid_until && new Date(coupon.valid_until) < new Date()) {
+      if (coupon.valid_until && new Date(coupon.valid_until) < new Date())
         throw new Error("Este cupom já expirou.");
-      }
-
-      if (coupon.max_uses && coupon.current_uses >= coupon.max_uses) {
+      if (coupon.max_uses && coupon.current_uses >= coupon.max_uses)
         throw new Error("Este cupom atingiu o limite de utilizações.");
-      }
-
       if (coupon.valid_room_ids && coupon.valid_room_ids.length > 0) {
-        if (!coupon.valid_room_ids.includes(room.id)) {
+        if (!coupon.valid_room_ids.includes(room.id))
           throw new Error("Este cupom não é válido para esta sala.");
-        }
       }
-
-      if (coupon.type === "bogo" && selectedSlots.length < 2) {
+      if (coupon.type === "bogo" && selectedSlots.length < 2)
         throw new Error(
           "O cupom 'Leve 2' exige no mínimo 2 horas selecionadas.",
         );
-      }
 
       setAppliedCoupon(coupon);
       setCouponFeedback({
@@ -272,7 +306,7 @@ export function CheckoutModal({
         toast({
           title: "Pagamento Alterado",
           description:
-            "Cupons são válidos apenas para pagamentos em dinheiro. Selecionamos o Pix para você.",
+            "Cupons são válidos apenas para dinheiro. Selecionamos o Pix.",
         });
       }
     } catch (err: any) {
@@ -294,7 +328,7 @@ export function CheckoutModal({
       toast({
         title: "Cupom Removido",
         description:
-          "Não é possível aplicar cupons em pagamentos com Créditos (Horas) da carteira.",
+          "Não é possível aplicar cupons em pagamentos com Créditos (Horas).",
       });
     }
     setPaymentMethod(method);
@@ -312,7 +346,7 @@ export function CheckoutModal({
         return toast({
           variant: "destructive",
           title: "Dados Incompletos",
-          description: "Preencha todos os dados do cartão de crédito.",
+          description: "Preencha todos os dados do cartão.",
         });
       }
     }
@@ -323,19 +357,16 @@ export function CheckoutModal({
     );
   };
 
-  // SOLUÇÃO BLINDADA PARA COPIA E COLA (Resolve o Application Error no Mobile)
   const handleRobustCopy = async (textToCopy: string | null | undefined) => {
     if (!textToCopy) return;
 
     try {
-      // 1. Tenta usar a API Moderna (Se for seguro e estiver disponível)
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(textToCopy);
       } else {
-        // 2. Fallback Nativo (Para webviews de Instagram/WhatsApp e falta de HTTPS)
         const textArea = document.createElement("textarea");
         textArea.value = textToCopy;
-        textArea.style.position = "fixed"; // Previne scroll para o fundo
+        textArea.style.position = "fixed";
         textArea.style.top = "0";
         textArea.style.left = "0";
         textArea.style.opacity = "0";
@@ -346,7 +377,6 @@ export function CheckoutModal({
         try {
           document.execCommand("copy");
         } catch (err) {
-          console.error("Fallback de cópia falhou", err);
           throw new Error("Cópia não suportada pelo navegador.");
         } finally {
           document.body.removeChild(textArea);
@@ -360,7 +390,6 @@ export function CheckoutModal({
         description: "Código Pix copiado para a área de transferência.",
       });
     } catch (error) {
-      console.error("Erro ao copiar", error);
       toast({
         variant: "destructive",
         title: "Atenção",
@@ -391,13 +420,12 @@ export function CheckoutModal({
   let discountBRL = 0;
 
   if (appliedCoupon && isMoneyMode) {
-    if (appliedCoupon.type === "percentage") {
+    if (appliedCoupon.type === "percentage")
       discountBRL = subtotalBRL * (appliedCoupon.discount_value / 100);
-    } else if (appliedCoupon.type === "fixed") {
+    else if (appliedCoupon.type === "fixed")
       discountBRL = appliedCoupon.discount_value;
-    } else if (appliedCoupon.type === "bogo") {
+    else if (appliedCoupon.type === "bogo")
       discountBRL = subtotalBRL / summary.durationHours;
-    }
 
     if (discountBRL > subtotalBRL) discountBRL = subtotalBRL;
     finalBRL = subtotalBRL - discountBRL;
@@ -596,7 +624,7 @@ export function CheckoutModal({
                 </div>
               </div>
 
-              {/* LADO DIREITO: RESUMO E PAGAMENTO */}
+              {/* LADO DIREITO */}
               <div className="p-6 md:p-8 flex flex-col bg-white">
                 <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-6">
                   Resumo de Compra
@@ -622,7 +650,6 @@ export function CheckoutModal({
                           R$ {totalBaseBRL.toFixed(2).replace(".", ",")}
                         </span>
                       </div>
-
                       {summary.upgradeFeeBRL > 0 && (
                         <div className="flex justify-between items-center pb-3 border-b border-slate-200 mb-3">
                           <span className="text-xs font-bold text-amber-600">
@@ -634,7 +661,6 @@ export function CheckoutModal({
                           </span>
                         </div>
                       )}
-
                       {appliedCoupon && (
                         <div className="flex justify-between items-center pb-3 border-b border-slate-200 mb-3 text-emerald-600">
                           <span className="text-sm font-bold flex items-center gap-1.5">
@@ -646,7 +672,6 @@ export function CheckoutModal({
                           </span>
                         </div>
                       )}
-
                       <div className="flex justify-between items-center pt-1">
                         <span className="text-sm font-black text-slate-900">
                           Total a Pagar
@@ -692,7 +717,6 @@ export function CheckoutModal({
                         )}
                       </div>
                     </div>
-
                     {isCascading && paymentMethod === "wallet" && (
                       <div className="mt-1 bg-amber-100/50 border border-amber-200 p-2 rounded-lg flex items-start gap-2">
                         <ArrowDownRight className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
@@ -911,10 +935,8 @@ export function CheckoutModal({
             </div>
           )}
 
-          {/* TELA DE PIX OTIMIZADA */}
           {step === "pix" && pixCopyPaste && (
             <div className="flex flex-col w-full h-full bg-white relative">
-              {/* === MOBILE (Focado no Botão Copia e Cola) === */}
               <div className="md:hidden flex flex-col items-center px-6 pt-12 pb-8 h-full justify-between">
                 <button
                   onClick={handleAttemptClose}
@@ -922,7 +944,6 @@ export function CheckoutModal({
                 >
                   <X className="w-7 h-7" />
                 </button>
-
                 <div className="flex flex-col items-center text-center w-full mt-10">
                   <div className="w-16 h-16 bg-[#BF4B24]/10 rounded-2xl flex items-center justify-center mb-6">
                     <QrCode className="w-8 h-8 text-[#BF4B24]" />
@@ -934,7 +955,6 @@ export function CheckoutModal({
                     Copie e cole o código abaixo para pagar com o aplicativo do
                     seu banco.
                   </p>
-
                   <div className="w-full relative mb-4">
                     <input
                       readOnly
@@ -943,17 +963,14 @@ export function CheckoutModal({
                     />
                     <div className="absolute bottom-0 left-6 right-6 h-0.5 bg-[#BF4B24] rounded-t-full shadow-[0_0_8px_#BF4B24]"></div>
                   </div>
-
                   <p className="text-xs font-bold text-slate-400 mb-8">
                     Vence em {timeFormatted}
                   </p>
-
                   <div className="flex items-center gap-2 text-xs font-bold text-amber-600 bg-amber-50 px-4 py-2.5 rounded-lg border border-amber-200">
                     <Loader2 className="w-4 h-4 animate-spin shrink-0" />
                     Aguardando confirmação do banco...
                   </div>
                 </div>
-
                 <div className="w-full mt-auto pt-8 pb-4">
                   <Button
                     onClick={() => handleRobustCopy(pixCopyPaste)}
@@ -968,8 +985,6 @@ export function CheckoutModal({
                   </Button>
                 </div>
               </div>
-
-              {/* === DESKTOP (Com QR Code) === */}
               <div className="hidden md:flex p-12 flex-col items-center text-center">
                 <button
                   onClick={handleAttemptClose}
@@ -984,7 +999,6 @@ export function CheckoutModal({
                   Escaneie o QR Code abaixo com o aplicativo do seu banco para
                   liberar a sua reserva agora mesmo.
                 </p>
-
                 <div className="bg-white p-6 rounded-3xl shadow-lg border-2 border-slate-100 mb-8 relative overflow-hidden">
                   <div className="absolute top-0 left-0 w-full h-2 bg-[#BF4B24]"></div>
                   {pixQrCode && (
@@ -995,7 +1009,6 @@ export function CheckoutModal({
                     />
                   )}
                 </div>
-
                 <div className="w-full max-w-md mb-8">
                   <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2 text-left ml-1">
                     PIX Copia e Cola
@@ -1019,7 +1032,6 @@ export function CheckoutModal({
                     </button>
                   </div>
                 </div>
-
                 <div className="flex items-center gap-3 text-sm font-bold text-amber-600 bg-amber-50 px-6 py-3 rounded-xl border border-amber-200 shadow-sm">
                   <Loader2 className="w-5 h-5 animate-spin shrink-0" />
                   <span>
@@ -1051,9 +1063,8 @@ export function CheckoutModal({
             </div>
           )}
 
-          {/* OVERLAY DE RETENÇÃO ("Já Pagou?") */}
           {showCloseConfirm && (
-            <div className="absolute inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+            <div className="absolute inset-0 z-[400] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
               <div className="bg-white rounded-3xl p-6 w-full max-w-sm text-center shadow-2xl animate-in zoom-in-95">
                 <h3 className="text-xl font-black text-slate-900 mb-2">
                   Cancelar pagamento?
