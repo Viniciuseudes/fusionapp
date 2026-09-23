@@ -29,7 +29,8 @@ export async function POST(req: Request) {
     // 1. CRIA OU RECUPERA O CLIENTE NO ASAAS
     if (!asaasCustomerId) {
       const customerName = profile?.full_name || "Dr(a). Fusion Clinic";
-      const customerEmail = user.email || "medico@fusionclinic.com.br";
+      // SOLUÇÃO DEFINITIVA: Passamos um e-mail "cego" para o Asaas não enviar notificações diretas ao cliente.
+      const customerEmail = "notificacoes@fusionclinic.com.br"; 
       const customerCpfCnpj = profile?.cpf?.replace(/\D/g, '') || "07519139045"; 
 
       const customerResponse = await fetch(`${ASAAS_API_URL}/customers`, {
@@ -55,7 +56,8 @@ export async function POST(req: Request) {
 
     const creditCardHolderInfo = body.creditCardHolderInfo || {
       name: profile?.full_name || "FUSION TEST",
-      email: user.email || "test@fusionclinic.com.br",
+      // SOLUÇÃO DEFINITIVA: E-mail cego também nos dados do cartão
+      email: "notificacoes@fusionclinic.com.br",
       cpfCnpj: profile?.cpf?.replace(/\D/g, '') || "07519139045",
       postalCode: profile?.cep?.replace(/\D/g, '') || "01310100",
       addressNumber: profile?.address_number || "1000",
@@ -110,7 +112,7 @@ export async function POST(req: Request) {
       dueDate: new Date().toISOString().split('T')[0], 
       description: `Reserva de Espaço - Fusion Clinic`,
       externalReference: `booking|${paymentRef}`,
-      notificationDisabled: true, // Impede o Asaas de enviar e-mails ao cliente
+      notificationDisabled: true,
     };
 
     if (billingType === "CREDIT_CARD") {
@@ -127,7 +129,7 @@ export async function POST(req: Request) {
     const paymentData = await paymentResponse.json();
     if (!paymentResponse.ok) throw new Error(paymentData.errors?.[0]?.description || "Erro ao gerar cobrança.");
 
-    // 4. BUSCA OS DADOS DO QR CODE SE FOR PIX (Garante exibição in-app imediata)
+    // 4. BUSCA OS DADOS DO QR CODE SE FOR PIX
     let pixQrCode = null;
     let pixCopyPaste = null;
 
