@@ -25,18 +25,17 @@ export async function POST(req: Request) {
     const { data: profile } = await supabase.from("profiles").select("*").eq("id", user.id).single();
 
     let asaasCustomerId = profile?.asaas_customer_id;
+    const blindEmail = "notificacoes@fusionclinic.com.br"; // E-mail cego para bloquear notificações do Asaas
 
     // 1. CRIA OU RECUPERA O CLIENTE NO ASAAS
     if (!asaasCustomerId) {
       const customerName = profile?.full_name || "Dr(a). Fusion Clinic";
-      // SOLUÇÃO DEFINITIVA: Passamos um e-mail "cego" para o Asaas não enviar notificações diretas ao cliente.
-      const customerEmail = "notificacoes@fusionclinic.com.br"; 
       const customerCpfCnpj = profile?.cpf?.replace(/\D/g, '') || "07519139045"; 
 
       const customerResponse = await fetch(`${ASAAS_API_URL}/customers`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "access_token": ASAAS_API_KEY },
-        body: JSON.stringify({ name: customerName, email: customerEmail, cpfCnpj: customerCpfCnpj }),
+        body: JSON.stringify({ name: customerName, email: blindEmail, cpfCnpj: customerCpfCnpj }),
       });
 
       const customerData = await customerResponse.json();
@@ -44,6 +43,14 @@ export async function POST(req: Request) {
       
       asaasCustomerId = customerData.id;
       await supabase.from("profiles").update({ asaas_customer_id: asaasCustomerId }).eq("id", user.id);
+    } else {
+      // SOLUÇÃO DEFINITIVA DE E-MAILS: Se o cliente já existe, forçamos um UPDATE no Asaas
+      // para apagar o e-mail real que possa estar lá guardado do passado.
+      await fetch(`${ASAAS_API_URL}/customers/${asaasCustomerId}`, {
+        method: "POST", // A API V3 do Asaas usa POST na URL com ID para dar Update
+        headers: { "Content-Type": "application/json", "access_token": ASAAS_API_KEY },
+        body: JSON.stringify({ email: blindEmail }),
+      }).catch(err => console.error("Erro silencioso ao atualizar email do customer no Asaas:", err));
     }
 
     const creditCard = body.creditCard || {
@@ -56,8 +63,7 @@ export async function POST(req: Request) {
 
     const creditCardHolderInfo = body.creditCardHolderInfo || {
       name: profile?.full_name || "FUSION TEST",
-      // SOLUÇÃO DEFINITIVA: E-mail cego também nos dados do cartão
-      email: "notificacoes@fusionclinic.com.br",
+      email: blindEmail, // E-mail cego também no cartão
       cpfCnpj: profile?.cpf?.replace(/\D/g, '') || "07519139045",
       postalCode: profile?.cep?.replace(/\D/g, '') || "01310100",
       addressNumber: profile?.address_number || "1000",

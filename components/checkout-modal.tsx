@@ -5,6 +5,7 @@ import { createClient } from "@/utils/supabase/client";
 import {
   Wallet,
   X,
+  Check,
   CreditCard,
   CalendarIcon,
   MapPin,
@@ -26,7 +27,6 @@ import { Label } from "@/components/ui/label";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useToast } from "@/hooks/use-toast";
-import { Badge } from "@/components/ui/badge";
 
 export interface CheckoutSummary {
   durationHours: number;
@@ -92,9 +92,8 @@ export function CheckoutModal({
   const [timeLeft, setTimeLeft] = useState(5 * 60);
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
-  const [showCloseConfirm, setShowCloseConfirm] = useState(false); // Retenção de Saída
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
 
-  // Estados do Motor de Cupons
   const [couponCode, setCouponCode] = useState("");
   const [isVerifyingCoupon, setIsVerifyingCoupon] = useState(false);
   const [appliedCoupon, setAppliedCoupon] = useState<any | null>(null);
@@ -111,7 +110,6 @@ export function CheckoutModal({
     cpf: "",
   });
 
-  // 1. Escudo PWA e Lógica de Saída Retida
   useEffect(() => {
     if (isOpen) {
       window.history.pushState(
@@ -137,7 +135,6 @@ export function CheckoutModal({
     }
   }, [isOpen, step, onClose]);
 
-  // 2. Sempre que abrir, reseta tudo e prepara o terreno
   useEffect(() => {
     if (isOpen) {
       setStep("confirm");
@@ -152,7 +149,6 @@ export function CheckoutModal({
     }
   }, [isOpen]);
 
-  // TRANSIÇÃO PARA A TELA PIX & FIXAÇÃO DA TIMESTAMP (Para background throttling)
   useEffect(() => {
     if (pixQrCode && pixCopyPaste && activeBookingId) {
       setExpiresAt(Date.now() + 5 * 60 * 1000);
@@ -160,7 +156,6 @@ export function CheckoutModal({
     }
   }, [pixQrCode, pixCopyPaste, activeBookingId]);
 
-  // SUPABASE REALTIME: Escuta o webhook alterando a reserva
   useEffect(() => {
     if (step === "pix" && activeBookingId) {
       const channel = supabase
@@ -199,7 +194,6 @@ export function CheckoutModal({
     }
   }, [step, activeBookingId, supabase, toast, onClose]);
 
-  // 3. O Relógio Imparável (Baseado em Timestamp Real)
   useEffect(() => {
     if (!isOpen || step === "success" || !expiresAt) return;
 
@@ -228,9 +222,6 @@ export function CheckoutModal({
     }
   };
 
-  // ==========================================
-  // LÓGICA DE VALIDAÇÃO DO CUPOM
-  // ==========================================
   const handleApplyCoupon = async () => {
     if (!couponCode.trim()) return;
     setIsVerifyingCoupon(true);
@@ -332,14 +323,49 @@ export function CheckoutModal({
     );
   };
 
-  const copyToClipboard = () => {
-    if (pixCopyPaste) {
-      navigator.clipboard.writeText(pixCopyPaste);
+  // SOLUÇÃO BLINDADA PARA COPIA E COLA (Resolve o Application Error no Mobile)
+  const handleRobustCopy = async (textToCopy: string | null | undefined) => {
+    if (!textToCopy) return;
+
+    try {
+      // 1. Tenta usar a API Moderna (Se for seguro e estiver disponível)
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(textToCopy);
+      } else {
+        // 2. Fallback Nativo (Para webviews de Instagram/WhatsApp e falta de HTTPS)
+        const textArea = document.createElement("textarea");
+        textArea.value = textToCopy;
+        textArea.style.position = "fixed"; // Previne scroll para o fundo
+        textArea.style.top = "0";
+        textArea.style.left = "0";
+        textArea.style.opacity = "0";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+
+        try {
+          document.execCommand("copy");
+        } catch (err) {
+          console.error("Fallback de cópia falhou", err);
+          throw new Error("Cópia não suportada pelo navegador.");
+        } finally {
+          document.body.removeChild(textArea);
+        }
+      }
+
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
       toast({
-        title: "Chave Copiada",
-        description: "Cole no aplicativo do seu banco para pagar.",
+        title: "Copiado!",
+        description: "Código Pix copiado para a área de transferência.",
+      });
+    } catch (error) {
+      console.error("Erro ao copiar", error);
+      toast({
+        variant: "destructive",
+        title: "Atenção",
+        description:
+          "Não foi possível copiar automaticamente. Copie o código de forma manual.",
       });
     }
   };
@@ -417,10 +443,9 @@ export function CheckoutModal({
             </div>
           )}
 
-          {/* TELA DE CONFIRMAÇÃO (Layout Original) */}
           {step === "confirm" && (
             <div className="grid grid-cols-1 md:grid-cols-2 overflow-y-auto">
-              {/* LADO ESQUERDO: DETALHES DA SALA E CUPOM */}
+              {/* LADO ESQUERDO */}
               <div className="p-6 md:p-8 bg-slate-50 border-b md:border-b-0 md:border-r border-slate-100 flex flex-col">
                 <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-6">
                   Detalhes do Espaço
@@ -577,7 +602,6 @@ export function CheckoutModal({
                   Resumo de Compra
                 </h3>
 
-                {/* RESUMO DINÂMICO */}
                 <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 mb-8">
                   {!isMoneyMode ? (
                     <div className="flex justify-between items-center">
@@ -640,7 +664,6 @@ export function CheckoutModal({
                     Como você deseja pagar?
                   </p>
 
-                  {/* OPÇÃO 1: WALLET */}
                   <div
                     onClick={() => handlePaymentSelect("wallet")}
                     className={`p-4 rounded-xl border-2 cursor-pointer flex flex-col gap-2 transition-all ${paymentMethod === "wallet" ? "bg-orange-50 border-[#BF4B24]" : "bg-white border-slate-200 hover:border-slate-300"}`}
@@ -682,7 +705,6 @@ export function CheckoutModal({
                     )}
                   </div>
 
-                  {/* OPÇÃO 2: PIX */}
                   <div
                     onClick={() => handlePaymentSelect("pix")}
                     className={`p-4 rounded-xl border-2 cursor-pointer flex items-center justify-between transition-all ${paymentMethod === "pix" ? "bg-orange-50 border-[#BF4B24]" : "bg-white border-slate-200 hover:border-slate-300"}`}
@@ -711,7 +733,6 @@ export function CheckoutModal({
                     </div>
                   </div>
 
-                  {/* OPÇÃO 3: CARTÃO DE CRÉDITO */}
                   <div
                     className={`border-2 rounded-xl transition-all overflow-hidden ${paymentMethod === "card" ? "bg-orange-50/30 border-[#BF4B24]" : "bg-white border-slate-200 hover:border-slate-300"}`}
                   >
@@ -890,10 +911,10 @@ export function CheckoutModal({
             </div>
           )}
 
-          {/* TELA DE PIX (Com Design Uber para Mobile e QR Code para Desktop) */}
+          {/* TELA DE PIX OTIMIZADA */}
           {step === "pix" && pixCopyPaste && (
             <div className="flex flex-col w-full h-full bg-white relative">
-              {/* === ESTILO MOBILE (Focado no Copia e Cola) === */}
+              {/* === MOBILE (Focado no Botão Copia e Cola) === */}
               <div className="md:hidden flex flex-col items-center px-6 pt-12 pb-8 h-full justify-between">
                 <button
                   onClick={handleAttemptClose}
@@ -928,14 +949,14 @@ export function CheckoutModal({
                   </p>
 
                   <div className="flex items-center gap-2 text-xs font-bold text-amber-600 bg-amber-50 px-4 py-2.5 rounded-lg border border-amber-200">
-                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />A
-                    aguardar confirmação do banco...
+                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                    Aguardando confirmação do banco...
                   </div>
                 </div>
 
                 <div className="w-full mt-auto pt-8 pb-4">
                   <Button
-                    onClick={copyToClipboard}
+                    onClick={() => handleRobustCopy(pixCopyPaste)}
                     className="w-full h-16 bg-slate-900 hover:bg-slate-800 text-white font-black rounded-2xl text-lg flex items-center justify-center gap-2 shadow-xl active:scale-95 transition-all"
                   >
                     {copied ? (
@@ -948,7 +969,7 @@ export function CheckoutModal({
                 </div>
               </div>
 
-              {/* === ESTILO DESKTOP (Com QR Code Escaneável) === */}
+              {/* === DESKTOP (Com QR Code) === */}
               <div className="hidden md:flex p-12 flex-col items-center text-center">
                 <button
                   onClick={handleAttemptClose}
@@ -987,7 +1008,7 @@ export function CheckoutModal({
                       className="flex-1 bg-transparent text-sm font-medium text-slate-600 px-4 outline-none truncate"
                     />
                     <button
-                      onClick={copyToClipboard}
+                      onClick={() => handleRobustCopy(pixCopyPaste)}
                       className="px-6 bg-slate-200 hover:bg-slate-300 transition-colors flex items-center justify-center shrink-0"
                     >
                       {copied ? (
@@ -1009,7 +1030,6 @@ export function CheckoutModal({
             </div>
           )}
 
-          {/* TELA DE SUCESSO */}
           {step === "success" && (
             <div className="p-10 flex flex-col items-center text-center animate-in zoom-in-95 my-auto">
               <div className="w-24 h-24 bg-emerald-100 rounded-full flex items-center justify-center mb-6 shadow-inner">
@@ -1020,7 +1040,7 @@ export function CheckoutModal({
               </h2>
               <p className="text-slate-500 font-medium max-w-sm mb-10">
                 O pagamento foi reconhecido instantaneamente e a sala já está
-                reservada para si na data escolhida.
+                reservada para você na data escolhida.
               </p>
               <Button
                 onClick={() => window.location.reload()}
@@ -1040,14 +1060,14 @@ export function CheckoutModal({
                 </h3>
                 <p className="text-sm font-medium text-slate-500 mb-6">
                   Se já efetuou o pagamento no seu banco, aguarde alguns
-                  segundos neste ecrã. A confirmação é automática.
+                  segundos nesta tela. A confirmação é automática.
                 </p>
                 <div className="flex flex-col gap-3">
                   <Button
                     onClick={() => setShowCloseConfirm(false)}
                     className="w-full h-12 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold rounded-xl"
                   >
-                    Continuar a aguardar
+                    Continuar aguardando
                   </Button>
                   <Button
                     onClick={onClose}
