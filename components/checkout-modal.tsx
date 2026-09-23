@@ -1,6 +1,7 @@
+// components/checkout-modal.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { createClient } from "@/utils/supabase/client";
 import {
   Wallet,
@@ -158,48 +159,46 @@ export function CheckoutModal({
   }, [pixQrCode, pixCopyPaste, activeBookingId]);
 
   // ==========================================
-  // MOTOR DE BUSCA ATIVA (RESOLVE A VOLTA DO APP DO BANCO)
+  // MOTOR DE BUSCA ATIVA (RESOLVE A VOLTA DO APP DO BANCO E RECONCILIAÇÃO)
   // ==========================================
   useEffect(() => {
     if (step !== "pix" || !activeBookingId) return;
 
     let isChecking = false;
 
-    // Função que vai na base de dados checar se já está pago
+    // Função que utiliza a Reconciliação Ativa da API de Checkout
     const checkPaymentStatus = async () => {
       if (isChecking) return;
       isChecking = true;
 
       try {
-        const { data, error } = await supabase
-          .from("bookings")
-          .select("status")
-          .eq("id", activeBookingId)
-          .single();
+        const res = await fetch(`/api/checkout?bookingId=${activeBookingId}`);
+        const data = await res.json();
 
-        if (data && data.status === "confirmed") {
+        if (data.confirmed || data.status === "confirmed") {
           setStep("success");
           setShowCloseConfirm(false);
           toast({
             title: "Pagamento Confirmado!",
-            description: "Sua reserva foi liberada com sucesso.",
+            description:
+              "Sua reserva foi liberada com sucesso e o horário foi bloqueado.",
           });
-        } else if (data && data.status === "cancelled") {
+        } else if (data.status === "cancelled") {
           toast({
             variant: "destructive",
             title: "Pagamento Expirado",
-            description: "Sua reserva foi cancelada.",
+            description: "O tempo esgotou e sua reserva foi cancelada.",
           });
           onClose();
         }
       } catch (err) {
-        console.error("Erro ao verificar status silenciosamente", err);
+        console.error("Erro ao verificar status de pagamento", err);
       } finally {
         isChecking = false;
       }
     };
 
-    // 1. WebSocket (Para quando o usuário paga pelo PC e olha pro celular)
+    // 1. WebSocket (Supabase Realtime para notificação push imediata)
     const channel = supabase
       .channel(`booking_status_${activeBookingId}`)
       .on(
@@ -210,14 +209,26 @@ export function CheckoutModal({
           table: "bookings",
           filter: `id=eq.${activeBookingId}`,
         },
-        () => checkPaymentStatus(),
+        (payload: any) => {
+          if (payload.new && payload.new.status === "confirmed") {
+            setStep("success");
+            setShowCloseConfirm(false);
+            toast({
+              title: "Pagamento Confirmado!",
+              description:
+                "Sua reserva foi liberada com sucesso e o horário foi bloqueado.",
+            });
+          } else {
+            checkPaymentStatus();
+          }
+        },
       )
       .subscribe();
 
-    // 2. Polling (Checa a cada 3 segundos, super leve para o banco)
+    // 2. Polling Ativo (Checa a cada 3 segundos)
     const interval = setInterval(checkPaymentStatus, 3000);
 
-    // 3. Sensor de Volta do App do Banco (Dispara imediatamente quando o Chrome/Safari volta pra tela)
+    // 3. Sensor de Volta do App do Banco
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         checkPaymentStatus();
@@ -1001,12 +1012,16 @@ export function CheckoutModal({
                 </p>
                 <div className="bg-white p-6 rounded-3xl shadow-lg border-2 border-slate-100 mb-8 relative overflow-hidden">
                   <div className="absolute top-0 left-0 w-full h-2 bg-[#BF4B24]"></div>
-                  {pixQrCode && (
+                  {pixQrCode ? (
                     <img
                       src={`data:image/png;base64,${pixQrCode}`}
                       alt="QR Code PIX"
                       className="w-56 h-56 object-contain"
                     />
+                  ) : (
+                    <div className="w-56 h-56 flex items-center justify-center bg-slate-100">
+                      <QrCode className="w-12 h-12 text-slate-400" />
+                    </div>
                   )}
                 </div>
                 <div className="w-full max-w-md mb-8">
