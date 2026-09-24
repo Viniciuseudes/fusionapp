@@ -8,11 +8,12 @@ const ASAAS_API_KEY = process.env.ASAAS_API_KEY!;
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
+// Cliente Admin com Service Role para bypass de RLS quando necessário
 const supabaseAdmin = createAdminClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
-// GET: Polling de Reconciliação (Checa Supabase e Asaas)
+// GET: Polling de Reconciliação Ativa (Checa Supabase e Asaas)
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -65,7 +66,7 @@ export async function GET(request: Request) {
   }
 }
 
-// POST: Criação do Pagamento (Recebe os dados do front-end)
+// POST: Criação da Cobrança PIX ou Cartão (com Antifraude e Tokenização)
 export async function POST(request: Request) {
   try {
     const supabase = await createClient();
@@ -76,7 +77,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { price, paymentRef, billingType, creditCard, creditCardHolderInfo } = body;
+    const { price, paymentRef, billingType, creditCard, cardData } = body;
 
     if (!paymentRef || !price) {
       return NextResponse.json({ error: "Dados incompletos para a reserva." }, { status: 400 });
@@ -93,14 +94,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Reserva base não encontrada." }, { status: 404 });
     }
 
-    // 2. Perfil do Cliente
+    // 2. Perfil do Cliente Logado (Puxamos as informações salvas, incluindo o token do cartão)
     const { data: profile } = await supabaseAdmin
       .from("profiles")
-      .select("full_name, email, cpf, phone")
+      .select("full_name, email, cpf, cep, address_number, phone, cc_token")
       .eq("id", user.id)
       .single();
 
-    // 3. Sala e Anfitrião
+    // 3. Sala e Anfitrião para o Split de Pagamento
     const { data: room } = await supabaseAdmin
       .from("rooms")
       .select("name, host_id")
@@ -139,10 +140,9 @@ export async function POST(request: Request) {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          name: profile?.full_name || user.email?.split("@")[0] || "Cliente",
+          name: profile?.full_name || user.email?.split("@")[0] || "Cliente Fusion",
           email: user.email || profile?.email,
           cpfCnpj: customerCpf || undefined,
-          mobilePhone: profile?.phone?.replace(/\D/g, "") || undefined,
         }),
       });
 
@@ -151,14 +151,14 @@ export async function POST(request: Request) {
       asaasCustomerId = customerResult.id;
     }
 
-    // 5. Monta Payload de Pagamento
+    // 5. Monta Payload de Pagamento Padrão
     const dueDate = new Date().toISOString().split("T")[0];
     const paymentPayload: any = {
       customer: asaasCustomerId,
       billingType: billingType || "PIX",
       value: price,
       dueDate: dueDate,
-      description: `Reserva - ${room?.name || "Sala"}`,
+      description: `Reserva no App - ${room?.name || "Sala"}`,
       externalReference: paymentRef,
     };
 
@@ -167,13 +167,43 @@ export async function POST(request: Request) {
       paymentPayload.split = [{ walletId: hostWalletId, percentualValue: 90.0 }];
     }
 
-    if (billingType === "CREDIT_CARD" && creditCard) {
-       paymentPayload.creditCard = creditCard;
-       paymentPayload.creditCardHolderInfo = creditCardHolderInfo;
-       paymentPayload.remoteIp = request.headers.get("x-forwarded-for") || "127.0.0.1";
+    // 6. Inteligência Antifraude e Tokenização (Cartão de Crédito)
+    if (billingType === "CREDIT_CARD") {
+      if (cardData?.useSavedCard && profile?.cc_token) {
+        // Usuário quer usar o cartão salvo com 1-clique
+        paymentPayload.creditCardToken = profile.cc_token;
+      } else if (creditCard && cardData) {
+        // Usuário está inserindo um novo cartão
+        paymentPayload.creditCard = creditCard;
+
+        // LÓGICA ANTIFRAUDE SÊNIOR: 
+        // Se o cartão for do usuário logado, usa os dados do perfil dele.
+        // Se for cartão de terceiros (isThirdParty), usa o CPF e CEP digitados no Modal.
+        let finalCpf = profile?.cpf?.replace(/\D/g, "");
+        let finalCep = profile?.cep?.replace(/\D/g, "");
+
+        if (cardData.isThirdParty) {
+          finalCpf = cardData.cpf?.replace(/\D/g, "");
+          finalCep = cardData.cep?.replace(/\D/g, "");
+        }
+
+        if (!finalCpf || !finalCep) {
+          return NextResponse.json({ error: "CPF ou CEP ausentes. Complete seu perfil ou preencha os dados de terceiros." }, { status: 400 });
+        }
+
+        paymentPayload.creditCardHolderInfo = {
+          name: creditCard.holderName,
+          email: profile?.email || user.email,
+          cpfCnpj: finalCpf,
+          postalCode: finalCep,
+          addressNumber: profile?.address_number || "S/N",
+          phone: profile?.phone?.replace(/\D/g, ""),
+        };
+        paymentPayload.remoteIp = request.headers.get("x-forwarded-for") || "127.0.0.1";
+      }
     }
 
-    // 6. Envia Pagamento para o Asaas
+    // 7. Envia Pagamento para o Asaas
     const createPaymentRes = await fetch(`${ASAAS_API_URL}/payments`, {
       method: "POST",
       headers: { access_token: ASAAS_API_KEY, "Content-Type": "application/json" },
@@ -183,13 +213,13 @@ export async function POST(request: Request) {
     const paymentResult = await createPaymentRes.json();
     if (!createPaymentRes.ok) throw new Error(paymentResult.errors?.[0]?.description || "Erro ao gerar cobrança.");
 
-    // Atualiza ID do pagamento no Supabase
+    // Atualiza ID do pagamento no Supabase para acompanhamento
     await supabaseAdmin
       .from("bookings")
       .update({ asaas_payment_id: paymentResult.id })
       .eq("id", paymentRef);
 
-    // 7. Retorna QRCode se for PIX
+    // 8A. Retorno QRCode se for PIX
     if (billingType === "PIX") {
       const pixRes = await fetch(`${ASAAS_API_URL}/payments/${paymentResult.id}/pixQrCode`, {
         headers: { access_token: ASAAS_API_KEY },
@@ -205,10 +235,35 @@ export async function POST(request: Request) {
       });
     }
 
-    // Retorno Cartão de Crédito
-    if (paymentResult.status === "CONFIRMED" || paymentResult.status === "RECEIVED") {
-       await supabaseAdmin.from("bookings").update({ status: "confirmed" }).eq("id", paymentRef);
+    // 8B. Retorno e Processamento para CARTÃO DE CRÉDITO
+    if (billingType === "CREDIT_CARD") {
+      // Falha Imediata (Limite, Fraude, Dados Incorretos)
+      if (paymentResult.status === "REJECTED") {
+        await supabaseAdmin.from("bookings").update({ status: "cancelled" }).eq("id", paymentRef);
+        return NextResponse.json({ error: "Cartão recusado pelo banco emissor. Verifique os dados ou o limite." }, { status: 400 });
+      }
+
+      // Tokenização: Salvar cartão para o futuro se o usuário pediu e a transação foi aceita
+      if (cardData?.saveCard && paymentResult.creditCard?.creditCardToken) {
+        await supabaseAdmin.from("profiles").update({
+          cc_token: paymentResult.creditCard.creditCardToken,
+          cc_last4: paymentResult.creditCard.creditCardNumber,
+          cc_brand: paymentResult.creditCard.creditCardBrand
+        }).eq("id", user.id);
+      }
+
+      // Aprovado sem fricção
+      if (paymentResult.status === "CONFIRMED" || paymentResult.status === "RECEIVED") {
+        await supabaseAdmin.from("bookings").update({ status: "confirmed" }).eq("id", paymentRef);
+        return NextResponse.json({ success: true, paymentId: paymentResult.id, status: "CONFIRMED" });
+      }
+
+      // Caiu na análise do Gateway (Asaas avaliará manualmente)
+      if (paymentResult.status === "PENDING") {
+        return NextResponse.json({ success: true, paymentId: paymentResult.id, status: "PENDING" });
+      }
     }
+
     return NextResponse.json({ success: true, paymentId: paymentResult.id, status: paymentResult.status });
 
   } catch (error: any) {

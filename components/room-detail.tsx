@@ -929,6 +929,7 @@ export function RoomDetail(props: RoomDetailProps) {
             billingType: method === "card" ? "CREDIT_CARD" : "PIX",
             creditCard: formattedCard,
             creditCardHolderInfo: holderInfo,
+            cardData: cardData,
           }),
         });
 

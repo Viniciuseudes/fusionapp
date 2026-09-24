@@ -2,6 +2,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import {
   Wallet,
@@ -47,6 +48,10 @@ export interface CardData {
   expiry: string;
   cvv: string;
   cpf: string;
+  cep: string;
+  saveCard?: boolean;
+  useSavedCard?: boolean;
+  isThirdParty?: boolean;
 }
 
 interface CheckoutModalProps {
@@ -66,9 +71,44 @@ interface CheckoutModalProps {
   pixQrCode?: string | null;
   pixCopyPaste?: string | null;
   activeBookingId?: string | null;
+  onSuccess?: () => void;
 }
 
 type CheckoutStep = "confirm" | "pix" | "success";
+
+// ==========================================
+// FUNÇÕES DE MÁSCARA (UX/UI)
+// ==========================================
+const formatCardNumber = (val: string) => {
+  return val
+    .replace(/\D/g, "")
+    .replace(/(\d{4})(?=\d)/g, "$1 ")
+    .trim()
+    .slice(0, 19);
+};
+
+const formatExpiry = (val: string) => {
+  return val
+    .replace(/\D/g, "")
+    .replace(/(\d{2})(\d{1,2})/, "$1/$2")
+    .slice(0, 5);
+};
+
+const formatCPF = (val: string) => {
+  return val
+    .replace(/\D/g, "")
+    .replace(/(\d{3})(\d)/, "$1.$2")
+    .replace(/(\d{3})(\d)/, "$1.$2")
+    .replace(/(\d{3})(\d{1,2})/, "$1-$2")
+    .slice(0, 14);
+};
+
+const formatCEP = (val: string) => {
+  return val
+    .replace(/\D/g, "")
+    .replace(/^(\d{5})(\d)/, "$1-$2")
+    .slice(0, 9);
+};
 
 export function CheckoutModal({
   isOpen,
@@ -83,9 +123,11 @@ export function CheckoutModal({
   pixQrCode,
   pixCopyPaste,
   activeBookingId,
+  onSuccess,
 }: CheckoutModalProps) {
   const { toast } = useToast();
   const supabase = createClient();
+  const router = useRouter();
 
   const [step, setStep] = useState<CheckoutStep>("confirm");
   const [paymentMethod, setPaymentMethod] = useState<"wallet" | "pix" | "card">(
@@ -110,7 +152,22 @@ export function CheckoutModal({
     expiry: "",
     cvv: "",
     cpf: "",
+    cep: "",
+    saveCard: false,
+    useSavedCard: false,
+    isThirdParty: false,
   });
+  const [savedCardInfo, setSavedCardInfo] = useState<{
+    last4: string;
+    brand: string;
+  } | null>(null);
+  const [isMyCard, setIsMyCard] = useState(true);
+
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    setCardData((prev) => ({ ...prev, isThirdParty: !isMyCard }));
+  }, [isMyCard]);
 
   useEffect(() => {
     if (isOpen) {
@@ -128,6 +185,25 @@ export function CheckoutModal({
       };
       window.addEventListener("popstate", handlePop);
 
+      // Busca se o usuário tem cartão salvo no perfil
+      const fetchSavedCard = async () => {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (user) {
+          const { data } = await supabase
+            .from("profiles")
+            .select("cc_last4, cc_brand")
+            .eq("id", user.id)
+            .single();
+          if (data?.cc_last4) {
+            setSavedCardInfo({ last4: data.cc_last4, brand: data.cc_brand });
+            setCardData((prev) => ({ ...prev, useSavedCard: true }));
+          }
+        }
+      };
+      fetchSavedCard();
+
       return () => {
         window.removeEventListener("popstate", handlePop);
         if (window.history.state?.modal === "checkout") {
@@ -135,7 +211,7 @@ export function CheckoutModal({
         }
       };
     }
-  }, [isOpen, step, onClose]);
+  }, [isOpen, step, onClose, supabase]);
 
   useEffect(() => {
     if (isOpen) {
@@ -147,9 +223,20 @@ export function CheckoutModal({
       setCouponFeedback(null);
       setShowCloseConfirm(false);
       setPaymentMethod("wallet");
-      setCardData({ number: "", name: "", expiry: "", cvv: "", cpf: "" });
+      setIsMyCard(true);
+      setCardData({
+        number: "",
+        name: "",
+        expiry: "",
+        cvv: "",
+        cpf: "",
+        cep: "",
+        saveCard: false,
+        useSavedCard: savedCardInfo !== null,
+        isThirdParty: false,
+      });
     }
-  }, [isOpen]);
+  }, [isOpen, savedCardInfo]);
 
   useEffect(() => {
     if (pixQrCode && pixCopyPaste && activeBookingId) {
@@ -158,6 +245,17 @@ export function CheckoutModal({
     }
   }, [pixQrCode, pixCopyPaste, activeBookingId]);
 
+  useEffect(() => {
+    if (step === "success") {
+      const timeout = setTimeout(() => {
+        onClose();
+        router.push("/dashboard");
+      }, 4000);
+
+      return () => clearTimeout(timeout);
+    }
+  }, [step, router, onClose]);
+
   // MOTOR DE BUSCA ATIVA E RECONCILIAÇÃO
   useEffect(() => {
     if (step !== "pix" || !activeBookingId) return;
@@ -165,7 +263,6 @@ export function CheckoutModal({
     let isChecking = false;
 
     const checkPaymentStatus = async () => {
-      // Sem o 'step === "success"' aqui para evitar o erro do TypeScript
       if (isChecking) return;
       isChecking = true;
 
@@ -176,15 +273,12 @@ export function CheckoutModal({
         if (data.confirmed || data.status === "confirmed") {
           setStep("success");
           setShowCloseConfirm(false);
-          toast({
-            title: "Pagamento Confirmado!",
-            description: "Sua reserva foi liberada com sucesso.",
-          });
+          if (onSuccess) onSuccess();
         } else if (data.status === "cancelled") {
           toast({
             variant: "destructive",
             title: "Pagamento Expirado",
-            description: "Sua reserva foi cancelada.",
+            description: "O tempo esgotou e sua reserva foi cancelada.",
           });
           onClose();
         }
@@ -205,7 +299,15 @@ export function CheckoutModal({
           table: "bookings",
           filter: `id=eq.${activeBookingId}`,
         },
-        () => checkPaymentStatus(),
+        (payload: any) => {
+          if (payload.new && payload.new.status === "confirmed") {
+            setStep("success");
+            setShowCloseConfirm(false);
+            if (onSuccess) onSuccess();
+          } else {
+            checkPaymentStatus();
+          }
+        },
       )
       .subscribe();
 
@@ -224,7 +326,7 @@ export function CheckoutModal({
       window.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("focus", checkPaymentStatus);
     };
-  }, [step, activeBookingId, supabase, toast, onClose]);
+  }, [step, activeBookingId, supabase, toast, onClose, onSuccess]);
 
   useEffect(() => {
     if (!isOpen || step === "success" || !expiresAt) return;
@@ -247,8 +349,11 @@ export function CheckoutModal({
   }, [isOpen, step, expiresAt, onClose, toast]);
 
   const handleAttemptClose = () => {
-    if (step === "pix") setShowCloseConfirm(true);
-    else onClose();
+    if (step === "pix") {
+      setShowCloseConfirm(true);
+    } else {
+      onClose();
+    }
   };
 
   const handleApplyCoupon = async () => {
@@ -319,18 +424,24 @@ export function CheckoutModal({
   };
 
   const handleSubmit = () => {
-    if (paymentMethod === "card") {
+    if (paymentMethod === "card" && !cardData.useSavedCard) {
       if (
         !cardData.number ||
         !cardData.name ||
         !cardData.expiry ||
-        !cardData.cvv ||
-        !cardData.cpf
+        !cardData.cvv
       ) {
         return toast({
           variant: "destructive",
           title: "Dados Incompletos",
-          description: "Preencha todos os dados do cartão.",
+          description: "Preencha todos os dados básicos do cartão.",
+        });
+      }
+      if (!isMyCard && (!cardData.cpf || !cardData.cep)) {
+        return toast({
+          variant: "destructive",
+          title: "Dados Incompletos",
+          description: "Informe o CPF e CEP da fatura do titular do cartão.",
         });
       }
     }
@@ -351,8 +462,6 @@ export function CheckoutModal({
         const textArea = document.createElement("textarea");
         textArea.value = textToCopy;
         textArea.style.position = "fixed";
-        textArea.style.top = "0";
-        textArea.style.left = "0";
         textArea.style.opacity = "0";
         document.body.appendChild(textArea);
         textArea.focus();
@@ -427,7 +536,7 @@ export function CheckoutModal({
         <div
           className={`bg-white w-full max-w-4xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-300 max-h-[100dvh] md:max-h-[95vh] ${step === "pix" ? "h-full md:h-auto md:rounded-2xl" : "rounded-2xl"}`}
         >
-          {step !== "pix" && (
+          {step !== "pix" && step !== "success" && (
             <div className="px-6 py-2.5 flex items-center justify-center gap-2 bg-slate-100 border-b border-slate-200">
               <Clock className="w-4 h-4 text-slate-400" />
               <p className="text-xs font-bold text-slate-500 tracking-widest uppercase">
@@ -439,10 +548,10 @@ export function CheckoutModal({
             </div>
           )}
 
-          {step !== "pix" && (
+          {step !== "pix" && step !== "success" && (
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-white">
               <h2 className="text-lg font-bold text-slate-900">
-                {step === "confirm" ? "Revisar Reserva" : "Tudo Certo!"}
+                Revisar Reserva
               </h2>
               <button
                 onClick={handleAttemptClose}
@@ -455,10 +564,12 @@ export function CheckoutModal({
 
           {step === "confirm" && (
             <div className="grid grid-cols-1 md:grid-cols-2 overflow-y-auto">
+              {/* LADO ESQUERDO */}
               <div className="p-6 md:p-8 bg-slate-50 border-b md:border-b-0 md:border-r border-slate-100 flex flex-col">
                 <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-6">
                   Detalhes do Espaço
                 </h3>
+
                 <div className="flex gap-4 mb-8">
                   <div className="w-20 h-20 rounded-xl overflow-hidden bg-slate-200 shrink-0 border border-slate-200">
                     <img
@@ -487,12 +598,10 @@ export function CheckoutModal({
                       <p className="text-sm text-slate-600 mt-0.5">
                         {room.address_details?.street || "Endereço privado"}
                       </p>
-                      <p className="text-sm text-slate-600">
-                        {room.address_details?.city}
-                      </p>
                     </div>
                   </div>
 
+                  {/* MÓDULO DE CUPOM */}
                   <div className="bg-white border border-slate-200 p-5 rounded-xl shadow-sm mb-6">
                     <h4 className="text-xs font-bold text-slate-900 flex items-center justify-between mb-3">
                       <span className="flex items-center gap-1.5">
@@ -505,6 +614,7 @@ export function CheckoutModal({
                         </span>
                       )}
                     </h4>
+
                     {!appliedCoupon ? (
                       <>
                         <div className="flex gap-2">
@@ -569,12 +679,6 @@ export function CheckoutModal({
                           Data e Horários
                         </p>
                       </div>
-                      <button
-                        onClick={onClose}
-                        className="text-xs font-bold text-[#BF4B24] hover:underline underline-offset-2"
-                      >
-                        Alterar Horas
-                      </button>
                     </div>
                     <p className="text-sm font-bold text-slate-700 mb-3">
                       {dateFormatted}
@@ -602,10 +706,12 @@ export function CheckoutModal({
                 </div>
               </div>
 
+              {/* LADO DIREITO */}
               <div className="p-6 md:p-8 flex flex-col bg-white">
                 <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-6">
                   Resumo de Compra
                 </h3>
+
                 <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 mb-8">
                   {!isMoneyMode ? (
                     <div className="flex justify-between items-center">
@@ -763,101 +869,213 @@ export function CheckoutModal({
                         )}
                       </div>
                     </div>
+
                     {paymentMethod === "card" && (
                       <div className="px-4 pb-4 animate-in slide-in-from-top-2">
-                        <div className="bg-white border border-[#BF4B24]/30 rounded-xl p-4 space-y-3">
-                          <div className="space-y-1">
-                            <Label className="text-xs font-bold text-slate-700">
-                              Número do Cartão
-                            </Label>
-                            <Input
-                              placeholder="0000 0000 0000 0000"
-                              maxLength={19}
-                              value={cardData.number}
-                              onChange={(e) =>
-                                setCardData({
-                                  ...cardData,
-                                  number: e.target.value,
-                                })
+                        {savedCardInfo ? (
+                          // TELA DE CARTÃO SALVO (1-Click)
+                          <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col gap-3">
+                            <div
+                              className="flex items-center justify-between bg-slate-50 p-3 rounded-lg border border-slate-200 cursor-pointer"
+                              onClick={() =>
+                                setCardData((p) => ({
+                                  ...p,
+                                  useSavedCard: true,
+                                }))
                               }
-                              className="h-10 bg-slate-50 rounded-lg font-mono text-sm"
-                            />
+                            >
+                              <div className="flex items-center gap-3">
+                                <CreditCard className="w-5 h-5 text-slate-600" />
+                                <div>
+                                  <p className="text-sm font-bold text-slate-900">
+                                    Cartão Final {savedCardInfo.last4}
+                                  </p>
+                                  <p className="text-xs font-bold text-slate-500 uppercase">
+                                    {savedCardInfo.brand}
+                                  </p>
+                                </div>
+                              </div>
+                              <div
+                                className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${cardData.useSavedCard ? "border-[#BF4B24]" : "border-slate-300"}`}
+                              >
+                                {cardData.useSavedCard && (
+                                  <div className="w-2 h-2 bg-[#BF4B24] rounded-full" />
+                                )}
+                              </div>
+                            </div>
+
+                            <button
+                              onClick={() => {
+                                setSavedCardInfo(null);
+                                setCardData((p) => ({
+                                  ...p,
+                                  useSavedCard: false,
+                                }));
+                              }}
+                              className="text-xs font-bold text-[#BF4B24] hover:underline self-start"
+                            >
+                              Usar outro cartão
+                            </button>
                           </div>
-                          <div className="space-y-1">
-                            <Label className="text-xs font-bold text-slate-700">
-                              Nome do Titular
-                            </Label>
-                            <Input
-                              placeholder="NOME IMPRESSO NO CARTÃO"
-                              value={cardData.name}
-                              onChange={(e) =>
-                                setCardData({
-                                  ...cardData,
-                                  name: e.target.value.toUpperCase(),
-                                })
-                              }
-                              className="h-10 bg-slate-50 rounded-lg text-sm uppercase"
-                            />
-                          </div>
-                          <div className="grid grid-cols-2 gap-3">
+                        ) : (
+                          // TELA DE NOVO CARTÃO
+                          <div className="bg-white border border-[#BF4B24]/30 rounded-xl p-4 space-y-3">
                             <div className="space-y-1">
                               <Label className="text-xs font-bold text-slate-700">
-                                Validade
+                                Número do Cartão
                               </Label>
                               <Input
-                                placeholder="MM/AA"
-                                maxLength={5}
-                                value={cardData.expiry}
+                                placeholder="0000 0000 0000 0000"
+                                maxLength={19}
+                                value={cardData.number}
                                 onChange={(e) =>
                                   setCardData({
                                     ...cardData,
-                                    expiry: e.target.value,
+                                    number: formatCardNumber(e.target.value),
                                   })
                                 }
-                                className="h-10 bg-slate-50 rounded-lg text-center font-mono"
+                                className="h-10 bg-slate-50 rounded-lg font-mono text-sm"
                               />
                             </div>
                             <div className="space-y-1">
                               <Label className="text-xs font-bold text-slate-700">
-                                CVV
+                                Nome do Titular
                               </Label>
                               <Input
-                                type="password"
-                                placeholder="123"
-                                maxLength={4}
-                                value={cardData.cvv}
+                                placeholder="NOME IMPRESSO NO CARTÃO"
+                                value={cardData.name}
                                 onChange={(e) =>
                                   setCardData({
                                     ...cardData,
-                                    cvv: e.target.value,
+                                    name: e.target.value.toUpperCase(),
                                   })
                                 }
-                                className="h-10 bg-slate-50 rounded-lg text-center font-mono"
+                                className="h-10 bg-slate-50 rounded-lg text-sm uppercase"
                               />
                             </div>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="space-y-1">
+                                <Label className="text-xs font-bold text-slate-700">
+                                  Validade
+                                </Label>
+                                <Input
+                                  placeholder="MM/AA"
+                                  maxLength={5}
+                                  value={cardData.expiry}
+                                  onChange={(e) =>
+                                    setCardData({
+                                      ...cardData,
+                                      expiry: formatExpiry(e.target.value),
+                                    })
+                                  }
+                                  className="h-10 bg-slate-50 rounded-lg text-center font-mono"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <Label className="text-xs font-bold text-slate-700">
+                                  CVV
+                                </Label>
+                                <Input
+                                  type="password"
+                                  placeholder="123"
+                                  maxLength={4}
+                                  value={cardData.cvv}
+                                  onChange={(e) =>
+                                    setCardData({
+                                      ...cardData,
+                                      cvv: e.target.value.replace(/\D/g, ""),
+                                    })
+                                  }
+                                  className="h-10 bg-slate-50 rounded-lg text-center font-mono"
+                                />
+                              </div>
+                            </div>
+
+                            {/* TOGGLE DE TITULARIDADE */}
+                            <div className="flex items-center gap-2 mt-4 bg-slate-50 p-3 rounded-lg border border-slate-100">
+                              <input
+                                type="checkbox"
+                                id="isMyCard"
+                                checked={isMyCard}
+                                onChange={(e) => setIsMyCard(e.target.checked)}
+                                className="w-4 h-4 text-[#BF4B24] rounded border-slate-300"
+                              />
+                              <Label
+                                htmlFor="isMyCard"
+                                className="text-xs font-bold text-slate-700 cursor-pointer"
+                              >
+                                O cartão está em meu nome
+                              </Label>
+                            </div>
+
+                            {/* CAMPOS DINÂMICOS PARA CARTÃO DE TERCEIROS */}
+                            {!isMyCard && (
+                              <div className="grid grid-cols-2 gap-3 p-3 bg-orange-50/50 border border-orange-100 rounded-lg animate-in fade-in zoom-in-95">
+                                <div className="space-y-1 col-span-2 sm:col-span-1">
+                                  <Label className="text-xs font-bold text-slate-700">
+                                    CPF do Titular
+                                  </Label>
+                                  <Input
+                                    placeholder="000.000.000-00"
+                                    maxLength={14}
+                                    value={cardData.cpf}
+                                    onChange={(e) =>
+                                      setCardData({
+                                        ...cardData,
+                                        cpf: formatCPF(e.target.value),
+                                      })
+                                    }
+                                    className="h-10 bg-white rounded-lg font-mono text-sm"
+                                  />
+                                </div>
+                                <div className="space-y-1 col-span-2 sm:col-span-1">
+                                  <Label className="text-xs font-bold text-slate-700">
+                                    CEP da Fatura
+                                  </Label>
+                                  <Input
+                                    placeholder="00000-000"
+                                    maxLength={9}
+                                    value={cardData.cep}
+                                    onChange={(e) =>
+                                      setCardData({
+                                        ...cardData,
+                                        cep: formatCEP(e.target.value),
+                                      })
+                                    }
+                                    className="h-10 bg-white rounded-lg font-mono text-sm"
+                                  />
+                                </div>
+                              </div>
+                            )}
+
+                            {/* SALVAR CARTÃO */}
+                            <div className="flex items-center gap-2 mt-2 bg-slate-50 p-3 rounded-lg border border-slate-100">
+                              <input
+                                type="checkbox"
+                                id="saveCard"
+                                checked={cardData.saveCard}
+                                onChange={(e) =>
+                                  setCardData({
+                                    ...cardData,
+                                    saveCard: e.target.checked,
+                                  })
+                                }
+                                className="w-4 h-4 text-[#BF4B24] rounded border-slate-300"
+                              />
+                              <Label
+                                htmlFor="saveCard"
+                                className="text-xs font-bold text-slate-700 cursor-pointer"
+                              >
+                                Salvar cartão para compras futuras com 1 clique
+                              </Label>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 justify-center mt-2 text-[10px] font-bold text-emerald-600 bg-emerald-50 py-1.5 rounded-md">
+                              <ShieldCheck className="w-3 h-3" /> Processado com
+                              segurança pelo Asaas (PCI Compliant)
+                            </div>
                           </div>
-                          <div className="space-y-1">
-                            <Label className="text-xs font-bold text-slate-700">
-                              CPF do Titular
-                            </Label>
-                            <Input
-                              placeholder="000.000.000-00"
-                              maxLength={14}
-                              value={cardData.cpf}
-                              onChange={(e) =>
-                                setCardData({
-                                  ...cardData,
-                                  cpf: e.target.value,
-                                })
-                              }
-                              className="h-10 bg-slate-50 rounded-lg font-mono text-sm"
-                            />
-                          </div>
-                          <div className="flex items-center gap-1.5 justify-center mt-2 text-[10px] font-bold text-emerald-600 bg-emerald-50 py-1.5 rounded-md">
-                            <ShieldCheck className="w-3 h-3" /> Processado com
-                            segurança pelo Asaas
-                          </div>
-                        </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -942,7 +1160,7 @@ export function CheckoutModal({
                     Vence em {timeFormatted}
                   </p>
                   <div className="flex items-center gap-2 text-xs font-bold text-amber-600 bg-amber-50 px-4 py-2.5 rounded-lg border border-amber-200">
-                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />{" "}
+                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />
                     Aguardando confirmação do banco...
                   </div>
                 </div>
@@ -976,16 +1194,12 @@ export function CheckoutModal({
                 </p>
                 <div className="bg-white p-6 rounded-3xl shadow-lg border-2 border-slate-100 mb-8 relative overflow-hidden">
                   <div className="absolute top-0 left-0 w-full h-2 bg-[#BF4B24]"></div>
-                  {pixQrCode ? (
+                  {pixQrCode && (
                     <img
                       src={`data:image/png;base64,${pixQrCode}`}
                       alt="QR Code PIX"
                       className="w-56 h-56 object-contain"
                     />
-                  ) : (
-                    <div className="w-56 h-56 flex items-center justify-center bg-slate-100">
-                      <QrCode className="w-12 h-12 text-slate-400" />
-                    </div>
                   )}
                 </div>
                 <div className="w-full max-w-md mb-8">
@@ -1012,7 +1226,7 @@ export function CheckoutModal({
                   </div>
                 </div>
                 <div className="flex items-center gap-3 text-sm font-bold text-amber-600 bg-amber-50 px-6 py-3 rounded-xl border border-amber-200 shadow-sm">
-                  <Loader2 className="w-5 h-5 animate-spin shrink-0" />{" "}
+                  <Loader2 className="w-5 h-5 animate-spin shrink-0" />
                   <span>
                     Vence em {timeFormatted} - Aguardando pagamento...
                   </span>
@@ -1022,22 +1236,31 @@ export function CheckoutModal({
           )}
 
           {step === "success" && (
-            <div className="p-10 flex flex-col items-center text-center animate-in zoom-in-95 my-auto">
+            <div className="flex flex-col h-full bg-white relative justify-center items-center px-6 py-12 md:py-20 animate-in zoom-in-95 duration-300">
               <div className="w-24 h-24 bg-emerald-100 rounded-full flex items-center justify-center mb-6 shadow-inner">
                 <CheckCircle2 className="w-12 h-12 text-emerald-600" />
               </div>
-              <h2 className="text-3xl font-black text-slate-900 mb-3">
+              <h2 className="text-3xl font-black text-slate-900 mb-3 text-center">
                 Reserva Confirmada!
               </h2>
-              <p className="text-slate-500 font-medium max-w-sm mb-10">
+              <p className="text-slate-500 font-medium max-w-sm mb-8 text-center leading-relaxed">
                 O pagamento foi reconhecido instantaneamente e a sala já está
-                reservada para você na data escolhida.
+                bloqueada e reservada para você.
               </p>
+
+              <div className="flex items-center gap-3 text-sm font-bold text-slate-500 mb-8 bg-slate-50 px-5 py-3 rounded-xl border border-slate-100">
+                <Loader2 className="w-4 h-4 animate-spin text-emerald-500" />
+                Redirecionando para a sua agenda...
+              </div>
+
               <Button
-                onClick={() => window.location.reload()}
-                className="w-full max-w-xs h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl text-lg shadow-md"
+                onClick={() => {
+                  onClose();
+                  router.push("/dashboard");
+                }}
+                className="w-full max-w-xs h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl text-lg shadow-md transition-all active:scale-95"
               >
-                Concluir
+                Ir Agora <ArrowRight className="w-5 h-5 ml-2" />
               </Button>
             </div>
           )}
