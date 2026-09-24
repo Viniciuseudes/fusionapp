@@ -22,6 +22,8 @@ import {
   ShieldCheck,
   Lock,
   Copy,
+  XCircle,
+  AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -74,11 +76,9 @@ interface CheckoutModalProps {
   onSuccess?: () => void;
 }
 
-type CheckoutStep = "confirm" | "pix" | "success";
+// ADICIONADO O ESTADO DE "ERROR"
+type CheckoutStep = "confirm" | "pix" | "success" | "error";
 
-// ==========================================
-// FUNÇÕES DE MÁSCARA (UX/UI)
-// ==========================================
 const formatCardNumber = (val: string) => {
   return val
     .replace(/\D/g, "")
@@ -130,6 +130,7 @@ export function CheckoutModal({
   const router = useRouter();
 
   const [step, setStep] = useState<CheckoutStep>("confirm");
+  const [errorMessage, setErrorMessage] = useState<string>(""); // Armazena o motivo do erro
   const [paymentMethod, setPaymentMethod] = useState<"wallet" | "pix" | "card">(
     "wallet",
   );
@@ -185,7 +186,6 @@ export function CheckoutModal({
       };
       window.addEventListener("popstate", handlePop);
 
-      // Busca se o usuário tem cartão salvo no perfil
       const fetchSavedCard = async () => {
         const {
           data: { user },
@@ -221,6 +221,7 @@ export function CheckoutModal({
       setAppliedCoupon(null);
       setCouponCode("");
       setCouponFeedback(null);
+      setErrorMessage("");
       setShowCloseConfirm(false);
       setPaymentMethod("wallet");
       setIsMyCard(true);
@@ -245,17 +246,6 @@ export function CheckoutModal({
     }
   }, [pixQrCode, pixCopyPaste, activeBookingId]);
 
-  useEffect(() => {
-    if (step === "success") {
-      const timeout = setTimeout(() => {
-        onClose();
-        router.push("/dashboard");
-      }, 4000);
-
-      return () => clearTimeout(timeout);
-    }
-  }, [step, router, onClose]);
-
   // MOTOR DE BUSCA ATIVA E RECONCILIAÇÃO
   useEffect(() => {
     if (step !== "pix" || !activeBookingId) return;
@@ -275,12 +265,11 @@ export function CheckoutModal({
           setShowCloseConfirm(false);
           if (onSuccess) onSuccess();
         } else if (data.status === "cancelled") {
-          toast({
-            variant: "destructive",
-            title: "Pagamento Expirado",
-            description: "O tempo esgotou e sua reserva foi cancelada.",
-          });
-          onClose();
+          setErrorMessage(
+            "O tempo limite esgotou e sua reserva foi cancelada.",
+          );
+          setStep("error");
+          setShowCloseConfirm(false);
         }
       } catch (err) {
         console.error("Erro ao verificar status silenciosamente", err);
@@ -304,6 +293,10 @@ export function CheckoutModal({
             setStep("success");
             setShowCloseConfirm(false);
             if (onSuccess) onSuccess();
+          } else if (payload.new && payload.new.status === "cancelled") {
+            setErrorMessage("Reserva cancelada (Tempo esgotado ou recusado).");
+            setStep("error");
+            setShowCloseConfirm(false);
           } else {
             checkPaymentStatus();
           }
@@ -326,10 +319,10 @@ export function CheckoutModal({
       window.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("focus", checkPaymentStatus);
     };
-  }, [step, activeBookingId, supabase, toast, onClose, onSuccess]);
+  }, [step, activeBookingId, supabase, onClose, onSuccess]);
 
   useEffect(() => {
-    if (!isOpen || step === "success" || !expiresAt) return;
+    if (!isOpen || step === "success" || step === "error" || !expiresAt) return;
 
     const timer = setInterval(() => {
       const now = Date.now();
@@ -337,16 +330,15 @@ export function CheckoutModal({
       setTimeLeft(remaining);
 
       if (remaining === 0) {
-        onClose();
-        toast({
-          title: "Tempo esgotado",
-          description: "A reserva expirou. Tente novamente.",
-        });
+        setErrorMessage(
+          "O código PIX expirou. Por favor, inicie a reserva novamente.",
+        );
+        setStep("error");
       }
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [isOpen, step, expiresAt, onClose, toast]);
+  }, [isOpen, step, expiresAt]);
 
   const handleAttemptClose = () => {
     if (step === "pix") {
@@ -423,7 +415,8 @@ export function CheckoutModal({
     setPaymentMethod(method);
   };
 
-  const handleSubmit = () => {
+  // Wrapper robusto que intercepta falhas para jogar na tela de ERRO
+  const handleSubmitWrapper = async () => {
     if (paymentMethod === "card" && !cardData.useSavedCard) {
       if (
         !cardData.number ||
@@ -445,11 +438,24 @@ export function CheckoutModal({
         });
       }
     }
-    onConfirm(
-      paymentMethod,
-      appliedCoupon,
-      paymentMethod === "card" ? cardData : undefined,
-    );
+
+    try {
+      // Chama a função onConfirm passada pela página pai (que faz o fetch real)
+      // Como a função é void/assíncrona no componente pai, precisamos tratar o erro lá ou interceptá-lo.
+      // Para manter a arquitetura atual sem quebrar a assinatura da função `onConfirm`,
+      // instruí o componente pai (room-detail.tsx) a não fechar o modal abruptamente em caso de erro,
+      // mas sim expor uma forma de alterar o state. Como o controle do estado do PIX/Sucesso vem por props,
+      // usaremos a intercepção nativa do erro do `onConfirm` caso possua await.
+
+      await onConfirm(
+        paymentMethod,
+        appliedCoupon,
+        paymentMethod === "card" ? cardData : undefined,
+      );
+    } catch (err: any) {
+      setErrorMessage(err.message || "Não foi possível autorizar o pagamento.");
+      setStep("error");
+    }
   };
 
   const handleRobustCopy = async (textToCopy: string | null | undefined) => {
@@ -462,6 +468,8 @@ export function CheckoutModal({
         const textArea = document.createElement("textarea");
         textArea.value = textToCopy;
         textArea.style.position = "fixed";
+        textArea.style.top = "0";
+        textArea.style.left = "0";
         textArea.style.opacity = "0";
         document.body.appendChild(textArea);
         textArea.focus();
@@ -534,9 +542,9 @@ export function CheckoutModal({
     <>
       <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm md:p-4 animate-in fade-in duration-200">
         <div
-          className={`bg-white w-full max-w-4xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-300 max-h-[100dvh] md:max-h-[95vh] ${step === "pix" ? "h-full md:h-auto md:rounded-2xl" : "rounded-2xl"}`}
+          className={`bg-white w-full max-w-4xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-300 max-h-[100dvh] md:max-h-[95vh] ${step === "pix" || step === "success" || step === "error" ? "h-full md:h-auto md:rounded-2xl" : "rounded-2xl"}`}
         >
-          {step !== "pix" && step !== "success" && (
+          {step === "confirm" && (
             <div className="px-6 py-2.5 flex items-center justify-center gap-2 bg-slate-100 border-b border-slate-200">
               <Clock className="w-4 h-4 text-slate-400" />
               <p className="text-xs font-bold text-slate-500 tracking-widest uppercase">
@@ -548,7 +556,7 @@ export function CheckoutModal({
             </div>
           )}
 
-          {step !== "pix" && step !== "success" && (
+          {step === "confirm" && (
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-white">
               <h2 className="text-lg font-bold text-slate-900">
                 Revisar Reserva
@@ -679,6 +687,12 @@ export function CheckoutModal({
                           Data e Horários
                         </p>
                       </div>
+                      <button
+                        onClick={onClose}
+                        className="text-xs font-bold text-[#BF4B24] hover:underline underline-offset-2"
+                      >
+                        Alterar Horas
+                      </button>
                     </div>
                     <p className="text-sm font-bold text-slate-700 mb-3">
                       {dateFormatted}
@@ -918,7 +932,7 @@ export function CheckoutModal({
                             </button>
                           </div>
                         ) : (
-                          // TELA DE NOVO CARTÃO
+                          // TELA DE NOVO CARTÃO (MÁSCARAS ATIVAS)
                           <div className="bg-white border border-[#BF4B24]/30 rounded-xl p-4 space-y-3">
                             <div className="space-y-1">
                               <Label className="text-xs font-bold text-slate-700">
@@ -1048,7 +1062,7 @@ export function CheckoutModal({
                               </div>
                             )}
 
-                            {/* SALVAR CARTÃO */}
+                            {/* OPÇÃO SALVAR CARTÃO */}
                             <div className="flex items-center gap-2 mt-2 bg-slate-50 p-3 rounded-lg border border-slate-100">
                               <input
                                 type="checkbox"
@@ -1097,7 +1111,7 @@ export function CheckoutModal({
                     </div>
                   ) : (
                     <Button
-                      onClick={handleSubmit}
+                      onClick={handleSubmitWrapper}
                       disabled={loading || timeLeft === 0}
                       className="w-full h-14 rounded-xl font-black bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-md transition-all text-base disabled:opacity-50"
                     >
@@ -1235,22 +1249,112 @@ export function CheckoutModal({
             </div>
           )}
 
-          {step === "success" && (
+          {/* TELA DE ERRO DEDICADA */}
+          {step === "error" && (
             <div className="flex flex-col h-full bg-white relative justify-center items-center px-6 py-12 md:py-20 animate-in zoom-in-95 duration-300">
-              <div className="w-24 h-24 bg-emerald-100 rounded-full flex items-center justify-center mb-6 shadow-inner">
-                <CheckCircle2 className="w-12 h-12 text-emerald-600" />
+              <button
+                onClick={onClose}
+                className="absolute top-6 right-6 p-2 text-slate-400 hover:text-slate-900 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+
+              <div className="w-24 h-24 bg-red-100 rounded-full flex items-center justify-center mb-6 shadow-inner">
+                <XCircle className="w-12 h-12 text-red-600" />
               </div>
               <h2 className="text-3xl font-black text-slate-900 mb-3 text-center">
-                Reserva Confirmada!
+                Pagamento não aprovado
+              </h2>
+
+              <div className="bg-red-50 border border-red-100 p-4 rounded-xl mb-8 w-full max-w-sm">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                  <p className="text-sm font-medium text-red-800 leading-relaxed">
+                    {errorMessage ||
+                      "Houve um problema com a autorização do seu pagamento. Verifique seus dados ou contate o banco."}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-col w-full max-w-xs gap-3">
+                <Button
+                  onClick={() => setStep("confirm")}
+                  className="w-full h-14 bg-slate-900 hover:bg-slate-800 text-white font-black rounded-xl text-lg shadow-md transition-all active:scale-95"
+                >
+                  Tentar outro cartão
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={onClose}
+                  className="w-full h-12 text-slate-500 font-bold rounded-xl hover:bg-slate-100"
+                >
+                  Cancelar reserva
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* RECIBO DIGITAL: SUCESSO PERSISTENTE */}
+          {step === "success" && (
+            <div className="flex flex-col h-full bg-white relative items-center px-6 py-10 md:py-16 animate-in zoom-in-95 duration-300 overflow-y-auto">
+              <button
+                onClick={onClose}
+                className="absolute top-6 right-6 p-2 text-slate-400 hover:text-slate-900 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+
+              <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mb-6 shadow-inner shrink-0">
+                <CheckCircle2 className="w-10 h-10 text-emerald-600" />
+              </div>
+
+              <h2 className="text-2xl md:text-3xl font-black text-slate-900 mb-2 text-center">
+                Tudo Certo!
               </h2>
               <p className="text-slate-500 font-medium max-w-sm mb-8 text-center leading-relaxed">
-                O pagamento foi reconhecido instantaneamente e a sala já está
-                bloqueada e reservada para você.
+                Pagamento confirmado. O seu horário já está bloqueado no sistema
+                e garantido para você.
               </p>
 
-              <div className="flex items-center gap-3 text-sm font-bold text-slate-500 mb-8 bg-slate-50 px-5 py-3 rounded-xl border border-slate-100">
-                <Loader2 className="w-4 h-4 animate-spin text-emerald-500" />
-                Redirecionando para a sua agenda...
+              {/* Recibo da Reserva */}
+              <div className="w-full max-w-sm bg-slate-50 border border-slate-200 rounded-2xl p-5 mb-8 shadow-sm">
+                <h3 className="text-xs font-black text-slate-400 uppercase tracking-wider mb-4">
+                  Comprovante de Reserva
+                </h3>
+
+                <div className="space-y-4">
+                  <div className="flex justify-between items-start pb-4 border-b border-slate-200/60">
+                    <span className="text-sm font-bold text-slate-500">
+                      Espaço
+                    </span>
+                    <span className="text-sm font-black text-slate-900 text-right max-w-[180px]">
+                      {room.name}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between items-start pb-4 border-b border-slate-200/60">
+                    <span className="text-sm font-bold text-slate-500">
+                      Data
+                    </span>
+                    <div className="text-right">
+                      <span className="text-sm font-black text-slate-900 block">
+                        {dateFormatted}
+                      </span>
+                      <span className="text-xs font-bold text-[#BF4B24] mt-1 block">
+                        {summary.durationHours} hora(s) reservada(s)
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-bold text-slate-500">
+                      Valor Pago
+                    </span>
+                    <span className="text-lg font-black text-emerald-600">
+                      R$ {finalBRL.toFixed(2).replace(".", ",")}
+                    </span>
+                  </div>
+                </div>
               </div>
 
               <Button
@@ -1258,9 +1362,9 @@ export function CheckoutModal({
                   onClose();
                   router.push("/dashboard");
                 }}
-                className="w-full max-w-xs h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl text-lg shadow-md transition-all active:scale-95"
+                className="w-full max-w-sm h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl text-lg shadow-md transition-all active:scale-95"
               >
-                Ir Agora <ArrowRight className="w-5 h-5 ml-2" />
+                Ver na minha agenda <ArrowRight className="w-5 h-5 ml-2" />
               </Button>
             </div>
           )}
