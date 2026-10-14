@@ -5,7 +5,7 @@ import { createClient } from "@/utils/supabase/client";
 import {
   TrendingUp,
   Users,
-  Map,
+  Map as MapIcon,
   Wallet,
   ArrowUpRight,
   Activity,
@@ -59,6 +59,37 @@ const PIE_COLORS = [
   "#64748b",
 ];
 
+// Normaliza nomenclaturas de tier ('basic' e 'start' operam na mesma faixa de entrada)
+function normalizeTier(tier?: string | null): "start" | "vip" | "master" {
+  const t = (tier || "start").toLowerCase().trim();
+  if (t.includes("master")) return "master";
+  if (t.includes("vip")) return "vip";
+  return "start";
+}
+
+// Extrai preço por hora configurado diretamente nas modalidades da sala, se existir
+function extractRoomModalitiesHourlyRate(modalities: any): number | null {
+  if (!modalities) return null;
+  try {
+    const parsed =
+      typeof modalities === "string" ? JSON.parse(modalities) : modalities;
+    const candidates = [
+      parsed?.hourly?.price,
+      parsed?.hourlyPrice,
+      parsed?.price_per_hour,
+      parsed?.pricePerHour,
+      parsed?.price,
+    ];
+    for (const c of candidates) {
+      const val = Number(c);
+      if (!isNaN(val) && val > 0) return val;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 export function AdminOverviewTab() {
   const supabase = createClient();
   const { toast } = useToast();
@@ -92,45 +123,297 @@ export function AdminOverviewTab() {
           daysCount = 365;
         }
 
-        // 1. Busca Reservas
-        const { data: bookingsData, error: bErr } = await supabase
-          .from("bookings")
-          .select(
-            "id, start_time, end_time, total_cost, room_id, user_id, status",
-          )
-          .gte("start_time", startDate.toISOString())
-          .in("status", ["confirmed", "completed", "pending_payment"]);
+        // 1. Busca Reservas e Salas em paralelo com Pacotes e Categorias
+        const [bookingsRes, roomsRes, packagesRes, categoriesRes] =
+          await Promise.all([
+            supabase
+              .from("bookings")
+              .select(
+                "id, created_at, start_time, end_time, total_cost, upgrade_fee_amount, room_id, user_id, status",
+              )
+              .gte("start_time", startDate.toISOString())
+              .in("status", ["confirmed", "completed", "pending_payment"]),
+            supabase
+              .from("rooms")
+              .select(
+                "id, name, host_id, is_active, tier, category_id, modalities",
+              ),
+            supabase.from("packages").select("id, tier, hours, price, active"),
+            supabase
+              .from("room_categories")
+              .select("id, name, credit_cost_per_hour, upgrade_fee_per_hour"),
+          ]);
 
-        if (bErr) throw bErr;
+        if (bookingsRes.error) throw bookingsRes.error;
+        if (roomsRes.error) throw roomsRes.error;
 
-        // 2. Busca Salas
-        const { data: roomsData, error: rErr } = await supabase
-          .from("rooms")
-          .select("id, name, host_id, is_active");
+        const bookingsData = bookingsRes.data || [];
+        const roomsData = roomsRes.data || [];
 
-        if (rErr) throw rErr;
-
-        // 3. BLINDAGEM: Coleta de IDs seguros (Remove nulos)
+        // 2. Coleta de IDs seguros para buscas relacionais
+        const bookingIds = bookingsData.map((b: any) => b.id).filter(Boolean);
         const userIds = [
-          ...new Set(bookingsData?.map((b) => b.user_id).filter(Boolean) || []),
+          ...new Set(bookingsData.map((b: any) => b.user_id).filter(Boolean)),
         ];
         const hostIds = [
-          ...new Set(roomsData?.map((r) => r.host_id).filter(Boolean) || []),
+          ...new Set(roomsData.map((r: any) => r.host_id).filter(Boolean)),
         ];
         const allProfileIds = [...new Set([...userIds, ...hostIds])];
 
-        let profilesData: any[] = [];
+        const [profilesRes, walletRes, subsRes, couponsRes] = await Promise.all(
+          [
+            allProfileIds.length > 0
+              ? supabase
+                  .from("profiles")
+                  .select("id, full_name, specialty")
+                  .in("id", allProfileIds)
+              : Promise.resolve({ data: [] as any[], error: null }),
+            userIds.length > 0
+              ? supabase
+                  .from("wallet_transactions")
+                  .select(
+                    "id, user_id, amount, type, description, tier, created_at, expires_at",
+                  )
+                  .in("user_id", userIds)
+                  .order("created_at", { ascending: true })
+              : Promise.resolve({ data: [] as any[], error: null }),
+            userIds.length > 0
+              ? supabase
+                  .from("subscriptions")
+                  .select("id, user_id, tier, hours, status, created_at")
+                  .in("user_id", userIds)
+              : Promise.resolve({ data: [] as any[], error: null }),
+            bookingIds.length > 0
+              ? supabase
+                  .from("coupon_uses")
+                  .select("booking_id, discount_applied")
+                  .in("booking_id", bookingIds)
+              : Promise.resolve({ data: [] as any[], error: null }),
+          ],
+        );
 
-        // Só faz a busca de perfis se existirem IDs na lista! (Evita o Erro Vazio)
-        if (allProfileIds.length > 0) {
-          const { data, error: pErr } = await supabase
-            .from("profiles")
-            .select("id, full_name, specialty")
-            .in("id", allProfileIds);
+        if (profilesRes.error) throw profilesRes.error;
+        const profilesData = profilesRes.data || [];
 
-          if (pErr) throw pErr;
-          profilesData = data || [];
-        }
+        // ========================================================
+        // PREPARAÇÃO DO MOTOR DE PRECIFICAÇÃO (PACKAGES + TIERS)
+        // ========================================================
+        const roomsMap = new Map<string, any>(
+          roomsData.map((r: any) => [r.id, r]),
+        );
+        const categoriesMap = new Map<string, any>(
+          (categoriesRes.data || []).map((c: any) => [c.id, c]),
+        );
+
+        const packageRateMap: Record<
+          "start" | "vip" | "master",
+          Map<number, number>
+        > = {
+          start: new Map<number, number>(),
+          vip: new Map<number, number>(),
+          master: new Map<number, number>(),
+        };
+
+        (packagesRes.data || []).forEach((pkg: any) => {
+          const t = normalizeTier(pkg.tier);
+          const h = Math.max(1, Number(pkg.hours) || 1);
+          const rawPrice = Number(pkg.price) || 0;
+          if (rawPrice <= 0) return;
+
+          const hourlyRate =
+            h > 1 && rawPrice / h >= 15 ? rawPrice / h : rawPrice;
+          packageRateMap[t].set(h, hourlyRate);
+        });
+
+        const couponDiscountMap = new Map<string, number>();
+        (couponsRes.data || []).forEach((cu: any) => {
+          if (cu.booking_id) {
+            couponDiscountMap.set(
+              cu.booking_id,
+              (couponDiscountMap.get(cu.booking_id) || 0) +
+                Number(cu.discount_applied || 0),
+            );
+          }
+        });
+
+        const userWalletMap = new Map<string, any[]>();
+        (walletRes.data || []).forEach((tx: any) => {
+          const list = userWalletMap.get(tx.user_id) || [];
+          list.push(tx);
+          userWalletMap.set(tx.user_id, list);
+        });
+
+        const userSubsMap = new Map<string, any[]>();
+        (subsRes.data || []).forEach((sub: any) => {
+          const list = userSubsMap.get(sub.user_id) || [];
+          list.push(sub);
+          userSubsMap.set(sub.user_id, list);
+        });
+
+        const getRateFromPackageTable = (
+          tier: "start" | "vip" | "master",
+          targetHours?: number | null,
+        ): number | null => {
+          const tierPackages = packageRateMap[tier];
+          if (!tierPackages || tierPackages.size === 0) return null;
+
+          if (targetHours && tierPackages.has(targetHours)) {
+            return tierPackages.get(targetHours)!;
+          }
+
+          if (targetHours && targetHours > 0) {
+            let closestHours: number | null = null;
+            let minDiff = Infinity;
+            for (const [h] of tierPackages.entries()) {
+              const diff = Math.abs(h - targetHours);
+              if (diff < minDiff) {
+                minDiff = diff;
+                closestHours = h;
+              }
+            }
+            if (closestHours !== null) {
+              return tierPackages.get(closestHours)!;
+            }
+          }
+
+          if (tierPackages.has(1)) return tierPackages.get(1)!;
+          const sortedHours = Array.from(tierPackages.keys()).sort(
+            (a, b) => a - b,
+          );
+          return tierPackages.get(sortedHours[0])!;
+        };
+
+        const resolveBookingRevenueBrl = (b: any): number => {
+          const room = roomsMap.get(b.room_id);
+          const roomTier = normalizeTier(room?.tier);
+
+          const durationMs =
+            b.end_time && b.start_time
+              ? new Date(b.end_time).getTime() -
+                new Date(b.start_time).getTime()
+              : 3600000;
+          const durationHours = Math.max(0.5, durationMs / (1000 * 60 * 60));
+
+          const rawTotalCost = Number(b.total_cost || 0);
+          const upgradeFee = Number(b.upgrade_fee_amount || 0);
+          const discount = couponDiscountMap.get(b.id) || 0;
+
+          // Se `total_cost` já estiver em Reais (checkout direto)
+          if (rawTotalCost >= durationHours * 15) {
+            return Math.max(0, rawTotalCost + upgradeFee - discount);
+          }
+
+          const creditsUsed = rawTotalCost > 0 ? rawTotalCost : durationHours;
+          const userTxs = userWalletMap.get(b.user_id) || [];
+          const bookingTime = b.created_at
+            ? new Date(b.created_at).getTime()
+            : new Date(b.start_time).getTime();
+
+          let creditTierUsed: "start" | "vip" | "master" = roomTier;
+          const matchingDebit = userTxs.find((tx: any) => {
+            if (Number(tx.amount) >= 0) return false;
+            const txTime = new Date(tx.created_at).getTime();
+            return Math.abs(txTime - bookingTime) <= 10 * 60 * 1000;
+          });
+          if (matchingDebit?.tier) {
+            creditTierUsed = normalizeTier(matchingDebit.tier);
+          }
+
+          const compatibleTiers: ("start" | "vip" | "master")[] =
+            roomTier === "master"
+              ? ["master"]
+              : roomTier === "vip"
+                ? ["vip", "master"]
+                : ["start", "vip", "master"];
+
+          const positiveTxs = userTxs.filter(
+            (tx: any) => Number(tx.amount) > 0,
+          );
+          const validPriorCredits = positiveTxs.filter((tx: any) => {
+            const createdMs = new Date(tx.created_at).getTime();
+            const notAfterBooking = createdMs <= bookingTime + 60 * 1000;
+            const notExpiredAtBooking =
+              !tx.expires_at ||
+              new Date(tx.expires_at).getTime() >= bookingTime;
+            return notAfterBooking && notExpiredAtBooking;
+          });
+
+          const candidateCredits =
+            validPriorCredits.length > 0 ? validPriorCredits : positiveTxs;
+
+          const sourceCreditTx =
+            [...candidateCredits]
+              .reverse()
+              .find((tx: any) => normalizeTier(tx.tier) === creditTierUsed) ||
+            [...candidateCredits]
+              .reverse()
+              .find((tx: any) =>
+                compatibleTiers.includes(normalizeTier(tx.tier)),
+              ) ||
+            candidateCredits[candidateCredits.length - 1];
+
+          let detectedPackageHours: number | null = null;
+          if (sourceCreditTx) {
+            creditTierUsed = normalizeTier(sourceCreditTx.tier || roomTier);
+            const txAmt = Math.round(Number(sourceCreditTx.amount));
+            const descMatch = String(sourceCreditTx.description || "").match(
+              /(\d+)\s*(?:h|hora|horas|crédito|credito)/i,
+            );
+            if (descMatch && Number(descMatch[1]) > 0) {
+              detectedPackageHours = Number(descMatch[1]);
+            } else if (txAmt > 0) {
+              detectedPackageHours = txAmt;
+            }
+          } else {
+            const userSubs = userSubsMap.get(b.user_id) || [];
+            const activeSub =
+              userSubs.find((s: any) => s.status === "ACTIVE") || userSubs[0];
+            if (activeSub) {
+              creditTierUsed = normalizeTier(activeSub.tier || roomTier);
+              detectedPackageHours = Number(activeSub.hours) || null;
+            }
+          }
+
+          let resolvedHourlyRate = getRateFromPackageTable(
+            creditTierUsed,
+            detectedPackageHours,
+          );
+
+          if (resolvedHourlyRate === null && creditTierUsed !== roomTier) {
+            resolvedHourlyRate = getRateFromPackageTable(
+              roomTier,
+              detectedPackageHours,
+            );
+          }
+
+          if (resolvedHourlyRate === null) {
+            const roomModalityRate = extractRoomModalitiesHourlyRate(
+              room?.modalities,
+            );
+            const categoryObj = room?.category_id
+              ? categoriesMap.get(room.category_id)
+              : null;
+            const categoryRate =
+              categoryObj && Number(categoryObj.credit_cost_per_hour) >= 15
+                ? Number(categoryObj.credit_cost_per_hour)
+                : null;
+
+            const defaultTierRates: Record<"start" | "vip" | "master", number> =
+              {
+                start: 45,
+                vip: 60,
+                master: 80,
+              };
+
+            resolvedHourlyRate =
+              roomModalityRate || categoryRate || defaultTierRates[roomTier];
+          }
+
+          return Math.max(
+            0,
+            creditsUsed * resolvedHourlyRate + upgradeFee - discount,
+          );
+        };
 
         // ========================================================
         // MOTOR DE PROCESSAMENTO (BI MATH)
@@ -152,7 +435,7 @@ export function AdminOverviewTab() {
         ];
 
         const roomStats: any = {};
-        roomsData?.forEach((r) => {
+        roomsData.forEach((r: any) => {
           roomStats[r.id] = {
             id: r.id,
             name: r.name,
@@ -162,11 +445,10 @@ export function AdminOverviewTab() {
           };
         });
 
-        bookingsData?.forEach((b) => {
-          // Blindagem de data nula
+        bookingsData.forEach((b: any) => {
           if (!b.start_time) return;
 
-          const revenue = (Number(b.total_cost) || 0) * 45;
+          const revenue = resolveBookingRevenueBrl(b);
           const fee = revenue * 0.1;
 
           totalGmv += revenue;
@@ -188,7 +470,9 @@ export function AdminOverviewTab() {
           revMap[dateKey].gmv += revenue;
           revMap[dateKey].platformFee += fee;
 
-          const doctorProfile = profilesData?.find((p) => p.id === b.user_id);
+          const doctorProfile = profilesData.find(
+            (p: any) => p.id === b.user_id,
+          );
           const specialty = doctorProfile?.specialty || "Outros";
           specMap[specialty] = (specMap[specialty] || 0) + 1;
 
@@ -213,7 +497,7 @@ export function AdminOverviewTab() {
         setGmv(totalGmv);
         setTakeRate(totalGmv * 0.1);
         setActiveDoctors(uniqueDoctors.size);
-        setActiveRooms(roomsData?.filter((r) => r.is_active).length || 0);
+        setActiveRooms(roomsData.filter((r: any) => r.is_active).length || 0);
 
         const sortedRevData = Object.values(revMap).sort(
           (a: any, b: any) => a.order - b.order,
@@ -250,7 +534,9 @@ export function AdminOverviewTab() {
         const formattedRooms = Object.values(roomStats)
           .filter((r: any) => r.bookings > 0)
           .map((r: any) => {
-            const hostProfile = profilesData?.find((p) => p.id === r.host_id);
+            const hostProfile = profilesData.find(
+              (p: any) => p.id === r.host_id,
+            );
             const occ = Math.min(
               Math.round((r.bookings / (daysCount * 4)) * 100),
               100,
@@ -272,7 +558,6 @@ export function AdminOverviewTab() {
 
         setTopRooms(formattedRooms);
       } catch (err: any) {
-        // TRATAMENTO DE ERRO AVANÇADO (Captura o motivo real)
         console.error("Erro ao montar BI do Admin:", err);
 
         let errorMsg = "Ocorreu um erro desconhecido ao carregar o painel.";
@@ -498,7 +783,7 @@ export function AdminOverviewTab() {
                   tickLine={false}
                   tick={{ fontSize: 12, fill: "#64748b" }}
                   tickFormatter={(val) =>
-                    `R$${val >= 1000 ? val / 1000 + "k" : val}`
+                    `R$${val >= 1000 ? (val / 1000).toFixed(1) + "k" : val}`
                   }
                 />
                 <RechartsTooltip
@@ -508,7 +793,7 @@ export function AdminOverviewTab() {
                     boxShadow: "0 10px 25px -5px rgba(0,0,0,0.1)",
                   }}
                   formatter={(value: number, name: string) => [
-                    `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`,
+                    `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
                     name === "gmv" ? "Volume Total" : "Receita Fusion",
                   ]}
                 />
@@ -591,8 +876,8 @@ export function AdminOverviewTab() {
         <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
-              <Map className="w-5 h-5 text-indigo-500" /> Zonas Quentes e Frias
-              (Real)
+              <MapIcon className="w-5 h-5 text-indigo-500" /> Zonas Quentes e
+              Frias (Real)
             </h2>
             <p className="text-xs font-medium text-slate-500 mt-1">
               Concentração de agendamentos no período selecionado.
@@ -754,6 +1039,7 @@ export function AdminOverviewTab() {
                       R${" "}
                       {room.revenue.toLocaleString("pt-BR", {
                         minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
                       })}
                     </td>
                   </tr>
