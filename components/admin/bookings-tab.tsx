@@ -57,11 +57,16 @@ import { useToast } from "@/hooks/use-toast";
 
 interface BookingInfo {
   id: string;
+  user_id: string;
   created_at: string;
   start_time: string;
   end_time: string;
   status: string;
   total_cost: number;
+  credits_used: number;
+  credit_tier_raw: string;
+  credit_tx_type: string;
+  credit_expires_at: string | null;
   gross_value_brl: number;
   hourly_rate_brl: number;
   pricing_label: string;
@@ -229,7 +234,9 @@ export function AdminBookingsTab() {
       ]);
 
       const roomsData = roomsRes.data || [];
-      const roomsMap = new Map(roomsData.map((r: any) => [r.id, r]));
+      const roomsMap = new Map<string, any>(
+        roomsData.map((r: any) => [r.id, r]),
+      );
 
       const hostIds = [
         ...new Set(roomsData.map((r: any) => r.host_id).filter(Boolean)),
@@ -243,10 +250,10 @@ export function AdminBookingsTab() {
               .in("id", hostIds)
           : { data: [] as any[] };
 
-      const usersMap = new Map(
+      const usersMap = new Map<string, string>(
         usersRes.data?.map((u: any) => [u.id, u.full_name]) || [],
       );
-      const hostsMap = new Map(
+      const hostsMap = new Map<string, string>(
         hostsRes.data?.map((h: any) => [h.id, h.full_name]) || [],
       );
 
@@ -255,9 +262,9 @@ export function AdminBookingsTab() {
         "start" | "vip" | "master",
         Map<number, number>
       > = {
-        start: new Map(),
-        vip: new Map(),
-        master: new Map(),
+        start: new Map<number, number>(),
+        vip: new Map<number, number>(),
+        master: new Map<number, number>(),
       };
 
       (packagesRes.data || []).forEach((pkg: any) => {
@@ -266,19 +273,15 @@ export function AdminBookingsTab() {
         const rawPrice = Number(pkg.price) || 0;
         if (rawPrice <= 0) return;
 
-        // Se o preço dividido pelas horas for >= R$ 15, `price` é o valor fechado do pacote (ex: 8h = R$ 360 -> R$ 45/h).
-        // Caso contrário, `price` já está salvo como valor unitário da hora.
         const hourlyRate =
           h > 1 && rawPrice / h >= 15 ? rawPrice / h : rawPrice;
         packageRateMap[t].set(h, hourlyRate);
       });
 
-      // Categorias de sala (caso alguma sala utilize category_id com preço base)
-      const categoriesMap = new Map(
+      const categoriesMap = new Map<string, any>(
         (categoriesRes.data || []).map((c: any) => [c.id, c]),
       );
 
-      // Descontos de cupons por booking_id
       const couponDiscountMap = new Map<string, number>();
       (couponsRes.data || []).forEach((cu: any) => {
         if (cu.booking_id) {
@@ -290,7 +293,6 @@ export function AdminBookingsTab() {
         }
       });
 
-      // Agrupa transações de carteira e assinaturas por usuário
       const userWalletMap = new Map<string, any[]>();
       (walletRes.data || []).forEach((tx: any) => {
         const list = userWalletMap.get(tx.user_id) || [];
@@ -305,7 +307,6 @@ export function AdminBookingsTab() {
         userSubsMap.set(sub.user_id, list);
       });
 
-      // Função que resolve a tarifa/hora de um Tier e quantidade de horas do pacote
       const getRateFromPackageTable = (
         tier: "start" | "vip" | "master",
         targetHours?: number | null,
@@ -323,7 +324,6 @@ export function AdminBookingsTab() {
         }
 
         if (targetHours && targetHours > 0) {
-          // Busca o pacote de horas mais próximo dentro do mesmo Tier
           let closestHours: number | null = null;
           let minDiff = Infinity;
           for (const [h] of tierPackages.entries()) {
@@ -341,7 +341,6 @@ export function AdminBookingsTab() {
           }
         }
 
-        // Sem horas específicas: prioriza 1h (avulso) ou o menor pacote do Tier
         if (tierPackages.has(1)) {
           return { rate: tierPackages.get(1)!, matchedHours: 1 };
         }
@@ -352,7 +351,6 @@ export function AdminBookingsTab() {
         return { rate: tierPackages.get(firstH)!, matchedHours: firstH };
       };
 
-      // Resolve o valor financeiro exato de cada agendamento
       const formattedBookings: BookingInfo[] = rawBookings.map((b: any) => {
         const room = roomsMap.get(b.room_id);
         const hostId = room?.host_id;
@@ -367,16 +365,39 @@ export function AdminBookingsTab() {
         const upgradeFee = Number(b.upgrade_fee_amount || 0);
         const discount = couponDiscountMap.get(b.id) || 0;
 
-        // Caso 1: `total_cost` já foi salvo em Reais (ex: checkout direto onde total_cost >= R$ 15/h)
+        const userTxs = userWalletMap.get(b.user_id) || [];
+        const bookingTime = new Date(b.created_at).getTime();
+
+        // Verifica se existe débito na carteira próximo ao horário de criação da reserva
+        const matchingDebit = userTxs.find((tx: any) => {
+          if (Number(tx.amount) >= 0) return false;
+          const txTime = new Date(tx.created_at).getTime();
+          return Math.abs(txTime - bookingTime) <= 10 * 60 * 1000;
+        });
+
+        const positiveTxs = userTxs.filter((tx: any) => Number(tx.amount) > 0);
+        const defaultPositiveType =
+          positiveTxs[positiveTxs.length - 1]?.type || "credit";
+
+        // Caso 1: `total_cost` já foi salvo em Reais (checkout direto)
         if (rawTotalCost >= durationHours * 15) {
           const finalBrl = Math.max(0, rawTotalCost + upgradeFee - discount);
+          const creditsEquivalent = matchingDebit
+            ? Math.abs(Number(matchingDebit.amount))
+            : durationHours;
+
           return {
             id: b.id,
+            user_id: b.user_id,
             created_at: b.created_at,
             start_time: b.start_time,
             end_time: b.end_time,
             status: b.status,
             total_cost: rawTotalCost,
+            credits_used: creditsEquivalent,
+            credit_tier_raw: matchingDebit?.tier || room?.tier || roomTier,
+            credit_tx_type: defaultPositiveType,
+            credit_expires_at: null,
             gross_value_brl: finalBrl,
             hourly_rate_brl: finalBrl / durationHours,
             pricing_label: `${formatTierLabel(roomTier)} • Reserva Direta`,
@@ -389,23 +410,21 @@ export function AdminBookingsTab() {
           };
         }
 
-        // Caso 2: Reserva feita via Créditos/Horas (ex: total_cost = 1 crédito para 1h)
-        const creditsUsed = rawTotalCost > 0 ? rawTotalCost : durationHours;
-        const userTxs = userWalletMap.get(b.user_id) || [];
-        const bookingTime = new Date(b.created_at).getTime();
+        // Caso 2: Reserva via Créditos / Horas
+        const creditsUsed = matchingDebit
+          ? Math.abs(Number(matchingDebit.amount))
+          : rawTotalCost > 0
+            ? rawTotalCost
+            : durationHours;
 
-        // 2.1 Verifica se há débito registrado no momento da reserva para confirmar o Tier do crédito consumido
         let creditTierUsed: "start" | "vip" | "master" = roomTier;
-        const matchingDebit = userTxs.find((tx: any) => {
-          if (Number(tx.amount) >= 0) return false;
-          const txTime = new Date(tx.created_at).getTime();
-          return Math.abs(txTime - bookingTime) <= 10 * 60 * 1000; // janela de 10 min
-        });
+        let rawTierString: string = room?.tier || roomTier;
+
         if (matchingDebit?.tier) {
           creditTierUsed = normalizeTier(matchingDebit.tier);
+          rawTierString = matchingDebit.tier;
         }
 
-        // 2.2 Busca a recarga/compra de pacote (`amount > 0`) que originou o saldo do especialista
         const compatibleTiers: ("start" | "vip" | "master")[] =
           roomTier === "master"
             ? ["master"]
@@ -413,9 +432,6 @@ export function AdminBookingsTab() {
               ? ["vip", "master"]
               : ["start", "vip", "master"];
 
-        const positiveTxs = userTxs.filter((tx: any) => Number(tx.amount) > 0);
-
-        // Filtra créditos adquiridos até o momento da reserva (e vigentes na data da reserva)
         const validPriorCredits = positiveTxs.filter((tx: any) => {
           const createdMs = new Date(tx.created_at).getTime();
           const notAfterBooking = createdMs <= bookingTime + 60 * 1000;
@@ -427,8 +443,7 @@ export function AdminBookingsTab() {
         const candidateCredits =
           validPriorCredits.length > 0 ? validPriorCredits : positiveTxs;
 
-        // Procura primeiro crédito do mesmo tier usado; se não, segue a cascata da sala
-        let sourceCreditTx =
+        const sourceCreditTx =
           [...candidateCredits]
             .reverse()
             .find((tx: any) => normalizeTier(tx.tier) === creditTierUsed) ||
@@ -442,8 +457,10 @@ export function AdminBookingsTab() {
         let detectedPackageHours: number | null = null;
         if (sourceCreditTx) {
           creditTierUsed = normalizeTier(sourceCreditTx.tier || roomTier);
+          if (!matchingDebit?.tier && sourceCreditTx.tier) {
+            rawTierString = sourceCreditTx.tier;
+          }
           const txAmt = Math.round(Number(sourceCreditTx.amount));
-          // Verifica também se a descrição cita explicitamente o pacote (ex: "Pacote 16h" ou "8 horas")
           const descMatch = String(sourceCreditTx.description || "").match(
             /(\d+)\s*(?:h|hora|horas|crédito|credito)/i,
           );
@@ -453,21 +470,21 @@ export function AdminBookingsTab() {
             detectedPackageHours = txAmt;
           }
         } else {
-          // Verifica se o usuário possui assinatura (Fusion Pass)
           const userSubs = userSubsMap.get(b.user_id) || [];
           const activeSub =
             userSubs.find((s: any) => s.status === "ACTIVE") || userSubs[0];
           if (activeSub) {
             creditTierUsed = normalizeTier(activeSub.tier || roomTier);
+            if (!matchingDebit?.tier && activeSub.tier) {
+              rawTierString = activeSub.tier;
+            }
             detectedPackageHours = Number(activeSub.hours) || null;
           }
         }
 
-        // 2.3 Consulta o valor da hora na tabela `packages` para (creditTierUsed, detectedPackageHours)
         let { rate: resolvedHourlyRate, matchedHours } =
           getRateFromPackageTable(creditTierUsed, detectedPackageHours);
 
-        // Se o tier do crédito não tiver pacote cadastrado, tenta o tier da sala
         if (resolvedHourlyRate === null && creditTierUsed !== roomTier) {
           const fallbackRoomPkg = getRateFromPackageTable(
             roomTier,
@@ -477,7 +494,6 @@ export function AdminBookingsTab() {
           matchedHours = fallbackRoomPkg.matchedHours;
         }
 
-        // 2.4 Fallback para preço nas modalidades da própria sala ou categoria da sala
         let pricingOriginLabel = "";
         if (resolvedHourlyRate !== null) {
           pricingOriginLabel = matchedHours
@@ -502,7 +518,6 @@ export function AdminBookingsTab() {
             resolvedHourlyRate = categoryRate;
             pricingOriginLabel = `${formatTierLabel(roomTier)} • Categoria`;
           } else {
-            // Último fallback seguro por Tier caso a tabela `packages` esteja vazia para aquele Tier
             const defaultTierRates: Record<"start" | "vip" | "master", number> =
               {
                 start: 45,
@@ -521,11 +536,16 @@ export function AdminBookingsTab() {
 
         return {
           id: b.id,
+          user_id: b.user_id,
           created_at: b.created_at,
           start_time: b.start_time,
           end_time: b.end_time,
           status: b.status,
           total_cost: rawTotalCost,
+          credits_used: creditsUsed,
+          credit_tier_raw: rawTierString || creditTierUsed,
+          credit_tx_type: sourceCreditTx?.type || defaultPositiveType,
+          credit_expires_at: sourceCreditTx?.expires_at || null,
           gross_value_brl: grossBrl,
           hourly_rate_brl: resolvedHourlyRate,
           pricing_label: pricingOriginLabel,
@@ -560,14 +580,12 @@ export function AdminBookingsTab() {
       setRescheduleDate(parseISO(booking.start_time));
       setSelectedSlot("");
 
-      // 1. Busca os detalhes da sala original diretamente do banco (usando as colunas reais do schema)
       const { data: originalRoom } = await supabase
         .from("rooms")
         .select("id, name, image_url, tier, is_active, host_id")
         .eq("id", booking.room_id)
         .single();
 
-      // 2. Busca o catálogo de salas equivalentes (Mesma Categoria/Tier)
       let query = supabase
         .from("rooms")
         .select("id, name, image_url, tier, is_active, host_id")
@@ -580,7 +598,6 @@ export function AdminBookingsTab() {
       const { data: candidates } = await query;
       let finalCandidates = candidates || [];
 
-      // 3. Injeta a sala original na lista caso ela esteja oculta/inativa, para não quebrar o select
       if (
         originalRoom &&
         !finalCandidates.some((c: any) => c.id === booking.room_id)
@@ -588,7 +605,6 @@ export function AdminBookingsTab() {
         finalCandidates.push(originalRoom);
       }
 
-      // Busca nomes dos anfitriões para exibir no Select
       const candidateHostIds = [
         ...new Set(finalCandidates.map((c: any) => c.host_id).filter(Boolean)),
       ];
@@ -639,7 +655,6 @@ export function AdminBookingsTab() {
       const startIso = startOfDay(date).toISOString();
       const endIso = endOfDay(date).toISOString();
 
-      // Busca apenas reservas que cruzam com esta sala e estão ativas
       const { data: existingBookings } = await supabase
         .from("bookings")
         .select("start_time, end_time")
@@ -745,33 +760,103 @@ export function AdminBookingsTab() {
     }
   };
 
+  // --- CANCELAMENTO E ESTORNO AUTOMÁTICO PARA A CARTEIRA ---
   const handleCancelBooking = async () => {
-    if (!selectedBooking) return;
+    if (!selectedBooking || selectedBooking.status === "cancelled") return;
+
+    const hoursToRefund = Number(selectedBooking.credits_used) || 0;
+    const tierLabel = formatTierLabel(
+      normalizeTier(selectedBooking.credit_tier_raw),
+    );
+
     if (
       !confirm(
-        "Tem certeza que deseja CANCELAR esta reserva? O valor será impactado.",
+        `Tem certeza que deseja CANCELAR esta reserva?\n\nSerão estornadas ${hoursToRefund}h (Crédito ${tierLabel}) para a carteira de ${selectedBooking.specialist_name}.`,
       )
     )
       return;
 
     setActionLoading(true);
     try {
-      const { error } = await supabase
+      const bookingRefTag = `[#${selectedBooking.id.slice(0, 8)}]`;
+
+      // 1. Verifica se já existe um estorno registado para esta reserva (evita estorno duplicado)
+      const { data: existingRefund } = await supabase
+        .from("wallet_transactions")
+        .select("id")
+        .eq("user_id", selectedBooking.user_id)
+        .ilike("description", `%${bookingRefTag}%`)
+        .limit(1);
+
+      // 2. Atualiza o status da reserva para cancelado
+      const { error: updateError } = await supabase
         .from("bookings")
         .update({ status: "cancelled" })
         .eq("id", selectedBooking.id);
 
-      if (error) throw error;
+      if (updateError) throw updateError;
+
+      // 3. Devolve as horas para a carteira do especialista (se ainda não foi estornado e não era apenas pagamento pendente sem uso de créditos)
+      let refunded = false;
+      if (
+        hoursToRefund > 0 &&
+        selectedBooking.user_id &&
+        (!existingRefund || existingRefund.length === 0)
+      ) {
+        const now = new Date();
+        // Mantém a data de expiração original se ainda estiver no futuro; caso contrário, garante +30 dias de validade
+        const refundExpiresAt =
+          selectedBooking.credit_expires_at &&
+          new Date(selectedBooking.credit_expires_at) > now
+            ? selectedBooking.credit_expires_at
+            : new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+        const formattedSlotDate = format(
+          parseISO(selectedBooking.start_time),
+          "dd/MM/yyyy 'às' HH:mm",
+        );
+
+        const { error: walletError } = await supabase
+          .from("wallet_transactions")
+          .insert({
+            user_id: selectedBooking.user_id,
+            amount: hoursToRefund,
+            type: selectedBooking.credit_tx_type || "credit",
+            tier: selectedBooking.credit_tier_raw || "start",
+            description: `Estorno de reserva cancelada: ${selectedBooking.room_name} (${formattedSlotDate}) ${bookingRefTag}`,
+            expires_at: refundExpiresAt,
+          });
+
+        if (walletError) throw walletError;
+        refunded = true;
+
+        // 4. Envia notificação para o especialista informando o estorno na carteira
+        try {
+          await supabase.from("notifications").insert({
+            user_id: selectedBooking.user_id,
+            type: "booking_cancelled",
+            title: "Reserva Cancelada e Horas Estornadas",
+            content: `Sua reserva na sala ${selectedBooking.room_name} (${formattedSlotDate}) foi cancelada. Estornamos ${hoursToRefund}h (${tierLabel}) para sua carteira.`,
+            link: "/dashboard",
+            is_read: false,
+          });
+        } catch (notifErr) {
+          console.warn("Aviso: Não foi possível criar notificação:", notifErr);
+        }
+      }
 
       toast({
-        title: "Reserva cancelada com sucesso.",
-        variant: "destructive",
+        title: "Reserva cancelada e estornada!",
+        description: refunded
+          ? `${hoursToRefund}h (${tierLabel}) devolvida(s) para a carteira de ${selectedBooking.specialist_name}.`
+          : "O status da reserva foi atualizado para cancelado.",
       });
+
       setIsViewOpen(false);
       fetchBookings();
     } catch (err: any) {
       toast({
-        title: "Erro ao cancelar",
+        title: "Erro ao cancelar e estornar",
         description: err.message,
         variant: "destructive",
       });
@@ -1268,6 +1353,18 @@ export function AdminBookingsTab() {
                     às {format(parseISO(selectedBooking.end_time), "HH:mm")}
                   </p>
                 </div>
+                <div>
+                  <Label className="text-slate-500 font-bold">
+                    Créditos / Horas Consumidas
+                  </Label>
+                  <p className="font-bold text-slate-900">
+                    {selectedBooking.credits_used}h (Categoria{" "}
+                    {formatTierLabel(
+                      normalizeTier(selectedBooking.credit_tier_raw),
+                    )}
+                    )
+                  </p>
+                </div>
               </div>
 
               {selectedBooking.status !== "cancelled" && (
@@ -1283,7 +1380,8 @@ export function AdminBookingsTab() {
                     ) : (
                       <XCircle className="w-4 h-4 mr-2" />
                     )}
-                    Cancelar Reserva e Estornar
+                    Cancelar Reserva e Estornar ({selectedBooking.credits_used}
+                    h)
                   </Button>
                 </div>
               )}
