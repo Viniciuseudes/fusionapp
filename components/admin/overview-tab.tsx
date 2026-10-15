@@ -17,6 +17,8 @@ import {
   Snowflake,
   Search,
   Loader2,
+  FileText,
+  Sparkles,
 } from "lucide-react";
 import {
   AreaChart,
@@ -59,7 +61,6 @@ const PIE_COLORS = [
   "#64748b",
 ];
 
-// Normaliza nomenclaturas de tier ('basic' e 'start' operam na mesma faixa de entrada)
 function normalizeTier(tier?: string | null): "start" | "vip" | "master" {
   const t = (tier || "start").toLowerCase().trim();
   if (t.includes("master")) return "master";
@@ -67,7 +68,6 @@ function normalizeTier(tier?: string | null): "start" | "vip" | "master" {
   return "start";
 }
 
-// Extrai preço por hora configurado diretamente nas modalidades da sala, se existir
 function extractRoomModalitiesHourlyRate(modalities: any): number | null {
   if (!modalities) return null;
   try {
@@ -98,9 +98,12 @@ export function AdminOverviewTab() {
 
   // Estados dos Dados Reais
   const [gmv, setGmv] = useState(0);
+  const [contractGmv, setContractGmv] = useState(0);
   const [takeRate, setTakeRate] = useState(0);
   const [activeDoctors, setActiveDoctors] = useState(0);
   const [activeRooms, setActiveRooms] = useState(0);
+  const [activeContractsCount, setActiveContractsCount] = useState(0);
+  const [avgOccupancyRate, setAvgOccupancyRate] = useState(0);
 
   const [revenueData, setRevenueData] = useState<any[]>([]);
   const [specialtyData, setSpecialtyData] = useState<any[]>([]);
@@ -120,37 +123,44 @@ export function AdminOverviewTab() {
           daysCount = 7;
         } else if (timeFilter === "ytd") {
           startDate = startOfYear(now);
-          daysCount = 365;
+          const diffMs = now.getTime() - startDate.getTime();
+          daysCount = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
         }
 
-        // 1. Busca Reservas e Salas em paralelo com Pacotes e Categorias
-        const [bookingsRes, roomsRes, packagesRes, categoriesRes] =
-          await Promise.all([
-            supabase
-              .from("bookings")
-              .select(
-                "id, created_at, start_time, end_time, total_cost, upgrade_fee_amount, room_id, user_id, status",
-              )
-              .gte("start_time", startDate.toISOString())
-              .in("status", ["confirmed", "completed", "pending_payment"]),
-            supabase
-              .from("rooms")
-              .select(
-                "id, name, host_id, is_active, tier, category_id, modalities",
-              ),
-            supabase.from("packages").select("id, tier, hours, price, active"),
-            supabase
-              .from("room_categories")
-              .select("id, name, credit_cost_per_hour, upgrade_fee_per_hour"),
-          ]);
+        // 1. Busca Reservas, Salas, Pacotes, Categorias e Contratos em paralelo
+        const [
+          bookingsRes,
+          roomsRes,
+          packagesRes,
+          categoriesRes,
+          contractsRes,
+        ] = await Promise.all([
+          supabase
+            .from("bookings")
+            .select(
+              "id, created_at, start_time, end_time, total_cost, upgrade_fee_amount, room_id, user_id, status, contract_id, booking_origin, agreed_value_brl",
+            )
+            .gte("start_time", startDate.toISOString())
+            .in("status", ["confirmed", "completed", "pending_payment"]),
+          supabase
+            .from("rooms")
+            .select(
+              "id, name, host_id, is_active, tier, category_id, modalities",
+            ),
+          supabase.from("packages").select("id, tier, hours, price, active"),
+          supabase
+            .from("room_categories")
+            .select("id, name, credit_cost_per_hour, upgrade_fee_per_hour"),
+          supabase.from("room_contracts").select("*"),
+        ]);
 
         if (bookingsRes.error) throw bookingsRes.error;
         if (roomsRes.error) throw roomsRes.error;
 
         const bookingsData = bookingsRes.data || [];
         const roomsData = roomsRes.data || [];
+        const contractsData = contractsRes.data || [];
 
-        // 2. Coleta de IDs seguros para buscas relacionais
         const bookingIds = bookingsData.map((b: any) => b.id).filter(Boolean);
         const userIds = [
           ...new Set(bookingsData.map((b: any) => b.user_id).filter(Boolean)),
@@ -196,7 +206,7 @@ export function AdminOverviewTab() {
         const profilesData = profilesRes.data || [];
 
         // ========================================================
-        // PREPARAÇÃO DO MOTOR DE PRECIFICAÇÃO (PACKAGES + TIERS)
+        // PREPARAÇÃO DO MOTOR DE PRECIFICAÇÃO (PACKAGES + CONTRATOS)
         // ========================================================
         const roomsMap = new Map<string, any>(
           roomsData.map((r: any) => [r.id, r]),
@@ -204,6 +214,17 @@ export function AdminOverviewTab() {
         const categoriesMap = new Map<string, any>(
           (categoriesRes.data || []).map((c: any) => [c.id, c]),
         );
+        const contractsById = new Map<string, any>(
+          contractsData.map((c: any) => [c.id, c]),
+        );
+        const activeContractsByRoom = new Map<string, any[]>();
+        contractsData.forEach((c: any) => {
+          if (c.status === "active") {
+            const list = activeContractsByRoom.get(c.room_id) || [];
+            list.push(c);
+            activeContractsByRoom.set(c.room_id, list);
+          }
+        });
 
         const packageRateMap: Record<
           "start" | "vip" | "master",
@@ -283,7 +304,14 @@ export function AdminOverviewTab() {
           return tierPackages.get(sortedHours[0])!;
         };
 
-        const resolveBookingRevenueBrl = (b: any): number => {
+        const resolveBookingFinancials = (
+          b: any,
+        ): {
+          revenue: number;
+          fee: number;
+          durationHours: number;
+          isContract: boolean;
+        } => {
           const room = roomsMap.get(b.room_id);
           const roomTier = normalizeTier(room?.tier);
 
@@ -294,13 +322,49 @@ export function AdminOverviewTab() {
               : 3600000;
           const durationHours = Math.max(0.5, durationMs / (1000 * 60 * 60));
 
+          const linkedContract = b.contract_id
+            ? contractsById.get(b.contract_id)
+            : null;
+          const isContractBooking = Boolean(
+            b.contract_id ||
+            (b.booking_origin &&
+              String(b.booking_origin).startsWith("contract")),
+          );
+
+          // Se for reserva de contrato (Turno Fixo / Diária Fixa / Sala Mensal)
+          if (isContractBooking) {
+            const val =
+              Number(b.agreed_value_brl) > 0
+                ? Number(b.agreed_value_brl)
+                : Number(linkedContract?.session_value || 0);
+            const feePct = Number(linkedContract?.platform_fee_pct ?? 10) / 100;
+            return {
+              revenue: val,
+              fee: val * feePct,
+              durationHours,
+              isContract: true,
+            };
+          }
+
           const rawTotalCost = Number(b.total_cost || 0);
           const upgradeFee = Number(b.upgrade_fee_amount || 0);
           const discount = couponDiscountMap.get(b.id) || 0;
 
-          // Se `total_cost` já estiver em Reais (checkout direto)
-          if (rawTotalCost >= durationHours * 15) {
-            return Math.max(0, rawTotalCost + upgradeFee - discount);
+          if (
+            Number(b.agreed_value_brl) > 0 ||
+            rawTotalCost >= durationHours * 15
+          ) {
+            const baseVal =
+              Number(b.agreed_value_brl) > 0
+                ? Number(b.agreed_value_brl)
+                : rawTotalCost;
+            const rev = Math.max(0, baseVal + upgradeFee - discount);
+            return {
+              revenue: rev,
+              fee: rev * 0.1,
+              durationHours,
+              isContract: false,
+            };
           }
 
           const creditsUsed = rawTotalCost > 0 ? rawTotalCost : durationHours;
@@ -409,16 +473,25 @@ export function AdminOverviewTab() {
               roomModalityRate || categoryRate || defaultTierRates[roomTier];
           }
 
-          return Math.max(
+          const rev = Math.max(
             0,
             creditsUsed * resolvedHourlyRate + upgradeFee - discount,
           );
+
+          return {
+            revenue: rev,
+            fee: rev * 0.1,
+            durationHours,
+            isContract: false,
+          };
         };
 
         // ========================================================
-        // MOTOR DE PROCESSAMENTO (BI MATH)
+        // MOTOR DE PROCESSAMENTO (BI MATH + OCUPAÇÃO CONTRATUAL)
         // ========================================================
         let totalGmv = 0;
+        let totalContractGmv = 0;
+        let totalTakeRate = 0;
         const uniqueDoctors = new Set();
 
         const revMap: any = {};
@@ -436,25 +509,42 @@ export function AdminOverviewTab() {
 
         const roomStats: any = {};
         roomsData.forEach((r: any) => {
+          const roomContracts = activeContractsByRoom.get(r.id) || [];
+          const hasExclusiveContract = roomContracts.some(
+            (c: any) => c.contract_type === "monthly_exclusive",
+          );
+          const cohostContract = roomContracts.find(
+            (c: any) =>
+              c.contract_type === "monthly_exclusive" && c.allow_sublease,
+          );
+
           roomStats[r.id] = {
             id: r.id,
             name: r.name,
             host_id: r.host_id,
             revenue: 0,
             bookings: 0,
+            occupiedHours: 0,
+            contractHours: 0,
+            hasContracts: roomContracts.length > 0,
+            hasExclusiveContract,
+            cohostName: cohostContract?.specialist_name || null,
           };
         });
 
         bookingsData.forEach((b: any) => {
           if (!b.start_time) return;
 
-          const revenue = resolveBookingRevenueBrl(b);
-          const fee = revenue * 0.1;
+          const { revenue, fee, durationHours, isContract } =
+            resolveBookingFinancials(b);
 
           totalGmv += revenue;
-          uniqueDoctors.add(b.user_id);
+          if (isContract) totalContractGmv += revenue;
+          totalTakeRate += fee;
+          if (b.user_id) uniqueDoctors.add(b.user_id);
 
           const dateObj = parseISO(b.start_time);
+          const endDateObj = b.end_time ? parseISO(b.end_time) : null;
 
           const dateKey =
             timeFilter === "ytd"
@@ -476,28 +566,47 @@ export function AdminOverviewTab() {
           const specialty = doctorProfile?.specialty || "Outros";
           specMap[specialty] = (specMap[specialty] || 0) + 1;
 
+          // Preenche o Mapa de Calor em todos os turnos ocupados pela reserva/contrato
           const dayOfWeek = getDay(dateObj);
-          const hour = getHours(dateObj);
-          let shiftIdx = -1;
-          if (hour >= 8 && hour < 12) shiftIdx = 0;
-          else if (hour >= 12 && hour < 16) shiftIdx = 1;
-          else if (hour >= 16 && hour < 20) shiftIdx = 2;
-          else if (hour >= 20 && hour <= 23) shiftIdx = 3;
+          const startH = getHours(dateObj);
+          const endH =
+            endDateObj && getHours(endDateObj) > startH
+              ? getHours(endDateObj)
+              : startH + 1;
 
-          if (shiftIdx !== -1) {
-            heatMapMatrix[dayOfWeek].shifts[shiftIdx] += 1;
-          }
+          const shiftRanges = [
+            { idx: 0, start: 8, end: 12 },
+            { idx: 1, start: 12, end: 16 },
+            { idx: 2, start: 16, end: 20 },
+            { idx: 3, start: 20, end: 24 },
+          ];
+
+          shiftRanges.forEach((sr) => {
+            if (startH < sr.end && endH > sr.start) {
+              heatMapMatrix[dayOfWeek].shifts[sr.idx] += 1;
+            }
+          });
 
           if (roomStats[b.room_id]) {
             roomStats[b.room_id].revenue += revenue;
             roomStats[b.room_id].bookings += 1;
+            roomStats[b.room_id].occupiedHours += durationHours;
+            if (isContract) {
+              roomStats[b.room_id].contractHours += durationHours;
+            }
           }
         });
 
+        const activeContractsList = contractsData.filter(
+          (c: any) => c.status === "active",
+        );
+
         setGmv(totalGmv);
-        setTakeRate(totalGmv * 0.1);
+        setContractGmv(totalContractGmv);
+        setTakeRate(totalTakeRate);
         setActiveDoctors(uniqueDoctors.size);
         setActiveRooms(roomsData.filter((r: any) => r.is_active).length || 0);
+        setActiveContractsCount(activeContractsList.length);
 
         const sortedRevData = Object.values(revMap).sort(
           (a: any, b: any) => a.order - b.order,
@@ -531,16 +640,24 @@ export function AdminOverviewTab() {
         ];
         setHeatmapData(orderedHeatmap);
 
-        const formattedRooms = Object.values(roomStats)
-          .filter((r: any) => r.bookings > 0)
+        // Capacidade operacional de referência: 10h/dia útil por sala (retenção do m²)
+        const availableHoursPerRoom = Math.max(1, daysCount * 8);
+
+        const activeRoomsStats = Object.values(roomStats).filter(
+          (r: any) => r.bookings > 0 || r.hasContracts,
+        );
+
+        const formattedRooms = activeRoomsStats
           .map((r: any) => {
             const hostProfile = profilesData.find(
               (p: any) => p.id === r.host_id,
             );
-            const occ = Math.min(
-              Math.round((r.bookings / (daysCount * 4)) * 100),
-              100,
+            const rawOcc = Math.round(
+              (r.occupiedHours / availableHoursPerRoom) * 100,
             );
+            const occ = r.hasExclusiveContract
+              ? Math.max(rawOcc, 85)
+              : Math.min(rawOcc, 100);
 
             let status = "cold";
             if (occ >= 40) status = "hot";
@@ -549,7 +666,7 @@ export function AdminOverviewTab() {
             return {
               ...r,
               host: hostProfile?.full_name || "Desconhecido",
-              occupancy: occ,
+              occupancy: Math.min(100, occ),
               status: status,
             };
           })
@@ -557,6 +674,16 @@ export function AdminOverviewTab() {
           .slice(0, 10);
 
         setTopRooms(formattedRooms);
+
+        if (formattedRooms.length > 0) {
+          const sumOcc = formattedRooms.reduce(
+            (acc: number, curr: any) => acc + curr.occupancy,
+            0,
+          );
+          setAvgOccupancyRate(Math.round(sumOcc / formattedRooms.length));
+        } else {
+          setAvgOccupancyRate(0);
+        }
       } catch (err: any) {
         console.error("Erro ao montar BI do Admin:", err);
 
@@ -619,8 +746,8 @@ export function AdminOverviewTab() {
             Centro de Comando Fusion
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-1">
-            Visão executiva da plataforma, faturamento global e comportamento
-            dos usuários.
+            Visão executiva da plataforma, contratos recorrentes, retenção do m²
+            e comportamento dos usuários.
           </p>
         </div>
 
@@ -656,12 +783,21 @@ export function AdminOverviewTab() {
 
       {/* KPIs DE PLATAFORMA (SUPERIORES) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8 print:grid-cols-4">
-        {/* KPI 1: GMV */}
+        {/* KPI 1: GMV (Avulso + Contratos) */}
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
           <div className="flex justify-between items-start mb-4">
             <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-600">
               <Activity className="w-5 h-5" />
             </div>
+            {contractGmv > 0 && (
+              <Badge className="bg-purple-100 text-purple-800 border-0 text-[10px] font-bold">
+                Contratos: R${" "}
+                {contractGmv.toLocaleString("pt-BR", {
+                  minimumFractionDigits: 0,
+                  maximumFractionDigits: 0,
+                })}
+              </Badge>
+            )}
           </div>
           <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
             Volume Transacionado (GMV)
@@ -683,9 +819,12 @@ export function AdminOverviewTab() {
               <div className="w-10 h-10 rounded-xl bg-[#BF4B24]/20 flex items-center justify-center text-[#BF4B24]">
                 <Wallet className="w-5 h-5" />
               </div>
+              <Badge className="bg-emerald-500/20 text-emerald-300 border-0 text-[10px] font-bold">
+                {activeContractsCount} contrato(s) ativo(s)
+              </Badge>
             </div>
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 print:text-slate-500">
-              Receita Fusion (Take Rate 10%)
+              Receita Fusion (Take Rate)
             </p>
             <h3 className="text-3xl font-black text-white print:text-slate-900">
               <span className="text-lg text-emerald-400 font-bold mr-1">
@@ -717,15 +856,18 @@ export function AdminOverviewTab() {
           </h3>
         </div>
 
-        {/* KPI 4: Salas Ativas */}
+        {/* KPI 4: Salas Ativas & Retenção do m² */}
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
           <div className="flex justify-between items-start mb-4">
             <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600">
               <Building2 className="w-5 h-5" />
             </div>
+            <Badge className="bg-amber-100 text-amber-800 border-0 text-[10px] font-bold">
+              Ocupação Média: {avgOccupancyRate}%
+            </Badge>
           </div>
           <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
-            Salas Cadastradas (Total)
+            Salas Ativas (Retenção m²)
           </p>
           <h3 className="text-3xl font-black text-slate-900">
             {activeRooms}{" "}
@@ -743,7 +885,7 @@ export function AdminOverviewTab() {
           <div className="flex justify-between items-center mb-6">
             <div>
               <h2 className="text-lg font-black text-slate-900">
-                Evolução do Faturamento
+                Evolução do Faturamento (Avulso + Contratos)
               </h2>
               <p className="text-xs font-medium text-slate-500">
                 Comparativo do Volume Total vs Receita da Plataforma
@@ -825,7 +967,7 @@ export function AdminOverviewTab() {
               Demanda por Especialidade
             </h2>
             <p className="text-xs font-medium text-slate-500">
-              Quem está alugando mais?
+              Quem está ocupando mais o m²?
             </p>
           </div>
           <div className="flex-1 flex items-center justify-center">
@@ -877,10 +1019,11 @@ export function AdminOverviewTab() {
           <div>
             <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
               <MapIcon className="w-5 h-5 text-indigo-500" /> Zonas Quentes e
-              Frias (Real)
+              Frias (Horas Avulsas + Contratos)
             </h2>
             <p className="text-xs font-medium text-slate-500 mt-1">
-              Concentração de agendamentos no período selecionado.
+              Concentração real de ocupação por turno considerando diárias e
+              turnos contratuais.
             </p>
           </div>
           <div className="flex gap-2">
@@ -901,7 +1044,6 @@ export function AdminOverviewTab() {
 
         <div className="overflow-x-auto pb-4">
           <div className="min-w-[600px]">
-            {/* Header do Grid */}
             <div className="grid grid-cols-5 gap-2 mb-2">
               <div className="col-span-1"></div>
               {shiftLabels.map((label) => (
@@ -914,7 +1056,6 @@ export function AdminOverviewTab() {
               ))}
             </div>
 
-            {/* Linhas do Grid */}
             <div className="flex flex-col gap-2">
               {heatmapData.map((row) => (
                 <div
@@ -928,7 +1069,7 @@ export function AdminOverviewTab() {
                     <div
                       key={idx}
                       className={`col-span-1 h-12 rounded-xl border flex items-center justify-center transition-all hover:scale-105 cursor-crosshair ${getHeatmapColor(intensity)}`}
-                      title={`${row.day} - ${shiftLabels[idx]}: ${intensity} reservas`}
+                      title={`${row.day} - ${shiftLabels[idx]}: ${intensity} turno(s) ocupado(s)`}
                     >
                       {intensity >= 10 && (
                         <Flame className="w-4 h-4 opacity-50" />
@@ -945,15 +1086,16 @@ export function AdminOverviewTab() {
         </div>
       </div>
 
-      {/* RANKING DE SALAS (PERFORMANCE) */}
+      {/* RANKING DE SALAS (PERFORMANCE E RETENÇÃO DO M²) */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden print:break-inside-avoid">
         <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-black text-slate-900">
-              Top 10 Salas (Performance)
+              Top 10 Salas (Performance & Retenção do m²)
             </h2>
             <p className="text-xs font-medium text-slate-500">
-              As salas que mais geram receita real para a plataforma.
+              Rendimento somado de horas avulsas, contratos fixos e sublocações
+              por Co-Anfitrião.
             </p>
           </div>
         </div>
@@ -963,8 +1105,10 @@ export function AdminOverviewTab() {
             <thead className="bg-slate-50 text-slate-500 font-bold text-[10px] uppercase tracking-wider">
               <tr>
                 <th className="px-6 py-4">Posição / Sala</th>
-                <th className="px-6 py-4">Anfitrião</th>
-                <th className="px-6 py-4 text-center">Ocupação (Est.)</th>
+                <th className="px-6 py-4">Anfitrião & Co-Anfitrião</th>
+                <th className="px-6 py-4 text-center">
+                  Taxa de Ocupação (Redução de Ociosidade)
+                </th>
                 <th className="px-6 py-4 text-center">Termômetro</th>
                 <th className="px-6 py-4 text-right">Volume Gerado (R$)</th>
               </tr>
@@ -976,7 +1120,7 @@ export function AdminOverviewTab() {
                     colSpan={5}
                     className="px-6 py-10 text-center text-slate-500 font-medium"
                   >
-                    Nenhuma reserva no período selecionado.
+                    Nenhuma reserva ou contrato ativo no período selecionado.
                   </td>
                 </tr>
               ) : (
@@ -993,35 +1137,56 @@ export function AdminOverviewTab() {
                           {index + 1}
                         </div>
                         <div>
-                          <p className="font-black text-slate-900 truncate max-w-[200px]">
-                            {room.name}
-                          </p>
+                          <div className="flex items-center gap-1.5">
+                            <p className="font-black text-slate-900 truncate max-w-[200px]">
+                              {room.name}
+                            </p>
+                            {room.hasContracts && (
+                              <Badge className="bg-purple-100 text-purple-800 border-0 text-[9px] px-1.5 py-0 font-black">
+                                CONTRATO
+                              </Badge>
+                            )}
+                          </div>
                           <p className="text-[10px] font-bold text-slate-400 uppercase mt-0.5">
-                            {room.bookings} reservas registradas
+                            {room.occupiedHours}h ocupadas ({room.bookings}{" "}
+                            agendamentos)
                           </p>
                         </div>
                       </div>
                     </td>
-                    <td className="px-6 py-4 font-bold text-slate-600 truncate max-w-[150px]">
-                      {room.host}
+                    <td className="px-6 py-4">
+                      <p className="font-bold text-slate-700 truncate max-w-[180px]">
+                        {room.host}
+                      </p>
+                      {room.cohostName && (
+                        <p className="text-[10px] font-bold text-purple-700 flex items-center gap-1 mt-0.5">
+                          <Sparkles className="w-3 h-3" /> Co-Anfitrião:{" "}
+                          {room.cohostName}
+                        </p>
+                      )}
                     </td>
                     <td className="px-6 py-4">
-                      <div className="flex items-center justify-center gap-2">
-                        <span className="font-bold text-slate-700 w-8 text-right">
-                          {room.occupancy}%
-                        </span>
-                        <div className="w-20 h-2 bg-slate-100 rounded-full overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-[#BF4B24]"
-                            style={{ width: `${room.occupancy}%` }}
-                          />
+                      <div className="flex flex-col items-center justify-center gap-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-700 w-9 text-right">
+                            {room.occupancy}%
+                          </span>
+                          <div className="w-24 h-2 bg-slate-100 rounded-full overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-[#BF4B24]"
+                              style={{ width: `${room.occupancy}%` }}
+                            />
+                          </div>
                         </div>
+                        <span className="text-[10px] font-bold text-slate-400">
+                          Ociosidade: {Math.max(0, 100 - room.occupancy)}%
+                        </span>
                       </div>
                     </td>
                     <td className="px-6 py-4 text-center">
                       {room.status === "hot" && (
                         <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100 border-0">
-                          <Flame className="w-3 h-3 mr-1" /> Alta Demanda
+                          <Flame className="w-3 h-3 mr-1" /> Alta Retenção
                         </Badge>
                       )}
                       {room.status === "warm" && (

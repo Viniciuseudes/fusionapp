@@ -13,6 +13,7 @@ import {
   Star,
   Wallet,
   LogOut,
+  FileText,
 } from "lucide-react";
 
 // Importações dos sub-componentes
@@ -24,10 +25,12 @@ import { AvailabilityConfig } from "@/components/host/availability-config";
 import { HostBookingsTab } from "@/components/host/bookings-tab";
 import { HostChatTab } from "@/components/host/chat-tab";
 import { HostReviewsTab } from "@/components/host/reviews-tab";
+import { AdminContractsTab } from "@/components/admin/contracts-tab";
 
 type HostView =
   | "overview"
   | "bookings"
+  | "contracts"
   | "messages"
   | "reviews"
   | "spaces"
@@ -40,6 +43,7 @@ type HostView =
 const navItems = [
   { id: "overview", label: "Visão Geral", icon: LayoutDashboard },
   { id: "bookings", label: "Agenda", icon: CalendarDays },
+  { id: "contracts", label: "Contratos & Fixos", icon: FileText },
   { id: "messages", label: "Mensagens", icon: MessageSquare },
   { id: "reviews", label: "Avaliações", icon: Star },
   { id: "spaces", label: "Meus Espaços", icon: Building },
@@ -141,6 +145,8 @@ export default function HostPage() {
           )}
 
           {currentView === "bookings" && <HostBookingsTab />}
+
+          {currentView === "contracts" && <AdminContractsTab mode="host" />}
 
           {currentView === "messages" && <HostChatTab />}
 

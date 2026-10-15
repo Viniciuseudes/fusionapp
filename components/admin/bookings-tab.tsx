@@ -15,6 +15,9 @@ import {
   XCircle,
   CalendarDays,
   AlertTriangle,
+  FileText,
+  Sparkles,
+  ExternalLink,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -75,9 +78,17 @@ interface BookingInfo {
   room_name: string;
   room_id: string;
   clinic_name: string;
+  is_contract: boolean;
+  contract_id: string | null;
+  contract_type: string | null;
+  contract_pdf_url: string | null;
+  cohost_name: string | null;
+  cohost_split_pct: number;
+  platform_fee_brl: number;
+  cohost_payout_brl: number;
+  host_payout_brl: number;
 }
 
-// Normaliza nomenclaturas de tier ('basic' e 'start' operam na mesma faixa de entrada)
 function normalizeTier(tier?: string | null): "start" | "vip" | "master" {
   const t = (tier || "start").toLowerCase().trim();
   if (t.includes("master")) return "master";
@@ -91,7 +102,6 @@ function formatTierLabel(tier: "start" | "vip" | "master"): string {
   return "Basic";
 }
 
-// Extrai preço por hora configurado diretamente nas modalidades da sala, se existir
 function extractRoomModalitiesHourlyRate(modalities: any): number | null {
   if (!modalities) return null;
   try {
@@ -123,16 +133,15 @@ export function AdminBookingsTab() {
   const [startDate, setStartDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [endDate, setEndDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [statusFilter, setStatusFilter] = useState("all");
+  const [originFilter, setOriginFilter] = useState("all");
   const [search, setSearch] = useState("");
 
-  // Estados para Modal de Visualização (Sheet)
   const [selectedBooking, setSelectedBooking] = useState<BookingInfo | null>(
     null,
   );
   const [isViewOpen, setIsViewOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
-  // Estados Sênior para Reagendamento (Dialog)
   const [isRescheduleOpen, setIsRescheduleOpen] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState<Date | undefined>(
     new Date(),
@@ -149,7 +158,6 @@ export function AdminBookingsTab() {
     fetchBookings();
   }, [startDate, endDate]);
 
-  // Sempre que a Data ou a Sala selecionada mudar, recalcula os horários
   useEffect(() => {
     if (isRescheduleOpen && selectedRescheduleRoomId && rescheduleDate) {
       loadRoomScheduleForDate(selectedRescheduleRoomId, rescheduleDate);
@@ -165,7 +173,7 @@ export function AdminBookingsTab() {
       const { data: rawBookings, error: bErr } = await supabase
         .from("bookings")
         .select(
-          "id, created_at, start_time, end_time, status, total_cost, upgrade_fee_amount, room_id, user_id",
+          "id, created_at, start_time, end_time, status, total_cost, upgrade_fee_amount, room_id, user_id, contract_id, booking_origin, agreed_value_brl",
         )
         .gte("start_time", start)
         .lte("start_time", end)
@@ -187,7 +195,6 @@ export function AdminBookingsTab() {
         ...new Set(rawBookings.map((b: any) => b.user_id).filter(Boolean)),
       ];
 
-      // Busca paralela de salas, pacotes, carteira, assinaturas, categorias e cupons
       const [
         roomsRes,
         packagesRes,
@@ -196,6 +203,7 @@ export function AdminBookingsTab() {
         categoriesRes,
         couponsRes,
         usersRes,
+        contractsRes,
       ] = await Promise.all([
         roomIds.length > 0
           ? supabase
@@ -231,6 +239,9 @@ export function AdminBookingsTab() {
         userIds.length > 0
           ? supabase.from("profiles").select("id, full_name").in("id", userIds)
           : Promise.resolve({ data: [] as any[] }),
+        roomIds.length > 0
+          ? supabase.from("room_contracts").select("*").in("room_id", roomIds)
+          : Promise.resolve({ data: [] as any[] }),
       ]);
 
       const roomsData = roomsRes.data || [];
@@ -257,7 +268,21 @@ export function AdminBookingsTab() {
         hostsRes.data?.map((h: any) => [h.id, h.full_name]) || [],
       );
 
-      // Indexação da tabela `packages`: Mapeia (tier -> hours -> valor da hora em R$)
+      const contractsData = contractsRes.data || [];
+      const contractsById = new Map<string, any>(
+        contractsData.map((c: any) => [c.id, c]),
+      );
+      const activeCohostByRoomId = new Map<string, any>();
+      contractsData.forEach((c: any) => {
+        if (
+          c.status === "active" &&
+          c.contract_type === "monthly_exclusive" &&
+          c.allow_sublease
+        ) {
+          activeCohostByRoomId.set(c.room_id, c);
+        }
+      });
+
       const packageRateMap: Record<
         "start" | "vip" | "master",
         Map<number, number>
@@ -361,6 +386,86 @@ export function AdminBookingsTab() {
           new Date(b.end_time).getTime() - new Date(b.start_time).getTime();
         const durationHours = Math.max(0.5, durationMs / (1000 * 60 * 60));
 
+        const linkedContract = b.contract_id
+          ? contractsById.get(b.contract_id)
+          : null;
+        const isContractBooking = Boolean(
+          b.contract_id ||
+          (b.booking_origin && String(b.booking_origin).startsWith("contract")),
+        );
+
+        // 0. RESERVA DE CONTRATO (Usa as porcentagens personalizadas do contrato)
+        if (isContractBooking) {
+          const contractSessionVal =
+            Number(b.agreed_value_brl) > 0
+              ? Number(b.agreed_value_brl)
+              : Number(linkedContract?.session_value || 0);
+
+          const feePct = Number(linkedContract?.platform_fee_pct ?? 15) / 100;
+          const platformFee = contractSessionVal * feePct;
+          const hostPayout = Math.max(0, contractSessionVal - platformFee);
+
+          const cType = linkedContract?.contract_type || b.booking_origin || "";
+          let typeLabel = "Contrato • Alocação Fixa";
+          if (cType.includes("monthly_exclusive"))
+            typeLabel = "Contrato • Sala Fixa Mensal";
+          else if (cType.includes("fixed_shift"))
+            typeLabel = "Contrato • Turno Fixo";
+          else if (cType.includes("fixed_daily"))
+            typeLabel = "Contrato • Diária Fixa";
+
+          return {
+            id: b.id,
+            user_id: b.user_id,
+            created_at: b.created_at,
+            start_time: b.start_time,
+            end_time: b.end_time,
+            status: b.status,
+            total_cost: durationHours,
+            credits_used: 0,
+            credit_tier_raw: room?.tier || roomTier,
+            credit_tx_type: "contract",
+            credit_expires_at: null,
+            gross_value_brl: contractSessionVal,
+            hourly_rate_brl: contractSessionVal / durationHours,
+            pricing_label: typeLabel,
+            room_tier: roomTier,
+            room_id: b.room_id,
+            specialist_name:
+              linkedContract?.specialist_name ||
+              usersMap.get(b.user_id) ||
+              "Locatário de Contrato",
+            room_name: room?.name || "Sala Removida",
+            clinic_name: clinicName || "Fusion Clinic",
+            is_contract: true,
+            contract_id: b.contract_id || null,
+            contract_type: linkedContract?.contract_type || null,
+            contract_pdf_url: linkedContract?.pdf_url || null,
+            cohost_name: null,
+            cohost_split_pct: 0,
+            platform_fee_brl: platformFee,
+            cohost_payout_brl: 0,
+            host_payout_brl: hostPayout,
+          };
+        }
+
+        // Verifica Co-Anfitrião ativo para sublocação em horas avulsas
+        const roomCohostContract = activeCohostByRoomId.get(b.room_id);
+        const cohostName = roomCohostContract?.specialist_name || null;
+        const cohostSplitPct = roomCohostContract
+          ? Number(roomCohostContract.cohost_split_pct || 0)
+          : 0;
+
+        // Take Rate padrão da Fusion em horas avulsas agora é 20% (80% para o anfitrião)
+        const computeAvulsoSplit = (grossVal: number) => {
+          const platformFee = grossVal * 0.2; // 20% Fusion
+          const netAfterPlatform = Math.max(0, grossVal - platformFee); // 80%
+          const cohostPayout =
+            cohostSplitPct > 0 ? netAfterPlatform * (cohostSplitPct / 100) : 0;
+          const hostPayout = Math.max(0, netAfterPlatform - cohostPayout);
+          return { platformFee, cohostPayout, hostPayout };
+        };
+
         const rawTotalCost = Number(b.total_cost || 0);
         const upgradeFee = Number(b.upgrade_fee_amount || 0);
         const discount = couponDiscountMap.get(b.id) || 0;
@@ -368,7 +473,6 @@ export function AdminBookingsTab() {
         const userTxs = userWalletMap.get(b.user_id) || [];
         const bookingTime = new Date(b.created_at).getTime();
 
-        // Verifica se existe débito na carteira próximo ao horário de criação da reserva
         const matchingDebit = userTxs.find((tx: any) => {
           if (Number(tx.amount) >= 0) return false;
           const txTime = new Date(tx.created_at).getTime();
@@ -379,12 +483,20 @@ export function AdminBookingsTab() {
         const defaultPositiveType =
           positiveTxs[positiveTxs.length - 1]?.type || "credit";
 
-        // Caso 1: `total_cost` já foi salvo em Reais (checkout direto)
-        if (rawTotalCost >= durationHours * 15) {
-          const finalBrl = Math.max(0, rawTotalCost + upgradeFee - discount);
+        // Caso 1: `total_cost` já salvo em Reais (checkout direto)
+        if (
+          Number(b.agreed_value_brl) > 0 ||
+          rawTotalCost >= durationHours * 15
+        ) {
+          const baseVal =
+            Number(b.agreed_value_brl) > 0
+              ? Number(b.agreed_value_brl)
+              : rawTotalCost;
+          const finalBrl = Math.max(0, baseVal + upgradeFee - discount);
           const creditsEquivalent = matchingDebit
             ? Math.abs(Number(matchingDebit.amount))
             : durationHours;
+          const split = computeAvulsoSplit(finalBrl);
 
           return {
             id: b.id,
@@ -407,6 +519,15 @@ export function AdminBookingsTab() {
               usersMap.get(b.user_id) || "Especialista Desconhecido",
             room_name: room?.name || "Sala Removida",
             clinic_name: clinicName || "Fusion Clinic",
+            is_contract: false,
+            contract_id: null,
+            contract_type: null,
+            contract_pdf_url: null,
+            cohost_name: cohostName,
+            cohost_split_pct: cohostSplitPct,
+            platform_fee_brl: split.platformFee,
+            cohost_payout_brl: split.cohostPayout,
+            host_payout_brl: split.hostPayout,
           };
         }
 
@@ -533,6 +654,7 @@ export function AdminBookingsTab() {
           0,
           creditsUsed * resolvedHourlyRate + upgradeFee - discount,
         );
+        const split = computeAvulsoSplit(grossBrl);
 
         return {
           id: b.id,
@@ -555,6 +677,15 @@ export function AdminBookingsTab() {
             usersMap.get(b.user_id) || "Especialista Desconhecido",
           room_name: room?.name || "Sala Removida",
           clinic_name: clinicName || "Fusion Clinic",
+          is_contract: false,
+          contract_id: null,
+          contract_type: null,
+          contract_pdf_url: null,
+          cohost_name: cohostName,
+          cohost_split_pct: cohostSplitPct,
+          platform_fee_brl: split.platformFee,
+          cohost_payout_brl: split.cohostPayout,
+          host_payout_brl: split.hostPayout,
         };
       });
 
@@ -572,7 +703,6 @@ export function AdminBookingsTab() {
     }
   };
 
-  // --- ENGINE SÊNIOR: Abertura Segura do Reagendamento ---
   const handleOpenReschedule = async (booking: BookingInfo) => {
     setActionLoading(true);
     try {
@@ -638,7 +768,6 @@ export function AdminBookingsTab() {
     }
   };
 
-  // --- ENGINE VISUAL DE CALENDÁRIO: DISPONIBILIDADE REAL DA SALA ---
   const loadRoomScheduleForDate = async (roomId: string, date: Date) => {
     setLoadingSlots(true);
     setSelectedSlot("");
@@ -664,10 +793,19 @@ export function AdminBookingsTab() {
         .gte("start_time", startIso)
         .lte("start_time", endIso);
 
-      const occupiedSlots = (existingBookings || []).map((b) => {
-        const hStart = format(parseISO(b.start_time), "HH");
-        const hEnd = format(parseISO(b.end_time), "HH");
-        return `${hStart}h-${hEnd}h`;
+      const occupiedSet = new Set<string>();
+      (existingBookings || []).forEach((b) => {
+        const dStart = parseISO(b.start_time);
+        const dEnd = b.end_time ? parseISO(b.end_time) : null;
+        const hStart = dStart.getHours();
+        const hEnd =
+          dEnd && dEnd.getHours() > hStart ? dEnd.getHours() : hStart + 1;
+
+        for (let h = hStart; h < hEnd; h++) {
+          occupiedSet.add(
+            `${h.toString().padStart(2, "0")}h-${(h + 1).toString().padStart(2, "0")}h`,
+          );
+        }
       });
 
       let dailySlots: string[] = [];
@@ -746,7 +884,7 @@ export function AdminBookingsTab() {
       const finalFreeSlots = dailySlots.filter((slot) => {
         const startHour = parseInt(slot.split("h")[0]);
         if (isToday && startHour <= currentHour) return false;
-        return !occupiedSlots.includes(slot);
+        return !occupiedSet.has(slot);
       });
 
       finalFreeSlots.sort(
@@ -760,9 +898,43 @@ export function AdminBookingsTab() {
     }
   };
 
-  // --- CANCELAMENTO E ESTORNO AUTOMÁTICO PARA A CARTEIRA ---
   const handleCancelBooking = async () => {
     if (!selectedBooking || selectedBooking.status === "cancelled") return;
+
+    if (selectedBooking.is_contract) {
+      if (
+        !confirm(
+          `Esta reserva pertence a um CONTRATO (${selectedBooking.pricing_label}).\n\nDeseja cancelar e liberar a agenda desta data específica para ${selectedBooking.specialist_name}?`,
+        )
+      )
+        return;
+
+      setActionLoading(true);
+      try {
+        const { error } = await supabase
+          .from("bookings")
+          .update({ status: "cancelled" })
+          .eq("id", selectedBooking.id);
+        if (error) throw error;
+
+        toast({
+          title: "Data contratual liberada!",
+          description:
+            "O horário foi liberado na agenda para locações avulsas.",
+        });
+        setIsViewOpen(false);
+        fetchBookings();
+      } catch (err: any) {
+        toast({
+          title: "Erro ao cancelar",
+          description: err.message,
+          variant: "destructive",
+        });
+      } finally {
+        setActionLoading(false);
+      }
+      return;
+    }
 
     const hoursToRefund = Number(selectedBooking.credits_used) || 0;
     const tierLabel = formatTierLabel(
@@ -780,7 +952,6 @@ export function AdminBookingsTab() {
     try {
       const bookingRefTag = `[#${selectedBooking.id.slice(0, 8)}]`;
 
-      // 1. Verifica se já existe um estorno registado para esta reserva (evita estorno duplicado)
       const { data: existingRefund } = await supabase
         .from("wallet_transactions")
         .select("id")
@@ -788,7 +959,6 @@ export function AdminBookingsTab() {
         .ilike("description", `%${bookingRefTag}%`)
         .limit(1);
 
-      // 2. Atualiza o status da reserva para cancelado
       const { error: updateError } = await supabase
         .from("bookings")
         .update({ status: "cancelled" })
@@ -796,7 +966,6 @@ export function AdminBookingsTab() {
 
       if (updateError) throw updateError;
 
-      // 3. Devolve as horas para a carteira do especialista (se ainda não foi estornado e não era apenas pagamento pendente sem uso de créditos)
       let refunded = false;
       if (
         hoursToRefund > 0 &&
@@ -804,7 +973,6 @@ export function AdminBookingsTab() {
         (!existingRefund || existingRefund.length === 0)
       ) {
         const now = new Date();
-        // Mantém a data de expiração original se ainda estiver no futuro; caso contrário, garante +30 dias de validade
         const refundExpiresAt =
           selectedBooking.credit_expires_at &&
           new Date(selectedBooking.credit_expires_at) > now
@@ -830,7 +998,6 @@ export function AdminBookingsTab() {
         if (walletError) throw walletError;
         refunded = true;
 
-        // 4. Envia notificação para o especialista informando o estorno na carteira
         try {
           await supabase.from("notifications").insert({
             user_id: selectedBooking.user_id,
@@ -934,7 +1101,7 @@ export function AdminBookingsTab() {
     if (filteredBookings.length === 0)
       return toast({ title: "Sem dados para exportar." });
     let csv =
-      "ID da Reserva;Clínica;Sala;Categoria / Origem;Data Agendada;Especialista;Entrada;Saída;Status;Valor Hora (R$);Valor Bruto (R$)\n";
+      "ID da Reserva;Clínica;Sala;Origem / Modalidade;Data Agendada;Especialista;Entrada;Saída;Status;Valor Hora (R$);Valor Bruto (R$)\n";
     filteredBookings.forEach((b) => {
       const valorHora = b.hourly_rate_brl.toFixed(2).replace(".", ",");
       const valorTotal = b.gross_value_brl.toFixed(2).replace(".", ",");
@@ -948,14 +1115,11 @@ export function AdminBookingsTab() {
 
   const handleExportFinances = () => {
     if (filteredBookings.length === 0)
-      return toast({ title: "Sem dados para exportar." });
+      return toast({ title: "Sem dados para exportار." });
     let csv =
-      "ID da Reserva;Clínica (Anfitrião);Sala;Modalidade;Especialista (Cliente);Valor Total (R$);Taxa Fusion (10%);Repasse Anfitrião (90%);Status\n";
+      "ID da Reserva;Clínica (Anfitrião);Sala;Modalidade;Especialista (Cliente);Co-Anfitrião (Sublocação);Valor Bruto (R$);Taxa Fusion (R$);Repasse Co-Anfitrião (R$);Repasse Clínica (R$);Status\n";
     filteredBookings.forEach((b) => {
-      const valorBase = b.gross_value_brl;
-      const fee = valorBase * 0.1;
-      const repasse = valorBase * 0.9;
-      csv += `${b.id};"${b.clinic_name}";"${b.room_name}";"${b.pricing_label}";"${b.specialist_name}";${valorBase.toFixed(2).replace(".", ",")};${fee.toFixed(2).replace(".", ",")};${repasse.toFixed(2).replace(".", ",")};${b.status}\n`;
+      csv += `${b.id};"${b.clinic_name}";"${b.room_name}";"${b.pricing_label}";"${b.specialist_name}";"${b.cohost_name || "N/A"}";${b.gross_value_brl.toFixed(2).replace(".", ",")};${b.platform_fee_brl.toFixed(2).replace(".", ",")};${b.cohost_payout_brl.toFixed(2).replace(".", ",")};${b.host_payout_brl.toFixed(2).replace(".", ",")};${b.status}\n`;
     });
     downloadCSV(csv, `Fusion_Financeiro_${startDate}_a_${endDate}.csv`);
   };
@@ -963,11 +1127,17 @@ export function AdminBookingsTab() {
   const filteredBookings = bookings.filter((b) => {
     const matchStatus =
       statusFilter === "all" ? true : b.status === statusFilter;
+    const matchOrigin =
+      originFilter === "all"
+        ? true
+        : originFilter === "contract"
+          ? b.is_contract
+          : !b.is_contract;
     const matchSearch =
       b.specialist_name.toLowerCase().includes(search.toLowerCase()) ||
       b.clinic_name.toLowerCase().includes(search.toLowerCase()) ||
       b.room_name.toLowerCase().includes(search.toLowerCase());
-    return matchStatus && matchSearch;
+    return matchStatus && matchOrigin && matchSearch;
   });
 
   const totalRevenue = filteredBookings.reduce((acc, curr) => {
@@ -1010,7 +1180,6 @@ export function AdminBookingsTab() {
     }
   };
 
-  // Parser Visual para a Foto da Sala
   const selectedRoomDetails = candidateRooms.find(
     (r) => r.id === selectedRescheduleRoomId,
   );
@@ -1043,10 +1212,11 @@ export function AdminBookingsTab() {
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-2">
             <CalendarIcon className="w-8 h-8 text-[#BF4B24]" />
-            Histórico de Agendamentos
+            Histórico de Agendamentos & Contratos
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-1">
-            Gestão operacional e financeira de todas as reservas da plataforma.
+            Gestão operacional e financeira de reservas avulsas (Take Rate 20%),
+            turnos fixos, diárias e sublocações.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -1091,6 +1261,16 @@ export function AdminBookingsTab() {
             </Button>
 
             <select
+              value={originFilter}
+              onChange={(e) => setOriginFilter(e.target.value)}
+              className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none w-full sm:w-auto"
+            >
+              <option value="all">Todas as Origens</option>
+              <option value="marketplace">Reservas Avulsas (Horas)</option>
+              <option value="contract">Reservas de Contrato Fixo</option>
+            </select>
+
+            <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
               className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none w-full sm:w-auto"
@@ -1108,7 +1288,7 @@ export function AdminBookingsTab() {
                 placeholder="Buscar clínica ou especialista..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="h-10 pl-9 rounded-xl border-slate-200 bg-white font-medium min-w-[220px]"
+                className="h-10 pl-9 rounded-xl border-slate-200 bg-white font-medium min-w-[200px]"
               />
             </div>
           </div>
@@ -1164,16 +1344,25 @@ export function AdminBookingsTab() {
                 filteredBookings.map((booking) => (
                   <tr
                     key={booking.id}
-                    className="hover:bg-orange-50/30 transition-colors group"
+                    className={`hover:bg-orange-50/30 transition-colors group ${
+                      booking.is_contract ? "bg-purple-50/20" : ""
+                    }`}
                   >
                     <td className="px-6 py-4">
                       <p className="font-black text-slate-900 flex items-center gap-1.5">
                         <Building2 className="w-3.5 h-3.5 text-slate-400" />{" "}
                         {booking.clinic_name}
                       </p>
-                      <p className="text-[10px] font-bold text-slate-500 mt-0.5 ml-5">
-                        {booking.room_name}
-                      </p>
+                      <div className="flex items-center gap-1.5 mt-0.5 ml-5">
+                        <p className="text-[10px] font-bold text-slate-500">
+                          {booking.room_name}
+                        </p>
+                        {booking.is_contract && (
+                          <Badge className="bg-purple-100 text-purple-800 border-0 text-[9px] px-1.5 py-0 font-black">
+                            CONTRATO
+                          </Badge>
+                        )}
+                      </div>
                     </td>
                     <td className="px-6 py-4">
                       <p className="font-bold text-slate-600">
@@ -1189,6 +1378,12 @@ export function AdminBookingsTab() {
                       <p className="font-bold text-[#BF4B24]">
                         {booking.specialist_name}
                       </p>
+                      {booking.cohost_name && !booking.is_contract && (
+                        <p className="text-[10px] font-bold text-purple-700 flex items-center gap-1 mt-0.5">
+                          <Sparkles className="w-3 h-3" /> Co-Anfitrião:{" "}
+                          {booking.cohost_name} ({booking.cohost_split_pct}%)
+                        </p>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
@@ -1272,7 +1467,7 @@ export function AdminBookingsTab() {
         </div>
       </div>
 
-      {/* MODAL 1: VISUALIZAR DETALHES E CANCELAMENTO */}
+      {/* MODAL 1: VISUALIZAR DETALHES, CONTRATO E REPASSES */}
       <Sheet open={isViewOpen} onOpenChange={setIsViewOpen}>
         <SheetContent className="overflow-y-auto w-full sm:max-w-md">
           <SheetHeader>
@@ -1280,7 +1475,8 @@ export function AdminBookingsTab() {
               Detalhes da Reserva
             </SheetTitle>
             <SheetDescription>
-              Informações completas para controle operacional.
+              Informações operacionais, vínculo contratual e divisão de
+              repasses.
             </SheetDescription>
           </SheetHeader>
 
@@ -1316,15 +1512,83 @@ export function AdminBookingsTab() {
                     })}
                   </p>
                   <p className="text-[10px] font-bold text-emerald-600/80 mt-0.5">
-                    {selectedBooking.pricing_label} (R${" "}
-                    {selectedBooking.hourly_rate_brl.toLocaleString("pt-BR", {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
-                    /h)
+                    {selectedBooking.pricing_label}
                   </p>
                 </div>
               </div>
+
+              {/* DISTRIBUIÇÃO FINANCEIRA (SPLIT) */}
+              <div className="bg-slate-900 text-white p-4 rounded-xl space-y-2">
+                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                  Distribuição Financeira (Split)
+                </p>
+                <div className="flex justify-between text-xs">
+                  <span className="text-slate-300">
+                    Taxa Plataforma Fusion:
+                  </span>
+                  <span className="font-bold text-orange-400">
+                    R${" "}
+                    {selectedBooking.platform_fee_brl.toLocaleString("pt-BR", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
+                {selectedBooking.cohost_payout_brl > 0 && (
+                  <div className="flex justify-between text-xs">
+                    <span className="text-purple-300">
+                      Repasse Co-Anfitrião ({selectedBooking.cohost_name}):
+                    </span>
+                    <span className="font-bold text-purple-300">
+                      R${" "}
+                      {selectedBooking.cohost_payout_brl.toLocaleString(
+                        "pt-BR",
+                        {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        },
+                      )}
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between text-xs pt-1 border-t border-slate-800">
+                  <span className="text-slate-300">
+                    Repasse Clínica ({selectedBooking.clinic_name}):
+                  </span>
+                  <span className="font-black text-emerald-400">
+                    R${" "}
+                    {selectedBooking.host_payout_brl.toLocaleString("pt-BR", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
+              </div>
+
+              {selectedBooking.is_contract && (
+                <div className="p-4 rounded-xl bg-purple-50 border border-purple-200 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-black text-purple-950 uppercase">
+                      Reserva de Contrato Recorrente
+                    </p>
+                    <p className="text-xs text-purple-700 font-medium">
+                      Alocação garantida por contrato de locação.
+                    </p>
+                  </div>
+                  {selectedBooking.contract_pdf_url && (
+                    <a
+                      href={selectedBooking.contract_pdf_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-purple-700 text-white text-xs font-bold hover:bg-purple-800"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      Ver PDF
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+              )}
 
               <div className="space-y-4">
                 <div>
@@ -1337,7 +1601,7 @@ export function AdminBookingsTab() {
                 </div>
                 <div>
                   <Label className="text-slate-500 font-bold">
-                    Especialista (Cliente)
+                    Especialista (Locatário)
                   </Label>
                   <p className="font-medium text-[#BF4B24]">
                     {selectedBooking.specialist_name}
@@ -1345,24 +1609,12 @@ export function AdminBookingsTab() {
                 </div>
                 <div>
                   <Label className="text-slate-500 font-bold">
-                    Período Original
+                    Período Reservado
                   </Label>
                   <p className="font-medium text-slate-900">
                     {format(parseISO(selectedBooking.start_time), "dd/MM/yyyy")}{" "}
                     das {format(parseISO(selectedBooking.start_time), "HH:mm")}{" "}
                     às {format(parseISO(selectedBooking.end_time), "HH:mm")}
-                  </p>
-                </div>
-                <div>
-                  <Label className="text-slate-500 font-bold">
-                    Créditos / Horas Consumidas
-                  </Label>
-                  <p className="font-bold text-slate-900">
-                    {selectedBooking.credits_used}h (Categoria{" "}
-                    {formatTierLabel(
-                      normalizeTier(selectedBooking.credit_tier_raw),
-                    )}
-                    )
                   </p>
                 </div>
               </div>
@@ -1380,8 +1632,9 @@ export function AdminBookingsTab() {
                     ) : (
                       <XCircle className="w-4 h-4 mr-2" />
                     )}
-                    Cancelar Reserva e Estornar ({selectedBooking.credits_used}
-                    h)
+                    {selectedBooking.is_contract
+                      ? "Liberar Data Contratual na Agenda"
+                      : `Cancelar Reserva e Estornar (${selectedBooking.credits_used}h)`}
                   </Button>
                 </div>
               )}
@@ -1390,7 +1643,7 @@ export function AdminBookingsTab() {
         </SheetContent>
       </Sheet>
 
-      {/* MODAL 2: REAGENDAR (COM FOTO DA SALA E REGRAS DE PASSADO) */}
+      {/* MODAL 2: REAGENDAR */}
       <Dialog open={isRescheduleOpen} onOpenChange={setIsRescheduleOpen}>
         <DialogContent className="sm:max-w-3xl bg-[#F5F2F0] border-none shadow-2xl">
           <DialogHeader className="mb-2">
@@ -1403,7 +1656,6 @@ export function AdminBookingsTab() {
           </DialogHeader>
 
           <div className="space-y-4">
-            {/* SELETOR DE SALA COM FOTO TIPO AIRBNB */}
             <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex gap-4 items-center">
               <div className="w-16 h-16 rounded-xl bg-slate-100 overflow-hidden shrink-0 flex items-center justify-center border border-slate-200">
                 {roomImageUrl ? (
@@ -1445,7 +1697,6 @@ export function AdminBookingsTab() {
               </div>
             </div>
 
-            {/* AVISO SE MUDOU A SALA ORIGINAL */}
             {isDifferentRoom && (
               <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg flex gap-2 items-center animate-in fade-in">
                 <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
@@ -1457,7 +1708,6 @@ export function AdminBookingsTab() {
             )}
 
             <div className="flex flex-col md:flex-row gap-6">
-              {/* Esquerda: Calendário com bloqueio do passado */}
               <div className="flex-shrink-0 border border-slate-100 rounded-xl p-2 bg-white shadow-sm h-fit">
                 <Calendar
                   mode="single"
@@ -1471,7 +1721,6 @@ export function AdminBookingsTab() {
                 />
               </div>
 
-              {/* Direita: Horários Livres Calculados Dinamicamente */}
               <div className="flex-1 flex flex-col">
                 <div className="flex items-center justify-between mb-3">
                   <Label className="text-sm font-bold text-slate-700">
@@ -1489,7 +1738,7 @@ export function AdminBookingsTab() {
                     <div className="flex flex-col items-center justify-center h-full gap-2">
                       <Loader2 className="w-6 h-6 animate-spin text-[#BF4B24]" />
                       <p className="text-xs text-slate-500 font-medium">
-                        Analisando cruzamento de agendas...
+                        Analisando cruzamento de agendas e contratos...
                       </p>
                     </div>
                   ) : availableSlots.length === 0 ? (
@@ -1499,7 +1748,7 @@ export function AdminBookingsTab() {
                         Nenhum horário disponível.
                       </p>
                       <p className="text-xs text-slate-400 mt-1">
-                        Sala fechada, horário já passado ou totalmente ocupada.
+                        Sala fechada, em uso por contrato ou totalmente ocupada.
                       </p>
                     </div>
                   ) : (

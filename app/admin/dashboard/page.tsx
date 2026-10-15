@@ -11,6 +11,7 @@ import { AdminPartnersTab } from "@/components/admin/partners-tab";
 import { AdminBookingsTab } from "@/components/admin/bookings-tab";
 import { PushCampaignManager } from "@/components/admin/PushCampaignManager";
 import { AdminCouponsTab } from "@/components/admin/coupons-tab";
+import { AdminContractsTab } from "@/components/admin/contracts-tab";
 
 import {
   Users,
@@ -78,6 +79,7 @@ export default function AdminDashboardPage() {
     { id: "especialistas", label: "Especialistas", icon: Users },
     { id: "parceiros", label: "Parceiros", icon: ShieldCheck },
     { id: "salas", label: "Gestão de Salas", icon: Building2 },
+    { id: "contratos", label: "Contratos & Fixos", icon: FileText },
     { id: "pacotes", label: "Precificação (Pacotes)", icon: Tags },
     { id: "cupons", label: "Motor de Cupons", icon: Ticket },
     { id: "agendamentos", label: "Agendamentos", icon: CalendarDays },
@@ -181,6 +183,7 @@ export default function AdminDashboardPage() {
           {activeTab === "especialistas" && <AdminSpecialistsTab />}
           {activeTab === "parceiros" && <AdminPartnersTab />}
           {activeTab === "salas" && <AdminRoomsTab />}
+          {activeTab === "contratos" && <AdminContractsTab mode="admin" />}
           {activeTab === "pacotes" && <PackagesAdminTab />}
           {activeTab === "agendamentos" && <AdminBookingsTab />}
           {activeTab === "cupons" && <AdminCouponsTab />}
@@ -191,6 +194,7 @@ export default function AdminDashboardPage() {
           )}
           {/* Fallback caso a aba não exista ou esteja em construção */}
           {activeTab !== "salas" &&
+            activeTab !== "contratos" &&
             activeTab !== "pacotes" &&
             activeTab !== "dashboard" &&
             activeTab !== "especialistas" &&
@@ -228,7 +232,7 @@ function AdminRoomsTab() {
   const [actionLoading, setActionLoading] = useState(false);
 
   const [auditTab, setAuditTab] = useState<
-    "auditoria" | "editar" | "agenda" | "reservar"
+    "auditoria" | "editar" | "agenda" | "reservar" | "contratos"
   >("auditoria");
 
   const [editForm, setEditForm] = useState({
@@ -438,16 +442,17 @@ function AdminRoomsTab() {
     }
   };
 
+  // Expande reservas de 1h, turnos ou diárias contratuais para bloquear todas as horas ocupadas
   const loadTakenSlots = async (date: Date) => {
     if (!evaluatingRoom) return;
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
+    const startOfDayDate = new Date(date);
+    startOfDayDate.setHours(0, 0, 0, 0);
+    const endOfDayDate = new Date(date);
+    endOfDayDate.setHours(23, 59, 59, 999);
 
     const { data } = await supabase
       .from("bookings")
-      .select("start_time, status")
+      .select("start_time, end_time, status")
       .eq("room_id", evaluatingRoom.id)
       .in("status", [
         "confirmed",
@@ -455,16 +460,25 @@ function AdminRoomsTab() {
         "in_progress",
         "pending_payment",
       ])
-      .gte("start_time", startOfDay.toISOString())
-      .lte("start_time", endOfDay.toISOString());
+      .gte("start_time", startOfDayDate.toISOString())
+      .lte("start_time", endOfDayDate.toISOString());
 
     if (data) {
-      const taken = data.map((b) => {
-        const d = new Date(b.start_time);
-        const h = d.getHours();
-        return `${h.toString().padStart(2, "0")}h-${(h + 1).toString().padStart(2, "0")}h`;
+      const occupiedSet = new Set<string>();
+      data.forEach((b) => {
+        const dStart = new Date(b.start_time);
+        const dEnd = b.end_time ? new Date(b.end_time) : null;
+        const hStart = dStart.getHours();
+        const hEnd =
+          dEnd && dEnd.getHours() > hStart ? dEnd.getHours() : hStart + 1;
+
+        for (let h = hStart; h < hEnd; h++) {
+          occupiedSet.add(
+            `${h.toString().padStart(2, "0")}h-${(h + 1).toString().padStart(2, "0")}h`,
+          );
+        }
       });
-      setTakenSlots(taken);
+      setTakenSlots(Array.from(occupiedSet));
     } else {
       setTakenSlots([]);
     }
@@ -768,7 +782,6 @@ function AdminRoomsTab() {
     );
   };
 
-  const pendingRooms = rooms.filter((r) => !r.is_active);
   const filteredRooms = rooms.filter((r) => {
     const matchesSearch =
       r.name?.toLowerCase().includes(search.toLowerCase()) ||
@@ -808,7 +821,6 @@ function AdminRoomsTab() {
     } catch (e) {}
 
     const availableSlots = getAvailableSlotsForDate(evaluatingRoom, manualDate);
-    const currentDateStr = format(manualDate, "yyyy-MM-dd");
 
     const filteredProfessionals =
       profSearch.length > 0
@@ -878,6 +890,12 @@ function AdminRoomsTab() {
               <CalendarIcon className="w-5 h-5" /> Gerenciar Agenda
             </button>
             <button
+              onClick={() => setAuditTab("contratos")}
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "contratos" ? "bg-[#BF4B24]/10 text-[#BF4B24]" : "text-slate-500 hover:bg-slate-50"}`}
+            >
+              <FileText className="w-5 h-5" /> Contratos & Fixos da Sala
+            </button>
+            <button
               onClick={() => setAuditTab("reservar")}
               className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "reservar" ? "bg-[#BF4B24]/10 text-[#BF4B24] border border-[#BF4B24]/20" : "text-slate-500 hover:bg-slate-50"}`}
             >
@@ -886,621 +904,636 @@ function AdminRoomsTab() {
           </div>
 
           <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
-            <div className="max-w-4xl">
-              {/* ABA: AUDITORIA */}
-              {auditTab === "auditoria" && (
-                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                  <div className="grid grid-cols-2 gap-6">
-                    <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">
-                        Mídia da Sala
-                      </p>
-                      <div className="w-full h-48 rounded-xl overflow-hidden bg-slate-100 border border-slate-100 relative">
-                        <img
-                          src={mainImage}
-                          className="w-full h-full object-cover"
-                          alt="Principal"
-                        />
-                        {evalImages.length > 1 && (
-                          <div className="absolute bottom-2 right-2 bg-slate-900/80 text-white text-[10px] font-bold px-2 py-1 rounded backdrop-blur-md">
-                            +{evalImages.length - 1} fotos
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="space-y-6">
-                      <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
-                          <MapPin className="w-3 h-3" /> Localização
+            {auditTab === "contratos" ? (
+              <div className="w-full">
+                <AdminContractsTab
+                  mode="admin"
+                  preselectedRoomId={evaluatingRoom.id}
+                />
+              </div>
+            ) : (
+              <div className="max-w-4xl">
+                {/* ABA: AUDITORIA */}
+                {auditTab === "auditoria" && (
+                  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="grid grid-cols-2 gap-6">
+                      <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">
+                          Mídia da Sala
                         </p>
-                        <p className="font-bold text-slate-900">
-                          {evalAddress.street || "Endereço Pendente"}
-                        </p>
-                        <p className="text-sm font-medium text-slate-500">
-                          {evalAddress.city} - {evalAddress.state}
-                        </p>
-                      </div>
-                      <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
-                          <User className="w-3 h-3" /> Anfitrião / Cadastro
-                        </p>
-                        <p className="font-bold text-slate-900">
-                          {evaluatingRoom.profiles?.full_name}
-                        </p>
-                        <p className="text-sm font-medium text-slate-500">
-                          Valor Base (Hora):{" "}
-                          <strong className="text-[#BF4B24]">
-                            R$ {evalPricing.hourly || "0"}
-                          </strong>
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-white border border-slate-200 p-8 rounded-2xl shadow-sm">
-                    <h3 className="text-lg font-black text-slate-900 mb-6">
-                      Definir Categoria
-                    </h3>
-
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-                      <label
-                        className={`flex flex-col gap-3 p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedTier === "start" ? "border-slate-800 bg-slate-50" : "border-slate-100 hover:border-slate-200 bg-white"}`}
-                      >
-                        <input
-                          type="radio"
-                          value="start"
-                          checked={selectedTier === "start"}
-                          onChange={() => setSelectedTier("start")}
-                          className="sr-only"
-                        />
-                        <div
-                          className={`w-10 h-10 rounded-full flex items-center justify-center ${selectedTier === "start" ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-400"}`}
-                        >
-                          <Shield className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <h4
-                            className={`font-bold ${selectedTier === "start" ? "text-slate-900" : "text-slate-700"}`}
-                          >
-                            START
-                          </h4>
-                          <p className="text-xs text-slate-500 font-medium mt-1">
-                            Salas padrão. Custo-benefício.
-                          </p>
-                        </div>
-                      </label>
-
-                      <label
-                        className={`flex flex-col gap-3 p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedTier === "vip" ? "border-purple-500 bg-purple-50/50" : "border-slate-100 hover:border-slate-200 bg-white"}`}
-                      >
-                        <input
-                          type="radio"
-                          value="vip"
-                          checked={selectedTier === "vip"}
-                          onChange={() => setSelectedTier("vip")}
-                          className="sr-only"
-                        />
-                        <div
-                          className={`w-10 h-10 rounded-full flex items-center justify-center ${selectedTier === "vip" ? "bg-purple-500 text-white" : "bg-slate-100 text-slate-400"}`}
-                        >
-                          <Star className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <h4
-                            className={`font-bold ${selectedTier === "vip" ? "text-purple-900" : "text-slate-700"}`}
-                          >
-                            VIP
-                          </h4>
-                          <p className="text-xs text-slate-500 font-medium mt-1">
-                            Ambientes diferenciados.
-                          </p>
-                        </div>
-                      </label>
-
-                      <label
-                        className={`flex flex-col gap-3 p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedTier === "master" ? "border-amber-500 bg-amber-50/50" : "border-slate-100 hover:border-slate-200 bg-white"}`}
-                      >
-                        <input
-                          type="radio"
-                          value="master"
-                          checked={selectedTier === "master"}
-                          onChange={() => setSelectedTier("master")}
-                          className="sr-only"
-                        />
-                        <div
-                          className={`w-10 h-10 rounded-full flex items-center justify-center ${selectedTier === "master" ? "bg-amber-500 text-white" : "bg-slate-100 text-slate-400"}`}
-                        >
-                          <Crown className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <h4
-                            className={`font-bold ${selectedTier === "master" ? "text-amber-900" : "text-slate-700"}`}
-                          >
-                            MASTER
-                          </h4>
-                          <p className="text-xs text-slate-500 font-medium mt-1">
-                            Alto padrão e premium.
-                          </p>
-                        </div>
-                      </label>
-                    </div>
-
-                    <div className="p-6 border border-orange-200 bg-orange-50/50 rounded-2xl mb-8 flex flex-col md:flex-row md:items-center justify-between gap-6">
-                      <div className="flex items-start gap-4">
-                        <div className="p-3 bg-white rounded-xl shadow-sm text-[#BF4B24] shrink-0">
-                          <Sparkles className="w-6 h-6" />
-                        </div>
-                        <div>
-                          <h4 className="font-black text-slate-900 text-lg">
-                            Selo Fusion Partner
-                          </h4>
-                          <p className="text-sm font-medium text-slate-600 mb-2">
-                            Destacar esta sala como parceira oficial da
-                            plataforma.
-                          </p>
-                          {isPartner ? (
-                            <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold">
-                              <CheckCircle2 className="w-3.5 h-3.5 mr-1" />{" "}
-                              Locação "Por Hora" Liberada
-                            </Badge>
-                          ) : (
-                            <Badge className="bg-amber-100 text-amber-800 border-0 font-bold">
-                              <AlertTriangle className="w-3.5 h-3.5 mr-1" />{" "}
-                              Apenas Turnos/Fixos
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                        <input
-                          type="checkbox"
-                          checked={isPartner}
-                          onChange={(e) => setIsPartner(e.target.checked)}
-                          className="sr-only peer"
-                        />
-                        <div className="w-14 h-7 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-[#BF4B24]"></div>
-                      </label>
-                    </div>
-
-                    <div className="flex gap-4">
-                      {!evaluatingRoom.is_active && (
-                        <Button
-                          onClick={() => {
-                            handleStatusChange(evaluatingRoom.id, false);
-                            closeAuditPanel();
-                          }}
-                          disabled={actionLoading}
-                          variant="outline"
-                          className="h-14 px-8 text-red-600 hover:bg-red-50 border-red-200 font-bold text-base"
-                        >
-                          Reprovar Sala
-                        </Button>
-                      )}
-                      <Button
-                        onClick={handleSaveAudit}
-                        disabled={actionLoading}
-                        className="flex-1 h-14 bg-slate-900 hover:bg-slate-800 text-white font-bold text-base shadow-lg"
-                      >
-                        {actionLoading
-                          ? "Salvando..."
-                          : "Salvar Configurações de Auditoria"}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* ABA: EDITAR INFORMAÇÕES */}
-              {auditTab === "editar" && (
-                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                  <div className="bg-orange-50 border border-orange-200 p-5 rounded-xl flex gap-4">
-                    <AlertTriangle className="w-6 h-6 text-orange-600 shrink-0 mt-0.5" />
-                    <div>
-                      <h4 className="text-base font-black text-orange-900">
-                        Modo de Edição Avançada
-                      </h4>
-                      <p className="text-sm font-medium text-orange-700 mt-1">
-                        Você está alterando os dados originais do anfitrião
-                        direto no banco de dados.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="bg-white border border-slate-200 p-8 rounded-2xl shadow-sm space-y-6">
-                    <div>
-                      <label className="text-sm font-bold text-slate-700 mb-2 block">
-                        Nome de Exibição da Sala
-                      </label>
-                      <Input
-                        value={editForm.name}
-                        onChange={(e) =>
-                          setEditForm({ ...editForm, name: e.target.value })
-                        }
-                        className="bg-slate-50 border-slate-200 h-14 font-bold text-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-sm font-bold text-slate-700 mb-2 block">
-                        Descrição (Marketing)
-                      </label>
-                      <textarea
-                        value={editForm.description}
-                        onChange={(e) =>
-                          setEditForm({
-                            ...editForm,
-                            description: e.target.value,
-                          })
-                        }
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 font-medium text-base min-h-[160px]"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-sm font-bold text-slate-700 mb-2 block">
-                        Valor Base por Hora (R$)
-                      </label>
-                      <Input
-                        type="number"
-                        value={editForm.price}
-                        onChange={(e) =>
-                          setEditForm({ ...editForm, price: e.target.value })
-                        }
-                        className="bg-slate-50 border-slate-200 h-14 font-black text-lg max-w-xs"
-                      />
-                    </div>
-                    <div className="pt-6 border-t border-slate-100 mt-8">
-                      <Button
-                        onClick={handleSaveInfoEdit}
-                        disabled={actionLoading}
-                        className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black text-base shadow-lg"
-                      >
-                        {actionLoading ? (
-                          "Salvando..."
-                        ) : (
-                          <>
-                            <Save className="w-5 h-5 mr-2" /> Salvar Edições
-                            Permanentemente
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* ABA: GERENCIAR AGENDA */}
-              {auditTab === "agenda" && (
-                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                  <div className="flex items-start justify-between bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
-                    <div>
-                      <h3 className="text-xl font-black text-slate-900 mb-2 flex items-center gap-2">
-                        <CalendarIcon className="w-6 h-6 text-[#BF4B24]" />{" "}
-                        Central de Reservas e Bloqueios
-                      </h3>
-                      <p className="text-sm font-medium text-slate-500 max-w-lg">
-                        Clique nos dias no calendário para bloquear o uso
-                        integral da sala. Dias vermelhos impedem qualquer
-                        reserva médica.
-                      </p>
-                    </div>
-                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-center min-w-[140px]">
-                      <p className="text-3xl font-black text-slate-900">
-                        {blockedDates.length}
-                      </p>
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
-                        Dias Bloqueados
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="bg-white border border-slate-200 p-8 rounded-2xl shadow-sm">
-                    <div className="flex items-center justify-between mb-8">
-                      <h3 className="text-2xl font-black text-slate-900 capitalize">
-                        {format(currentMonth, "MMMM yyyy", { locale: ptBR })}
-                      </h3>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() =>
-                            setCurrentMonth(subMonths(currentMonth, 1))
-                          }
-                          className="h-10 w-10 rounded-xl border-slate-200 hover:bg-slate-50"
-                        >
-                          <ChevronLeft className="w-5 h-5" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() =>
-                            setCurrentMonth(addMonths(currentMonth, 1))
-                          }
-                          className="h-10 w-10 rounded-xl border-slate-200 hover:bg-slate-50"
-                        >
-                          <ChevronRight className="w-5 h-5" />
-                        </Button>
-                      </div>
-                    </div>
-
-                    {renderCalendar()}
-
-                    <div className="mt-8 pt-6 border-t border-slate-100 flex justify-end">
-                      <Button
-                        onClick={handleSaveBlocks}
-                        disabled={actionLoading}
-                        className="bg-slate-900 hover:bg-slate-800 text-white font-bold h-14 px-8 text-base shadow-lg"
-                      >
-                        {actionLoading ? "Salvando..." : "Salvar Calendário"}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* ABA: RESERVA MANUAL */}
-              {auditTab === "reservar" && (
-                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                  <div className="bg-white border border-slate-200 p-8 rounded-3xl shadow-sm">
-                    <div className="mb-6 border-b border-slate-100 pb-6">
-                      <h3 className="text-xl font-black text-slate-900 flex items-center gap-2">
-                        <CalendarPlus className="w-6 h-6 text-[#BF4B24]" /> Nova
-                        Reserva Avulsa
-                      </h3>
-                      <p className="text-sm font-medium text-slate-500 mt-1 max-w-2xl">
-                        Abaixo você visualiza os horários originais da sala.
-                        Navegue pelos dias e selecione quantos horários desejar
-                        para adicionar ao carrinho do profissional.
-                      </p>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                      {/* PASSO 1: Selecionar Data e Slot */}
-                      <div className="space-y-6">
-                        <div>
-                          <label className="text-sm font-bold text-slate-700 mb-2 block">
-                            1. Data da Sessão
-                          </label>
-                          <Input
-                            type="date"
-                            value={format(manualDate, "yyyy-MM-dd")}
-                            onChange={(e) => {
-                              const d = new Date(`${e.target.value}T12:00:00`);
-                              setManualDate(d);
-                            }}
-                            className="h-12 bg-slate-50 border-slate-200 rounded-xl font-bold"
+                        <div className="w-full h-48 rounded-xl overflow-hidden bg-slate-100 border border-slate-100 relative">
+                          <img
+                            src={mainImage}
+                            className="w-full h-full object-cover"
+                            alt="Principal"
                           />
-                        </div>
-
-                        <div>
-                          <label className="text-sm font-bold text-slate-700 mb-2 flex items-center justify-between">
-                            <span>2. Escolha os Horários</span>
-                            <span className="text-[10px] text-[#BF4B24] font-medium bg-[#BF4B24]/10 border border-[#BF4B24]/20 px-2 py-1 rounded-md">
-                              Multi-Seleção Ativa
-                            </span>
-                          </label>
-
-                          <div className="grid grid-cols-3 gap-2 bg-slate-50 p-4 rounded-2xl border border-slate-100 max-h-[300px] overflow-y-auto shadow-inner">
-                            {availableSlots.length === 0 ? (
-                              <div className="col-span-3 text-center py-6">
-                                <AlertTriangle className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                                <p className="text-slate-500 font-medium text-sm">
-                                  Nenhum horário disponível para esta data.
-                                </p>
-                              </div>
-                            ) : (
-                              availableSlots.map((slot) => {
-                                const isTaken = takenSlots.includes(slot);
-                                const currentDateStr = format(
-                                  manualDate,
-                                  "yyyy-MM-dd",
-                                );
-                                const isSelected = selectedSlots.some(
-                                  (s) =>
-                                    format(s.date, "yyyy-MM-dd") ===
-                                      currentDateStr && s.slot === slot,
-                                );
-
-                                return (
-                                  <button
-                                    key={slot}
-                                    type="button"
-                                    disabled={isTaken && !isSelected}
-                                    onClick={() => toggleSlot(manualDate, slot)}
-                                    className={`py-2 text-xs font-bold rounded-lg transition-all border ${
-                                      isTaken && !isSelected
-                                        ? "bg-slate-200 text-slate-400 border-slate-200 cursor-not-allowed opacity-50"
-                                        : isSelected
-                                          ? "bg-[#BF4B24] text-white border-[#BF4B24] shadow-md transform scale-105"
-                                          : "bg-white text-slate-700 hover:border-[#BF4B24]/40 border-slate-200 shadow-sm"
-                                    }`}
-                                  >
-                                    {slot}
-                                  </button>
-                                );
-                              })
-                            )}
-                          </div>
-                        </div>
-
-                        {/* RESUMO DO CARRINHO */}
-                        {selectedSlots.length > 0 && (
-                          <div className="p-4 bg-orange-50 border border-orange-200 rounded-2xl">
-                            <p className="text-xs font-black text-orange-900 uppercase tracking-widest mb-3">
-                              Carrinho: {selectedSlots.length} Sessão(ões)
-                            </p>
-                            <div className="flex flex-wrap gap-2">
-                              {selectedSlots.map((s, idx) => (
-                                <Badge
-                                  key={idx}
-                                  className="bg-[#BF4B24] text-white border-0 py-1 px-2"
-                                >
-                                  {format(s.date, "dd/MM")} • {s.slot}
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleSlot(s.date, s.slot)}
-                                    className="ml-2 hover:text-red-300 transition-colors"
-                                  >
-                                    <XCircle className="w-3 h-3" />
-                                  </button>
-                                </Badge>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* PASSO 2: Especialista e Pagamento */}
-                      <div className="space-y-6">
-                        <div>
-                          <label className="text-sm font-bold text-slate-700 mb-2 block">
-                            3. Selecionar Especialista
-                          </label>
-
-                          {!selectedProf ? (
-                            <div className="relative">
-                              <Search className="absolute left-3 top-3.5 w-4 h-4 text-slate-400" />
-                              <Input
-                                placeholder="Digite o nome do profissional..."
-                                value={profSearch}
-                                onChange={(e) => setProfSearch(e.target.value)}
-                                className="h-12 pl-10 bg-slate-50 border-slate-200 rounded-xl z-10 relative"
-                              />
-
-                              {profSearch.length > 0 && (
-                                <div className="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-60 overflow-y-auto">
-                                  {filteredProfessionals.length === 0 ? (
-                                    <div className="p-4 text-center text-sm text-slate-500 font-medium">
-                                      Nenhum profissional encontrado.
-                                    </div>
-                                  ) : (
-                                    filteredProfessionals.map((p) => (
-                                      <div
-                                        key={p.id}
-                                        onClick={() => setSelectedProf(p)}
-                                        className="p-3 hover:bg-slate-50 cursor-pointer border-b border-slate-100 last:border-0 flex justify-between items-center transition-colors"
-                                      >
-                                        <div>
-                                          <p className="text-sm font-bold text-slate-900">
-                                            {p.full_name ||
-                                              "Sem Nome Cadastrado"}
-                                          </p>
-                                          <p className="text-[10px] text-slate-500">
-                                            CPF: {p.cpf || "Não informado"}
-                                          </p>
-                                        </div>
-                                        <Badge className="bg-slate-100 text-slate-600 border-0">
-                                          {p.wallet_balance || 0} CR
-                                        </Badge>
-                                      </div>
-                                    ))
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="flex items-center justify-between bg-orange-50 border border-orange-200 p-3 rounded-xl">
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center border border-orange-200">
-                                  <UserCheck className="w-5 h-5 text-[#BF4B24]" />
-                                </div>
-                                <div>
-                                  <p className="font-bold text-orange-900 text-sm">
-                                    {selectedProf.full_name}
-                                  </p>
-                                  <p className="text-xs font-medium text-[#BF4B24]">
-                                    Saldo atual:{" "}
-                                    {selectedProf.wallet_balance || 0} CR
-                                  </p>
-                                </div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSelectedProf(null);
-                                  setProfSearch("");
-                                }}
-                                className="text-xs font-bold text-[#BF4B24] hover:text-[#9A3C1D] hover:underline"
-                              >
-                                Trocar
-                              </button>
+                          {evalImages.length > 1 && (
+                            <div className="absolute bottom-2 right-2 bg-slate-900/80 text-white text-[10px] font-bold px-2 py-1 rounded backdrop-blur-md">
+                              +{evalImages.length - 1} fotos
                             </div>
                           )}
                         </div>
+                      </div>
+                      <div className="space-y-6">
+                        <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
+                            <MapPin className="w-3 h-3" /> Localização
+                          </p>
+                          <p className="font-bold text-slate-900">
+                            {evalAddress.street || "Endereço Pendente"}
+                          </p>
+                          <p className="text-sm font-medium text-slate-500">
+                            {evalAddress.city} - {evalAddress.state}
+                          </p>
+                        </div>
+                        <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
+                            <User className="w-3 h-3" /> Anfitrião / Cadastro
+                          </p>
+                          <p className="font-bold text-slate-900">
+                            {evaluatingRoom.profiles?.full_name}
+                          </p>
+                          <p className="text-sm font-medium text-slate-500">
+                            Valor Base (Hora):{" "}
+                            <strong className="text-[#BF4B24]">
+                              R$ {evalPricing.hourly || "0"}
+                            </strong>
+                          </p>
+                        </div>
+                      </div>
+                    </div>
 
-                        <div
-                          className={`transition-opacity duration-300 ${!selectedProf || selectedSlots.length === 0 ? "opacity-30 pointer-events-none" : "opacity-100"}`}
+                    <div className="bg-white border border-slate-200 p-8 rounded-2xl shadow-sm">
+                      <h3 className="text-lg font-black text-slate-900 mb-6">
+                        Definir Categoria
+                      </h3>
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                        <label
+                          className={`flex flex-col gap-3 p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedTier === "start" ? "border-slate-800 bg-slate-50" : "border-slate-100 hover:border-slate-200 bg-white"}`}
                         >
-                          <label className="text-sm font-bold text-slate-700 mb-2 block">
-                            4. Forma de Pagamento
-                          </label>
-                          <div className="grid grid-cols-2 gap-3">
-                            <button
-                              type="button"
-                              onClick={() => setManualPaymentMethod("wallet")}
-                              className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "wallet" ? "border-[#BF4B24] bg-[#BF4B24]/10 text-[#BF4B24]" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                          <input
+                            type="radio"
+                            value="start"
+                            checked={selectedTier === "start"}
+                            onChange={() => setSelectedTier("start")}
+                            className="sr-only"
+                          />
+                          <div
+                            className={`w-10 h-10 rounded-full flex items-center justify-center ${selectedTier === "start" ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-400"}`}
+                          >
+                            <Shield className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4
+                              className={`font-bold ${selectedTier === "start" ? "text-slate-900" : "text-slate-700"}`}
                             >
-                              <Wallet className="w-5 h-5" />
-                              <span className="text-xs font-bold text-center">
-                                Abater da Carteira (-{selectedSlots.length || 1}{" "}
-                                CR)
-                              </span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setManualPaymentMethod("pix")}
-                              className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "pix" ? "border-emerald-600 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                              START
+                            </h4>
+                            <p className="text-xs text-slate-500 font-medium mt-1">
+                              Salas padrão. Custo-benefício.
+                            </p>
+                          </div>
+                        </label>
+
+                        <label
+                          className={`flex flex-col gap-3 p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedTier === "vip" ? "border-purple-500 bg-purple-50/50" : "border-slate-100 hover:border-slate-200 bg-white"}`}
+                        >
+                          <input
+                            type="radio"
+                            value="vip"
+                            checked={selectedTier === "vip"}
+                            onChange={() => setSelectedTier("vip")}
+                            className="sr-only"
+                          />
+                          <div
+                            className={`w-10 h-10 rounded-full flex items-center justify-center ${selectedTier === "vip" ? "bg-purple-500 text-white" : "bg-slate-100 text-slate-400"}`}
+                          >
+                            <Star className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4
+                              className={`font-bold ${selectedTier === "vip" ? "text-purple-900" : "text-slate-700"}`}
                             >
-                              <QrCode className="w-5 h-5" />
-                              <span className="text-xs font-bold text-center">
-                                Pix Recebido Externo
-                              </span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setManualPaymentMethod("card")}
-                              className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "card" ? "border-blue-600 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                              VIP
+                            </h4>
+                            <p className="text-xs text-slate-500 font-medium mt-1">
+                              Ambientes diferenciados.
+                            </p>
+                          </div>
+                        </label>
+
+                        <label
+                          className={`flex flex-col gap-3 p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedTier === "master" ? "border-amber-500 bg-amber-50/50" : "border-slate-100 hover:border-slate-200 bg-white"}`}
+                        >
+                          <input
+                            type="radio"
+                            value="master"
+                            checked={selectedTier === "master"}
+                            onChange={() => setSelectedTier("master")}
+                            className="sr-only"
+                          />
+                          <div
+                            className={`w-10 h-10 rounded-full flex items-center justify-center ${selectedTier === "master" ? "bg-amber-500 text-white" : "bg-slate-100 text-slate-400"}`}
+                          >
+                            <Crown className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4
+                              className={`font-bold ${selectedTier === "master" ? "text-amber-900" : "text-slate-700"}`}
                             >
-                              <CreditCard className="w-5 h-5" />
-                              <span className="text-xs font-bold text-center">
-                                Maquininha (Cartão)
-                              </span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setManualPaymentMethod("cash")}
-                              className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "cash" ? "border-amber-600 bg-amber-50 text-amber-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
-                            >
-                              <Banknote className="w-5 h-5" />
-                              <span className="text-xs font-bold text-center">
-                                Dinheiro em Espécie
-                              </span>
-                            </button>
+                              MASTER
+                            </h4>
+                            <p className="text-xs text-slate-500 font-medium mt-1">
+                              Alto padrão e premium.
+                            </p>
+                          </div>
+                        </label>
+                      </div>
+
+                      <div className="p-6 border border-orange-200 bg-orange-50/50 rounded-2xl mb-8 flex flex-col md:flex-row md:items-center justify-between gap-6">
+                        <div className="flex items-start gap-4">
+                          <div className="p-3 bg-white rounded-xl shadow-sm text-[#BF4B24] shrink-0">
+                            <Sparkles className="w-6 h-6" />
+                          </div>
+                          <div>
+                            <h4 className="font-black text-slate-900 text-lg">
+                              Selo Fusion Partner
+                            </h4>
+                            <p className="text-sm font-medium text-slate-600 mb-2">
+                              Destacar esta sala como parceira oficial da
+                              plataforma.
+                            </p>
+                            {isPartner ? (
+                              <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold">
+                                <CheckCircle2 className="w-3.5 h-3.5 mr-1" />{" "}
+                                Locação "Por Hora" Liberada
+                              </Badge>
+                            ) : (
+                              <Badge className="bg-amber-100 text-amber-800 border-0 font-bold">
+                                <AlertTriangle className="w-3.5 h-3.5 mr-1" />{" "}
+                                Apenas Turnos/Fixos
+                              </Badge>
+                            )}
                           </div>
                         </div>
+                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={isPartner}
+                            onChange={(e) => setIsPartner(e.target.checked)}
+                            className="sr-only peer"
+                          />
+                          <div className="w-14 h-7 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-[#BF4B24]"></div>
+                        </label>
+                      </div>
 
-                        <div className="pt-4 border-t border-slate-100">
+                      <div className="flex gap-4">
+                        {!evaluatingRoom.is_active && (
                           <Button
-                            type="button"
-                            onClick={handleManualBookingSubmit}
-                            disabled={
-                              !selectedProf ||
-                              selectedSlots.length === 0 ||
-                              actionLoading
-                            }
-                            className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black text-base shadow-lg"
+                            onClick={() => {
+                              handleStatusChange(evaluatingRoom.id, false);
+                              closeAuditPanel();
+                            }}
+                            disabled={actionLoading}
+                            variant="outline"
+                            className="h-14 px-8 text-red-600 hover:bg-red-50 border-red-200 font-bold text-base"
                           >
-                            {actionLoading ? (
-                              <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                            ) : (
-                              <CheckCircle2 className="w-5 h-5 mr-2" />
-                            )}
-                            Confirmar {selectedSlots.length} Reserva(s)
+                            Reprovar Sala
+                          </Button>
+                        )}
+                        <Button
+                          onClick={handleSaveAudit}
+                          disabled={actionLoading}
+                          className="flex-1 h-14 bg-slate-900 hover:bg-slate-800 text-white font-bold text-base shadow-lg"
+                        >
+                          {actionLoading
+                            ? "Salvando..."
+                            : "Salvar Configurações de Auditoria"}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ABA: EDITAR INFORMAÇÕES */}
+                {auditTab === "editar" && (
+                  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="bg-orange-50 border border-orange-200 p-5 rounded-xl flex gap-4">
+                      <AlertTriangle className="w-6 h-6 text-orange-600 shrink-0 mt-0.5" />
+                      <div>
+                        <h4 className="text-base font-black text-orange-900">
+                          Modo de Edição Avançada
+                        </h4>
+                        <p className="text-sm font-medium text-orange-700 mt-1">
+                          Você está alterando os dados originais do anfitrião
+                          direto no banco de dados.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="bg-white border border-slate-200 p-8 rounded-2xl shadow-sm space-y-6">
+                      <div>
+                        <label className="text-sm font-bold text-slate-700 mb-2 block">
+                          Nome de Exibição da Sala
+                        </label>
+                        <Input
+                          value={editForm.name}
+                          onChange={(e) =>
+                            setEditForm({ ...editForm, name: e.target.value })
+                          }
+                          className="bg-slate-50 border-slate-200 h-14 font-bold text-lg"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-bold text-slate-700 mb-2 block">
+                          Descrição (Marketing)
+                        </label>
+                        <textarea
+                          value={editForm.description}
+                          onChange={(e) =>
+                            setEditForm({
+                              ...editForm,
+                              description: e.target.value,
+                            })
+                          }
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 font-medium text-base min-h-[160px]"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-bold text-slate-700 mb-2 block">
+                          Valor Base por Hora (R$)
+                        </label>
+                        <Input
+                          type="number"
+                          value={editForm.price}
+                          onChange={(e) =>
+                            setEditForm({ ...editForm, price: e.target.value })
+                          }
+                          className="bg-slate-50 border-slate-200 h-14 font-black text-lg max-w-xs"
+                        />
+                      </div>
+                      <div className="pt-6 border-t border-slate-100 mt-8">
+                        <Button
+                          onClick={handleSaveInfoEdit}
+                          disabled={actionLoading}
+                          className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black text-base shadow-lg"
+                        >
+                          {actionLoading ? (
+                            "Salvando..."
+                          ) : (
+                            <>
+                              <Save className="w-5 h-5 mr-2" /> Salvar Edições
+                              Permanentemente
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ABA: GERENCIAR AGENDA */}
+                {auditTab === "agenda" && (
+                  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="flex items-start justify-between bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
+                      <div>
+                        <h3 className="text-xl font-black text-slate-900 mb-2 flex items-center gap-2">
+                          <CalendarIcon className="w-6 h-6 text-[#BF4B24]" />{" "}
+                          Central de Reservas e Bloqueios
+                        </h3>
+                        <p className="text-sm font-medium text-slate-500 max-w-lg">
+                          Clique nos dias no calendário para bloquear o uso
+                          integral da sala. Dias vermelhos impedem qualquer
+                          reserva médica.
+                        </p>
+                      </div>
+                      <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-center min-w-[140px]">
+                        <p className="text-3xl font-black text-slate-900">
+                          {blockedDates.length}
+                        </p>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                          Dias Bloqueados
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 p-8 rounded-2xl shadow-sm">
+                      <div className="flex items-center justify-between mb-8">
+                        <h3 className="text-2xl font-black text-slate-900 capitalize">
+                          {format(currentMonth, "MMMM yyyy", { locale: ptBR })}
+                        </h3>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            onClick={() =>
+                              setCurrentMonth(subMonths(currentMonth, 1))
+                            }
+                            className="h-10 w-10 rounded-xl border-slate-200 hover:bg-slate-50"
+                          >
+                            <ChevronLeft className="w-5 h-5" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            onClick={() =>
+                              setCurrentMonth(addMonths(currentMonth, 1))
+                            }
+                            className="h-10 w-10 rounded-xl border-slate-200 hover:bg-slate-50"
+                          >
+                            <ChevronRight className="w-5 h-5" />
                           </Button>
                         </div>
                       </div>
+
+                      {renderCalendar()}
+
+                      <div className="mt-8 pt-6 border-t border-slate-100 flex justify-end">
+                        <Button
+                          onClick={handleSaveBlocks}
+                          disabled={actionLoading}
+                          className="bg-slate-900 hover:bg-slate-800 text-white font-bold h-14 px-8 text-base shadow-lg"
+                        >
+                          {actionLoading ? "Salvando..." : "Salvar Calendário"}
+                        </Button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+
+                {/* ABA: RESERVA MANUAL */}
+                {auditTab === "reservar" && (
+                  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="bg-white border border-slate-200 p-8 rounded-3xl shadow-sm">
+                      <div className="mb-6 border-b border-slate-100 pb-6">
+                        <h3 className="text-xl font-black text-slate-900 flex items-center gap-2">
+                          <CalendarPlus className="w-6 h-6 text-[#BF4B24]" />{" "}
+                          Nova Reserva Avulsa
+                        </h3>
+                        <p className="text-sm font-medium text-slate-500 mt-1 max-w-2xl">
+                          Abaixo você visualiza os horários originais da sala.
+                          Navegue pelos dias e selecione quantos horários
+                          desejar para adicionar ao carrinho do profissional.
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        {/* PASSO 1: Selecionar Data e Slot */}
+                        <div className="space-y-6">
+                          <div>
+                            <label className="text-sm font-bold text-slate-700 mb-2 block">
+                              1. Data da Sessão
+                            </label>
+                            <Input
+                              type="date"
+                              value={format(manualDate, "yyyy-MM-dd")}
+                              onChange={(e) => {
+                                const d = new Date(
+                                  `${e.target.value}T12:00:00`,
+                                );
+                                setManualDate(d);
+                              }}
+                              className="h-12 bg-slate-50 border-slate-200 rounded-xl font-bold"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-sm font-bold text-slate-700 mb-2 flex items-center justify-between">
+                              <span>2. Escolha os Horários</span>
+                              <span className="text-[10px] text-[#BF4B24] font-medium bg-[#BF4B24]/10 border border-[#BF4B24]/20 px-2 py-1 rounded-md">
+                                Multi-Seleção Ativa
+                              </span>
+                            </label>
+
+                            <div className="grid grid-cols-3 gap-2 bg-slate-50 p-4 rounded-2xl border border-slate-100 max-h-[300px] overflow-y-auto shadow-inner">
+                              {availableSlots.length === 0 ? (
+                                <div className="col-span-3 text-center py-6">
+                                  <AlertTriangle className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                                  <p className="text-slate-500 font-medium text-sm">
+                                    Nenhum horário disponível para esta data.
+                                  </p>
+                                </div>
+                              ) : (
+                                availableSlots.map((slot) => {
+                                  const isTaken = takenSlots.includes(slot);
+                                  const currentDateStr = format(
+                                    manualDate,
+                                    "yyyy-MM-dd",
+                                  );
+                                  const isSelected = selectedSlots.some(
+                                    (s) =>
+                                      format(s.date, "yyyy-MM-dd") ===
+                                        currentDateStr && s.slot === slot,
+                                  );
+
+                                  return (
+                                    <button
+                                      key={slot}
+                                      type="button"
+                                      disabled={isTaken && !isSelected}
+                                      onClick={() =>
+                                        toggleSlot(manualDate, slot)
+                                      }
+                                      className={`py-2 text-xs font-bold rounded-lg transition-all border ${
+                                        isTaken && !isSelected
+                                          ? "bg-slate-200 text-slate-400 border-slate-200 cursor-not-allowed opacity-50"
+                                          : isSelected
+                                            ? "bg-[#BF4B24] text-white border-[#BF4B24] shadow-md transform scale-105"
+                                            : "bg-white text-slate-700 hover:border-[#BF4B24]/40 border-slate-200 shadow-sm"
+                                      }`}
+                                    >
+                                      {slot}
+                                    </button>
+                                  );
+                                })
+                              )}
+                            </div>
+                          </div>
+
+                          {/* RESUMO DO CARRINHO */}
+                          {selectedSlots.length > 0 && (
+                            <div className="p-4 bg-orange-50 border border-orange-200 rounded-2xl">
+                              <p className="text-xs font-black text-orange-900 uppercase tracking-widest mb-3">
+                                Carrinho: {selectedSlots.length} Sessão(ões)
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                {selectedSlots.map((s, idx) => (
+                                  <Badge
+                                    key={idx}
+                                    className="bg-[#BF4B24] text-white border-0 py-1 px-2"
+                                  >
+                                    {format(s.date, "dd/MM")} • {s.slot}
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleSlot(s.date, s.slot)}
+                                      className="ml-2 hover:text-red-300 transition-colors"
+                                    >
+                                      <XCircle className="w-3 h-3" />
+                                    </button>
+                                  </Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* PASSO 2: Especialista e Pagamento */}
+                        <div className="space-y-6">
+                          <div>
+                            <label className="text-sm font-bold text-slate-700 mb-2 block">
+                              3. Selecionar Especialista
+                            </label>
+
+                            {!selectedProf ? (
+                              <div className="relative">
+                                <Search className="absolute left-3 top-3.5 w-4 h-4 text-slate-400" />
+                                <Input
+                                  placeholder="Digite o nome do profissional..."
+                                  value={profSearch}
+                                  onChange={(e) =>
+                                    setProfSearch(e.target.value)
+                                  }
+                                  className="h-12 pl-10 bg-slate-50 border-slate-200 rounded-xl z-10 relative"
+                                />
+
+                                {profSearch.length > 0 && (
+                                  <div className="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-60 overflow-y-auto">
+                                    {filteredProfessionals.length === 0 ? (
+                                      <div className="p-4 text-center text-sm text-slate-500 font-medium">
+                                        Nenhum profissional encontrado.
+                                      </div>
+                                    ) : (
+                                      filteredProfessionals.map((p) => (
+                                        <div
+                                          key={p.id}
+                                          onClick={() => setSelectedProf(p)}
+                                          className="p-3 hover:bg-slate-50 cursor-pointer border-b border-slate-100 last:border-0 flex justify-between items-center transition-colors"
+                                        >
+                                          <div>
+                                            <p className="text-sm font-bold text-slate-900">
+                                              {p.full_name ||
+                                                "Sem Nome Cadastrado"}
+                                            </p>
+                                            <p className="text-[10px] text-slate-500">
+                                              CPF: {p.cpf || "Não informado"}
+                                            </p>
+                                          </div>
+                                          <Badge className="bg-slate-100 text-slate-600 border-0">
+                                            {p.wallet_balance || 0} CR
+                                          </Badge>
+                                        </div>
+                                      ))
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="flex items-center justify-between bg-orange-50 border border-orange-200 p-3 rounded-xl">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center border border-orange-200">
+                                    <UserCheck className="w-5 h-5 text-[#BF4B24]" />
+                                  </div>
+                                  <div>
+                                    <p className="font-bold text-orange-900 text-sm">
+                                      {selectedProf.full_name}
+                                    </p>
+                                    <p className="text-xs font-medium text-[#BF4B24]">
+                                      Saldo atual:{" "}
+                                      {selectedProf.wallet_balance || 0} CR
+                                    </p>
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedProf(null);
+                                    setProfSearch("");
+                                  }}
+                                  className="text-xs font-bold text-[#BF4B24] hover:text-[#9A3C1D] hover:underline"
+                                >
+                                  Trocar
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          <div
+                            className={`transition-opacity duration-300 ${!selectedProf || selectedSlots.length === 0 ? "opacity-30 pointer-events-none" : "opacity-100"}`}
+                          >
+                            <label className="text-sm font-bold text-slate-700 mb-2 block">
+                              4. Forma de Pagamento
+                            </label>
+                            <div className="grid grid-cols-2 gap-3">
+                              <button
+                                type="button"
+                                onClick={() => setManualPaymentMethod("wallet")}
+                                className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "wallet" ? "border-[#BF4B24] bg-[#BF4B24]/10 text-[#BF4B24]" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                              >
+                                <Wallet className="w-5 h-5" />
+                                <span className="text-xs font-bold text-center">
+                                  Abater da Carteira (-
+                                  {selectedSlots.length || 1} CR)
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setManualPaymentMethod("pix")}
+                                className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "pix" ? "border-emerald-600 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                              >
+                                <QrCode className="w-5 h-5" />
+                                <span className="text-xs font-bold text-center">
+                                  Pix Recebido Externo
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setManualPaymentMethod("card")}
+                                className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "card" ? "border-blue-600 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                              >
+                                <CreditCard className="w-5 h-5" />
+                                <span className="text-xs font-bold text-center">
+                                  Maquininha (Cartão)
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setManualPaymentMethod("cash")}
+                                className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "cash" ? "border-amber-600 bg-amber-50 text-amber-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                              >
+                                <Banknote className="w-5 h-5" />
+                                <span className="text-xs font-bold text-center">
+                                  Dinheiro em Espécie
+                                </span>
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="pt-4 border-t border-slate-100">
+                            <Button
+                              type="button"
+                              onClick={handleManualBookingSubmit}
+                              disabled={
+                                !selectedProf ||
+                                selectedSlots.length === 0 ||
+                                actionLoading
+                              }
+                              className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black text-base shadow-lg"
+                            >
+                              {actionLoading ? (
+                                <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                              ) : (
+                                <CheckCircle2 className="w-5 h-5 mr-2" />
+                              )}
+                              Confirmar {selectedSlots.length} Reserva(s)
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -10,7 +10,7 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Activity,
-  Map,
+  Map as MapIcon,
   Maximize,
   Filter,
   PlusCircle,
@@ -20,6 +20,8 @@ import {
   Printer,
   Loader2,
   LogOut,
+  FileText,
+  Sparkles,
 } from "lucide-react";
 import {
   AreaChart,
@@ -31,12 +33,12 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   subDays,
   startOfDay,
   endOfDay,
   format,
-  isSameDay,
   parseISO,
   getHours,
   getDay,
@@ -49,6 +51,35 @@ interface HostOverviewProps {
 
 const shiftLabels = ["08h-12h", "12h-15h", "15h-18h", "18h-22h"];
 const COLORS = ["#BF4B24", "#8b5cf6", "#10b981", "#3b82f6", "#f59e0b"];
+
+function normalizeTier(tier?: string | null): "start" | "vip" | "master" {
+  const t = (tier || "start").toLowerCase().trim();
+  if (t.includes("master")) return "master";
+  if (t.includes("vip")) return "vip";
+  return "start";
+}
+
+function extractRoomModalitiesHourlyRate(modalities: any): number | null {
+  if (!modalities) return null;
+  try {
+    const parsed =
+      typeof modalities === "string" ? JSON.parse(modalities) : modalities;
+    const candidates = [
+      parsed?.hourly?.price,
+      parsed?.hourlyPrice,
+      parsed?.price_per_hour,
+      parsed?.pricePerHour,
+      parsed?.price,
+    ];
+    for (const c of candidates) {
+      const val = Number(c);
+      if (!isNaN(val) && val > 0) return val;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 export function HostOverview({ onNavigate }: HostOverviewProps) {
   const supabase = createClient();
@@ -63,6 +94,8 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
 
   // KPIs
   const [totalRevenue, setTotalRevenue] = useState(0);
+  const [netHostRevenue, setNetHostRevenue] = useState(0);
+  const [contractRevenue, setContractRevenue] = useState(0);
   const [totalBookings, setTotalBookings] = useState(0);
   const [globalRevPerSqM, setGlobalRevPerSqM] = useState(0);
   const [occupancyRate, setOccupancyRate] = useState(0);
@@ -101,7 +134,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
         // 2. Buscar Salas do Anfitrião
         const { data: rooms, error: roomsErr } = await supabase
           .from("rooms")
-          .select("id, name, address_details")
+          .select("id, name, address_details, tier, category_id, modalities")
           .eq("host_id", user.id);
 
         if (roomsErr) throw roomsErr;
@@ -111,25 +144,364 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
         }
 
         const roomIds = rooms.map((r) => r.id);
+        const roomsMap = new Map<string, any>(rooms.map((r: any) => [r.id, r]));
 
-        // 3. Buscar Reservas no Período
-        const { data: bookings, error: bookingsErr } = await supabase
-          .from("bookings")
-          .select(
-            "id, room_id, start_time, end_time, total_cost, upgrade_fee_amount, status",
-          )
-          .in("room_id", roomIds)
-          .gte("start_time", startDate.toISOString())
-          .lte("start_time", endDate.toISOString());
+        // 3. Buscar Reservas Válidas, Contratos, Pacotes e Categorias em paralelo
+        const [bookingsRes, contractsRes, packagesRes, categoriesRes] =
+          await Promise.all([
+            supabase
+              .from("bookings")
+              .select(
+                "id, created_at, room_id, user_id, start_time, end_time, total_cost, upgrade_fee_amount, status, contract_id, booking_origin, agreed_value_brl",
+              )
+              .in("room_id", roomIds)
+              .in("status", ["confirmed", "completed", "pending_payment"])
+              .gte("start_time", startDate.toISOString())
+              .lte("start_time", endDate.toISOString()),
+            supabase.from("room_contracts").select("*").in("room_id", roomIds),
+            supabase.from("packages").select("id, tier, hours, price, active"),
+            supabase
+              .from("room_categories")
+              .select("id, name, credit_cost_per_hour, upgrade_fee_per_hour"),
+          ]);
 
-        if (bookingsErr) throw bookingsErr;
+        if (bookingsRes.error) throw bookingsRes.error;
+
+        const bookings = bookingsRes.data || [];
+        const contractsData = contractsRes.data || [];
+
+        const userIds = [
+          ...new Set(bookings.map((b: any) => b.user_id).filter(Boolean)),
+        ];
+        const bookingIds = bookings.map((b: any) => b.id).filter(Boolean);
+
+        const [walletRes, subsRes, couponsRes] = await Promise.all([
+          userIds.length > 0
+            ? supabase
+                .from("wallet_transactions")
+                .select(
+                  "id, user_id, amount, type, description, tier, created_at, expires_at",
+                )
+                .in("user_id", userIds)
+                .order("created_at", { ascending: true })
+            : Promise.resolve({ data: [] as any[] }),
+          userIds.length > 0
+            ? supabase
+                .from("subscriptions")
+                .select("id, user_id, tier, hours, status, created_at")
+                .in("user_id", userIds)
+            : Promise.resolve({ data: [] as any[] }),
+          bookingIds.length > 0
+            ? supabase
+                .from("coupon_uses")
+                .select("booking_id, discount_applied")
+                .in("booking_id", bookingIds)
+            : Promise.resolve({ data: [] as any[] }),
+        ]);
+
+        // Indexação de Contratos e Co-Anfitriões
+        const contractsById = new Map<string, any>(
+          contractsData.map((c: any) => [c.id, c]),
+        );
+        const activeContractsByRoom = new Map<string, any[]>();
+        const activeCohostByRoomId = new Map<string, any>();
+
+        contractsData.forEach((c: any) => {
+          if (c.status === "active") {
+            const list = activeContractsByRoom.get(c.room_id) || [];
+            list.push(c);
+            activeContractsByRoom.set(c.room_id, list);
+
+            if (c.contract_type === "monthly_exclusive" && c.allow_sublease) {
+              activeCohostByRoomId.set(c.room_id, c);
+            }
+          }
+        });
+
+        // Indexação de Pacotes e Categorias
+        const packageRateMap: Record<
+          "start" | "vip" | "master",
+          Map<number, number>
+        > = {
+          start: new Map<number, number>(),
+          vip: new Map<number, number>(),
+          master: new Map<number, number>(),
+        };
+
+        (packagesRes.data || []).forEach((pkg: any) => {
+          const t = normalizeTier(pkg.tier);
+          const h = Math.max(1, Number(pkg.hours) || 1);
+          const rawPrice = Number(pkg.price) || 0;
+          if (rawPrice <= 0) return;
+
+          const hourlyRate =
+            h > 1 && rawPrice / h >= 15 ? rawPrice / h : rawPrice;
+          packageRateMap[t].set(h, hourlyRate);
+        });
+
+        const categoriesMap = new Map<string, any>(
+          (categoriesRes.data || []).map((c: any) => [c.id, c]),
+        );
+
+        const couponDiscountMap = new Map<string, number>();
+        (couponsRes.data || []).forEach((cu: any) => {
+          if (cu.booking_id) {
+            couponDiscountMap.set(
+              cu.booking_id,
+              (couponDiscountMap.get(cu.booking_id) || 0) +
+                Number(cu.discount_applied || 0),
+            );
+          }
+        });
+
+        const userWalletMap = new Map<string, any[]>();
+        (walletRes.data || []).forEach((tx: any) => {
+          const list = userWalletMap.get(tx.user_id) || [];
+          list.push(tx);
+          userWalletMap.set(tx.user_id, list);
+        });
+
+        const userSubsMap = new Map<string, any[]>();
+        (subsRes.data || []).forEach((sub: any) => {
+          const list = userSubsMap.get(sub.user_id) || [];
+          list.push(sub);
+          userSubsMap.set(sub.user_id, list);
+        });
+
+        const getRateFromPackageTable = (
+          tier: "start" | "vip" | "master",
+          targetHours?: number | null,
+        ): number | null => {
+          const tierPackages = packageRateMap[tier];
+          if (!tierPackages || tierPackages.size === 0) return null;
+
+          if (targetHours && tierPackages.has(targetHours)) {
+            return tierPackages.get(targetHours)!;
+          }
+
+          if (targetHours && targetHours > 0) {
+            let closestHours: number | null = null;
+            let minDiff = Infinity;
+            for (const [h] of tierPackages.entries()) {
+              const diff = Math.abs(h - targetHours);
+              if (diff < minDiff) {
+                minDiff = diff;
+                closestHours = h;
+              }
+            }
+            if (closestHours !== null) {
+              return tierPackages.get(closestHours)!;
+            }
+          }
+
+          if (tierPackages.has(1)) return tierPackages.get(1)!;
+          const sortedHours = Array.from(tierPackages.keys()).sort(
+            (a, b) => a - b,
+          );
+          return tierPackages.get(sortedHours[0])!;
+        };
+
+        const resolveBookingFinancials = (
+          b: any,
+        ): {
+          grossRevenue: number;
+          hostNet: number;
+          durationHours: number;
+          isContract: boolean;
+        } => {
+          const room = roomsMap.get(b.room_id);
+          const roomTier = normalizeTier(room?.tier);
+
+          const durationMs =
+            b.end_time && b.start_time
+              ? new Date(b.end_time).getTime() -
+                new Date(b.start_time).getTime()
+              : 3600000;
+          const durationHours = Math.max(0.5, durationMs / (1000 * 60 * 60));
+
+          const linkedContract = b.contract_id
+            ? contractsById.get(b.contract_id)
+            : null;
+          const isContractBooking = Boolean(
+            b.contract_id ||
+            (b.booking_origin &&
+              String(b.booking_origin).startsWith("contract")),
+          );
+
+          if (isContractBooking) {
+            const val =
+              Number(b.agreed_value_brl) > 0
+                ? Number(b.agreed_value_brl)
+                : Number(linkedContract?.session_value || 0);
+            const feePct = Number(linkedContract?.platform_fee_pct ?? 10) / 100;
+            const hostNet = Math.max(0, val * (1 - feePct));
+            return {
+              grossRevenue: val,
+              hostNet,
+              durationHours,
+              isContract: true,
+            };
+          }
+
+          const roomCohost = activeCohostByRoomId.get(b.room_id);
+          const cohostSplitPct = roomCohost
+            ? Number(roomCohost.cohost_split_pct || 0)
+            : 0;
+
+          const computeHostNet = (grossVal: number) => {
+            const netAfterFusion = Math.max(0, grossVal * 0.9);
+            const cohostShare =
+              cohostSplitPct > 0 ? netAfterFusion * (cohostSplitPct / 100) : 0;
+            return Math.max(0, netAfterFusion - cohostShare);
+          };
+
+          const rawTotalCost = Number(b.total_cost || 0);
+          const upgradeFee = Number(b.upgrade_fee_amount || 0);
+          const discount = couponDiscountMap.get(b.id) || 0;
+
+          if (
+            Number(b.agreed_value_brl) > 0 ||
+            rawTotalCost >= durationHours * 15
+          ) {
+            const baseVal =
+              Number(b.agreed_value_brl) > 0
+                ? Number(b.agreed_value_brl)
+                : rawTotalCost;
+            const grossVal = Math.max(0, baseVal + upgradeFee - discount);
+            return {
+              grossRevenue: grossVal,
+              hostNet: computeHostNet(grossVal),
+              durationHours,
+              isContract: false,
+            };
+          }
+
+          const creditsUsed = rawTotalCost > 0 ? rawTotalCost : durationHours;
+          const userTxs = userWalletMap.get(b.user_id) || [];
+          const bookingTime = b.created_at
+            ? new Date(b.created_at).getTime()
+            : new Date(b.start_time).getTime();
+
+          let creditTierUsed: "start" | "vip" | "master" = roomTier;
+          const matchingDebit = userTxs.find((tx: any) => {
+            if (Number(tx.amount) >= 0) return false;
+            const txTime = new Date(tx.created_at).getTime();
+            return Math.abs(txTime - bookingTime) <= 10 * 60 * 1000;
+          });
+          if (matchingDebit?.tier) {
+            creditTierUsed = normalizeTier(matchingDebit.tier);
+          }
+
+          const compatibleTiers: ("start" | "vip" | "master")[] =
+            roomTier === "master"
+              ? ["master"]
+              : roomTier === "vip"
+                ? ["vip", "master"]
+                : ["start", "vip", "master"];
+
+          const positiveTxs = userTxs.filter(
+            (tx: any) => Number(tx.amount) > 0,
+          );
+          const validPriorCredits = positiveTxs.filter((tx: any) => {
+            const createdMs = new Date(tx.created_at).getTime();
+            const notAfterBooking = createdMs <= bookingTime + 60 * 1000;
+            const notExpiredAtBooking =
+              !tx.expires_at ||
+              new Date(tx.expires_at).getTime() >= bookingTime;
+            return notAfterBooking && notExpiredAtBooking;
+          });
+
+          const candidateCredits =
+            validPriorCredits.length > 0 ? validPriorCredits : positiveTxs;
+
+          const sourceCreditTx =
+            [...candidateCredits]
+              .reverse()
+              .find((tx: any) => normalizeTier(tx.tier) === creditTierUsed) ||
+            [...candidateCredits]
+              .reverse()
+              .find((tx: any) =>
+                compatibleTiers.includes(normalizeTier(tx.tier)),
+              ) ||
+            candidateCredits[candidateCredits.length - 1];
+
+          let detectedPackageHours: number | null = null;
+          if (sourceCreditTx) {
+            creditTierUsed = normalizeTier(sourceCreditTx.tier || roomTier);
+            const txAmt = Math.round(Number(sourceCreditTx.amount));
+            const descMatch = String(sourceCreditTx.description || "").match(
+              /(\d+)\s*(?:h|hora|horas|crédito|credito)/i,
+            );
+            if (descMatch && Number(descMatch[1]) > 0) {
+              detectedPackageHours = Number(descMatch[1]);
+            } else if (txAmt > 0) {
+              detectedPackageHours = txAmt;
+            }
+          } else {
+            const userSubs = userSubsMap.get(b.user_id) || [];
+            const activeSub =
+              userSubs.find((s: any) => s.status === "ACTIVE") || userSubs[0];
+            if (activeSub) {
+              creditTierUsed = normalizeTier(activeSub.tier || roomTier);
+              detectedPackageHours = Number(activeSub.hours) || null;
+            }
+          }
+
+          let resolvedHourlyRate = getRateFromPackageTable(
+            creditTierUsed,
+            detectedPackageHours,
+          );
+
+          if (resolvedHourlyRate === null && creditTierUsed !== roomTier) {
+            resolvedHourlyRate = getRateFromPackageTable(
+              roomTier,
+              detectedPackageHours,
+            );
+          }
+
+          if (resolvedHourlyRate === null) {
+            const roomModalityRate = extractRoomModalitiesHourlyRate(
+              room?.modalities,
+            );
+            const categoryObj = room?.category_id
+              ? categoriesMap.get(room.category_id)
+              : null;
+            const categoryRate =
+              categoryObj && Number(categoryObj.credit_cost_per_hour) >= 15
+                ? Number(categoryObj.credit_cost_per_hour)
+                : null;
+            const defaultTierRates: Record<"start" | "vip" | "master", number> =
+              {
+                start: 45,
+                vip: 60,
+                master: 80,
+              };
+            resolvedHourlyRate =
+              roomModalityRate || categoryRate || defaultTierRates[roomTier];
+          }
+
+          const grossVal = Math.max(
+            0,
+            creditsUsed * resolvedHourlyRate + upgradeFee - discount,
+          );
+
+          return {
+            grossRevenue: grossVal,
+            hostNet: computeHostNet(grossVal),
+            durationHours,
+            isContract: false,
+          };
+        };
 
         // ----------------------------------------------------
-        // PROCESSAMENTO DE DADOS (BI)
+        // PROCESSAMENTO DE DADOS (BI + RETENÇÃO DO M²)
         // ----------------------------------------------------
         let revTotal = 0;
-        let bookTotal = bookings?.length || 0;
+        let netTotal = 0;
+        let contractRevTotal = 0;
+        let bookTotal = bookings.length;
         let areaTotal = 0;
+        let totalOccupiedHours = 0;
 
         // a. Preparando Performance por Sala
         const roomStats: any = {};
@@ -142,16 +514,27 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
                 : r.address_details;
           } catch (e) {}
 
-          const area = Number(addr?.size || 15); // Se não tiver tamanho cadastrado, assume 15m²
+          const area = Number(addr?.size || 15);
           areaTotal += area;
+
+          const roomContracts = activeContractsByRoom.get(r.id) || [];
+          const hasExclusiveContract = roomContracts.some(
+            (c: any) => c.contract_type === "monthly_exclusive",
+          );
+          const cohostObj = activeCohostByRoomId.get(r.id);
 
           roomStats[r.id] = {
             id: r.id,
             name: r.name,
             areaSqM: area,
             revenue: 0,
+            netRevenue: 0,
             bookings: 0,
+            occupiedHours: 0,
             occupancy: 0,
+            hasContracts: roomContracts.length > 0,
+            hasExclusiveContract,
+            cohostName: cohostObj?.specialist_name || null,
             color: COLORS[idx % COLORS.length],
           };
         });
@@ -163,7 +546,12 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
         for (let i = daysDiff - 1; i >= 0; i--) {
           const d = subDays(now, i);
           const dateStr = format(d, "dd MMM", { locale: ptBR });
-          dailyRev[dateStr] = { date: dateStr, revenue: 0, bookings: 0 };
+          dailyRev[dateStr] = {
+            date: dateStr,
+            revenue: 0,
+            netRevenue: 0,
+            bookings: 0,
+          };
         }
 
         // c. Preparando Heatmap (Dias da semana vs Turnos)
@@ -177,71 +565,93 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           { day: "Sáb", shifts: [0, 0, 0, 0] },
         ];
 
-        // Processar cada reserva
-        bookings?.forEach((b) => {
-          // Calcula receita aproximada (Créditos base + Taxas de Upgrade)
-          const bookingRevenue =
-            Number(b.total_cost || 0) * 45 + Number(b.upgrade_fee_amount || 0);
-          revTotal += bookingRevenue;
+        // Processar cada reserva/contrato
+        bookings.forEach((b: any) => {
+          const { grossRevenue, hostNet, durationHours, isContract } =
+            resolveBookingFinancials(b);
 
-          // Associa à sala
+          revTotal += grossRevenue;
+          netTotal += hostNet;
+          if (isContract) contractRevTotal += grossRevenue;
+          totalOccupiedHours += durationHours;
+
           if (roomStats[b.room_id]) {
-            roomStats[b.room_id].revenue += bookingRevenue;
+            roomStats[b.room_id].revenue += grossRevenue;
+            roomStats[b.room_id].netRevenue += hostNet;
             roomStats[b.room_id].bookings += 1;
+            roomStats[b.room_id].occupiedHours += durationHours;
           }
 
           const startDt = parseISO(b.start_time);
+          const endDt = b.end_time ? parseISO(b.end_time) : null;
           const dateStr = format(startDt, "dd MMM", { locale: ptBR });
 
-          // Associa ao gráfico diário (se estiver dentro dos dias renderizados)
           if (dailyRev[dateStr]) {
-            dailyRev[dateStr].revenue += bookingRevenue;
+            dailyRev[dateStr].revenue += grossRevenue;
+            dailyRev[dateStr].netRevenue += hostNet;
             dailyRev[dateStr].bookings += 1;
           }
 
-          // Associa ao Heatmap
-          const dayOfWeek = getDay(startDt); // 0 = Dom, 1 = Seg...
-          const hour = getHours(startDt);
-          let shiftIndex = -1;
-          if (hour >= 8 && hour < 12) shiftIndex = 0;
-          else if (hour >= 12 && hour < 15) shiftIndex = 1;
-          else if (hour >= 15 && hour < 18) shiftIndex = 2;
-          else if (hour >= 18 && hour <= 22) shiftIndex = 3;
+          // Preenche todos os turnos abrangidos pela reserva ou diária de contrato
+          const dayOfWeek = getDay(startDt);
+          const startH = getHours(startDt);
+          const endH =
+            endDt && getHours(endDt) > startH ? getHours(endDt) : startH + 1;
 
-          if (shiftIndex !== -1) {
-            heatMatrix[dayOfWeek].shifts[shiftIndex] += 1;
-          }
+          const shiftRanges = [
+            { idx: 0, start: 8, end: 12 },
+            { idx: 1, start: 12, end: 15 },
+            { idx: 2, start: 15, end: 18 },
+            { idx: 3, start: 18, end: 23 },
+          ];
+
+          shiftRanges.forEach((sr) => {
+            if (startH < sr.end && endH > sr.start) {
+              heatMatrix[dayOfWeek].shifts[sr.idx] += 1;
+            }
+          });
         });
 
-        // Formatar para os Estados
         setTotalRevenue(revTotal);
+        setNetHostRevenue(netTotal);
+        setContractRevenue(contractRevTotal);
         setTotalBookings(bookTotal);
         setGlobalRevPerSqM(areaTotal > 0 ? revTotal / areaTotal : 0);
 
-        // Ocupação simulada baseada na quantidade de reservas
+        // Capacidade operacional de referência por sala (8h/dia útil)
+        const capacityPerRoomHours = Math.max(1, daysDiff * 8);
+        const totalCapacityHours = Math.max(
+          1,
+          rooms.length * capacityPerRoomHours,
+        );
+
         setOccupancyRate(
-          bookTotal > 0
+          totalOccupiedHours > 0
             ? Math.min(
-                Math.round((bookTotal / (rooms.length * daysDiff * 4)) * 100),
+                Math.round((totalOccupiedHours / totalCapacityHours) * 100),
                 100,
               )
             : 0,
         );
 
-        // Atualiza Performance das Salas
-        const perfArray = Object.values(roomStats).map((r: any) => ({
-          ...r,
-          occupancy: Math.min(
-            Math.round((r.bookings / (daysDiff * 4)) * 100),
-            100,
-          ),
-        }));
+        // Atualiza Performance das Salas com horas reais ocupadas e contratos
+        const perfArray = Object.values(roomStats).map((r: any) => {
+          const rawOcc = Math.round(
+            (r.occupiedHours / capacityPerRoomHours) * 100,
+          );
+          const finalOcc = r.hasExclusiveContract
+            ? Math.max(rawOcc, 85)
+            : Math.min(rawOcc, 100);
+
+          return {
+            ...r,
+            occupancy: Math.min(100, finalOcc),
+          };
+        });
         setRoomPerformance(perfArray.sort((a, b) => b.revenue - a.revenue));
 
-        // Atualiza Gráfico Diário
         setRevenueData(Object.values(dailyRev));
 
-        // Atualiza Heatmap: Reordena para começar de Segunda a Domingo
         const orderedHeatmap = [
           heatMatrix[1],
           heatMatrix[2],
@@ -293,7 +703,8 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
             Visão Geral de Desempenho
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-1">
-            Análise de rendimentos, ocupação e métricas por m² dos seus espaços.
+            Análise de rendimentos (avulsos e contratos), retenção de ociosidade
+            e métricas por m² dos seus espaços.
           </p>
         </div>
 
@@ -327,6 +738,14 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
               <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center text-emerald-600">
                 <Wallet className="w-5 h-5" />
               </div>
+              {contractRevenue > 0 && (
+                <Badge className="bg-purple-100 text-purple-800 border-0 text-[10px] font-bold">
+                  Contratos: R${" "}
+                  {contractRevenue.toLocaleString("pt-BR", {
+                    maximumFractionDigits: 0,
+                  })}
+                </Badge>
+              )}
             </div>
             <p className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-1">
               Rendimento Bruto
@@ -335,8 +754,16 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
               <span className="text-lg text-slate-400 font-bold mr-1">R$</span>
               {totalRevenue.toLocaleString("pt-BR", {
                 minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
               })}
             </h3>
+            <p className="text-xs font-bold text-emerald-600 mt-1">
+              Repasse Líquido: R${" "}
+              {netHostRevenue.toLocaleString("pt-BR", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
+            </p>
           </div>
         </div>
 
@@ -370,7 +797,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
             </div>
           </div>
           <p className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-1">
-            Agendamentos
+            Agendamentos & Diárias
           </p>
           <h3 className="text-3xl font-black text-slate-900">
             {totalBookings}
@@ -382,9 +809,12 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
             <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600">
               <Activity className="w-5 h-5" />
             </div>
+            <Badge className="bg-slate-100 text-slate-600 border-0 text-[10px] font-bold">
+              Ociosidade: {Math.max(0, 100 - occupancyRate)}%
+            </Badge>
           </div>
           <p className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-1">
-            Taxa de Ocupação Est.
+            Taxa de Ocupação Real
           </p>
           <h3 className="text-3xl font-black text-slate-900">
             {occupancyRate}%
@@ -399,7 +829,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           <div className="flex justify-between items-center mb-6">
             <div>
               <h2 className="text-lg font-black text-slate-900">
-                Evolução de Receita
+                Evolução de Receita (Avulso + Contratos)
               </h2>
               <p className="text-xs font-medium text-slate-500">
                 Acompanhamento no período de{" "}
@@ -455,8 +885,8 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
                   }}
                   itemStyle={{ fontWeight: 600 }}
                   formatter={(value: number) => [
-                    `R$ ${value.toFixed(2)}`,
-                    "Receita",
+                    `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                    "Receita Bruta",
                   ]}
                 />
                 <Area
@@ -476,10 +906,10 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 flex flex-col">
           <div className="mb-6">
             <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
-              <Map className="w-5 h-5 text-[#BF4B24]" /> Mapa de Ocupação
+              <MapIcon className="w-5 h-5 text-[#BF4B24]" /> Mapa de Ocupação
             </h2>
             <p className="text-xs font-medium text-slate-500 mt-1">
-              Horários de maior fluxo.
+              Horários de maior fluxo (horas avulsas + turnos contratuais).
             </p>
           </div>
 
@@ -511,7 +941,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
                     <div
                       key={idx}
                       className={`col-span-1 aspect-square rounded-md border flex items-center justify-center transition-all hover:scale-110 cursor-crosshair ${getHeatmapColor(intensity)}`}
-                      title={`${row.day} - ${shiftLabels[idx]}: ${intensity} reservas`}
+                      title={`${row.day} - ${shiftLabels[idx]}: ${intensity} turno(s) ocupado(s)`}
                     >
                       {intensity > 2 && (
                         <Users className="w-3 h-3 opacity-50" />
@@ -547,10 +977,11 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
         <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-black text-slate-900">
-              Desempenho Imobiliário (R$/m²)
+              Desempenho Imobiliário (R$/m²) & Retenção de Ociosidade
             </h2>
             <p className="text-xs font-medium text-slate-500">
-              Rentabilidade exata de cada espaço neste período.
+              Rentabilidade exata de cada espaço somando reservas avulsas,
+              contratos e sublocações.
             </p>
           </div>
           <Button
@@ -568,8 +999,11 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
               <tr>
                 <th className="px-6 py-4">Espaço / Sala</th>
                 <th className="px-6 py-4 text-center">Tamanho (m²)</th>
-                <th className="px-6 py-4 text-center">Ocupação Est.</th>
+                <th className="px-6 py-4 text-center">
+                  Taxa de Ocupação (Ociosidade)
+                </th>
                 <th className="px-6 py-4 text-right">Rendimento Bruto</th>
+                <th className="px-6 py-4 text-right">Seu Repasse Líquido</th>
                 <th className="px-6 py-4 text-right bg-orange-50/50 text-[#BF4B24]">
                   Rendimento / m²
                 </th>
@@ -579,7 +1013,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
               {roomPerformance.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={5}
+                    colSpan={6}
                     className="px-6 py-10 text-center text-slate-500 font-medium"
                   >
                     Nenhum dado encontrado para este período.
@@ -597,16 +1031,30 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
                       <td className="px-6 py-5">
                         <div className="flex items-center gap-3">
                           <div
-                            className="w-3 h-3 rounded-full"
+                            className="w-3 h-3 rounded-full shrink-0"
                             style={{ backgroundColor: room.color }}
                           />
                           <div>
-                            <p className="font-black text-slate-900 truncate max-w-[200px]">
-                              {room.name}
-                            </p>
+                            <div className="flex items-center gap-1.5">
+                              <p className="font-black text-slate-900 truncate max-w-[200px]">
+                                {room.name}
+                              </p>
+                              {room.hasContracts && (
+                                <Badge className="bg-purple-100 text-purple-800 border-0 text-[9px] px-1.5 py-0 font-black">
+                                  CONTRATO
+                                </Badge>
+                              )}
+                            </div>
                             <p className="text-[10px] font-bold text-slate-400 uppercase mt-0.5">
-                              {room.bookings} reservas registradas
+                              {room.occupiedHours}h ocupadas ({room.bookings}{" "}
+                              agendamentos)
                             </p>
+                            {room.cohostName && (
+                              <p className="text-[10px] font-bold text-purple-700 flex items-center gap-1 mt-0.5">
+                                <Sparkles className="w-3 h-3" /> Co-Anfitrião:{" "}
+                                {room.cohostName}
+                              </p>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -614,25 +1062,38 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
                         {room.areaSqM} m²
                       </td>
                       <td className="px-6 py-5">
-                        <div className="flex items-center justify-center gap-2">
-                          <span className="font-bold text-slate-700 w-8 text-right">
-                            {room.occupancy}%
-                          </span>
-                          <div className="w-24 h-2 bg-slate-100 rounded-full overflow-hidden">
-                            <div
-                              className="h-full rounded-full"
-                              style={{
-                                width: `${room.occupancy}%`,
-                                backgroundColor: room.color,
-                              }}
-                            />
+                        <div className="flex flex-col items-center justify-center gap-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-700 w-9 text-right">
+                              {room.occupancy}%
+                            </span>
+                            <div className="w-24 h-2 bg-slate-100 rounded-full overflow-hidden">
+                              <div
+                                className="h-full rounded-full"
+                                style={{
+                                  width: `${room.occupancy}%`,
+                                  backgroundColor: room.color,
+                                }}
+                              />
+                            </div>
                           </div>
+                          <span className="text-[10px] font-bold text-slate-400">
+                            Ociosidade: {Math.max(0, 100 - room.occupancy)}%
+                          </span>
                         </div>
                       </td>
                       <td className="px-6 py-5 text-right font-black text-slate-700">
                         R${" "}
                         {room.revenue.toLocaleString("pt-BR", {
                           minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </td>
+                      <td className="px-6 py-5 text-right font-black text-emerald-600">
+                        R${" "}
+                        {room.netRevenue.toLocaleString("pt-BR", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
                         })}
                       </td>
                       <td className="px-6 py-5 text-right font-black text-slate-900 bg-orange-50/20">
@@ -660,7 +1121,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
         <h3 className="text-lg font-black text-slate-900 mb-4 mt-8">
           Ações Rápidas
         </h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <Button
             onClick={() => onNavigate("create_space")}
             variant="outline"
@@ -668,6 +1129,15 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           >
             <PlusCircle className="w-8 h-8" />
             <span className="font-bold">Adicionar Sala</span>
+          </Button>
+
+          <Button
+            onClick={() => onNavigate("contracts")}
+            variant="outline"
+            className="h-auto flex-col items-center justify-center gap-3 p-6 rounded-2xl border-slate-200 text-slate-600 hover:border-purple-600 hover:text-purple-700 hover:bg-purple-50"
+          >
+            <FileText className="w-8 h-8" />
+            <span className="font-bold">Contratos & Fixos</span>
           </Button>
 
           <Button
