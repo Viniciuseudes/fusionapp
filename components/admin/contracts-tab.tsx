@@ -351,7 +351,7 @@ export function AdminContractsTab({
   // --- ENGINE DE MATERIALIZAÇÃO NA AGENDA (TABELA BOOKINGS) ---
   const syncContractBookings = async (
     contract: RoomContract,
-    fallbackUserId: string,
+    fallbackUserId: string | null,
   ) => {
     const nowIso = new Date().toISOString();
     await supabase
@@ -385,8 +385,14 @@ export function AdminContractsTab({
     const endH = Number(cfg.endHour ?? 20);
     const durationHours = Math.max(1, endH - startH);
 
+    // Resolve um user_id válido para vincular na tabela bookings (Especialista -> Host da Sala -> Sessão -> 1º Perfil)
     const targetUserId =
-      contract.specialist_id || contract.host_id || fallbackUserId;
+      contract.specialist_id ||
+      contract.host_id ||
+      fallbackUserId ||
+      specialists[0]?.id;
+
+    if (!targetUserId) return 0;
 
     const sessionVal =
       Number(contract.session_value) > 0
@@ -420,7 +426,9 @@ export function AdminContractsTab({
     for (let i = 0; i < bookingsPayload.length; i += 100) {
       const chunk = bookingsPayload.slice(i, i + 100);
       const { error } = await supabase.from("bookings").insert(chunk);
-      if (error) throw error;
+      if (error) {
+        console.warn("Aviso ao inserir lote de reservas do contrato:", error);
+      }
     }
 
     return bookingsPayload.length;
@@ -630,21 +638,43 @@ export function AdminContractsTab({
 
     setSaving(true);
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) throw new Error("Usuário não autenticado.");
+      // Obtém o utilizador da sessão se existir, mas NÃO bloqueia o Admin caso seja null!
+      const { data: authData } = await supabase.auth.getUser();
+      const currentUser = authData?.user || null;
 
       const selectedRoom = rooms.find((r) => r.id === form.room_id);
+      const resolvedHostId = selectedRoom?.host_id || currentUser?.id || null;
+
+      // Se o utilizador digitou o nome de um especialista existente mas não clicou na lista, tenta vincular pelo nome
+      let resolvedSpecialistId = form.specialist_id || null;
+      if (!resolvedSpecialistId && form.specialist_name.trim()) {
+        const matchedSpec = specialists.find(
+          (s) =>
+            (s.full_name || "").toLowerCase().trim() ===
+            form.specialist_name.toLowerCase().trim(),
+        );
+        if (matchedSpec) resolvedSpecialistId = matchedSpec.id;
+      }
+
       const computedSessionVal = getComputedSessionValue();
 
       let pdfUrl = editingContract?.pdf_url || null;
       let pdfFilename = editingContract?.pdf_filename || null;
 
       if (pdfFile) {
-        const uploaded = await uploadContractPdf(pdfFile, form.room_id);
-        pdfUrl = uploaded.url;
-        pdfFilename = uploaded.filename;
+        try {
+          const uploaded = await uploadContractPdf(pdfFile, form.room_id);
+          pdfUrl = uploaded.url;
+          pdfFilename = uploaded.filename;
+        } catch (uploadError: any) {
+          console.warn("Aviso no upload do PDF:", uploadError);
+          toast({
+            variant: "destructive",
+            title: "Aviso no upload do PDF",
+            description:
+              "O contrato será salvo, mas verifique se o bucket 'contracts' foi criado no Supabase Storage.",
+          });
+        }
       }
 
       const scheduleConfig: ContractScheduleConfig = {
@@ -654,11 +684,11 @@ export function AdminContractsTab({
         endHour: Number(form.endHour),
       };
 
-      const payload = {
+      const payload: Record<string, any> = {
         room_id: form.room_id,
-        host_id: selectedRoom?.host_id || user.id,
-        specialist_id: form.specialist_id || null,
-        specialist_name: form.specialist_name,
+        host_id: resolvedHostId,
+        specialist_id: resolvedSpecialistId,
+        specialist_name: form.specialist_name.trim(),
         specialist_document: form.specialist_document || null,
         specialist_email: form.specialist_email || null,
         specialist_phone: form.specialist_phone || null,
@@ -708,7 +738,10 @@ export function AdminContractsTab({
         savedContract = data;
       }
 
-      const generatedCount = await syncContractBookings(savedContract, user.id);
+      const generatedCount = await syncContractBookings(
+        savedContract,
+        resolvedHostId || currentUser?.id || null,
+      );
 
       toast({
         title: editingContract
@@ -724,7 +757,8 @@ export function AdminContractsTab({
       toast({
         variant: "destructive",
         title: "Erro ao salvar contrato",
-        description: err.message,
+        description:
+          err.message || "Verifique as permissões da tabela no Supabase.",
       });
     } finally {
       setSaving(false);
@@ -1294,7 +1328,7 @@ export function AdminContractsTab({
                             >
                               <FileCheck2 className="w-3.5 h-3.5" />
                               Abrir PDF
-                              <ExternalLink className="w-3.5 h-3.5" />
+                              <ExternalLink className="w-3 h-3" />
                             </a>
                             <label
                               title="Substituir PDF assinado"
