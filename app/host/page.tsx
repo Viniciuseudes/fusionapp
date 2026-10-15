@@ -14,6 +14,7 @@ import {
   Wallet,
   LogOut,
   FileText,
+  Package,
 } from "lucide-react";
 
 // Importações dos sub-componentes
@@ -26,11 +27,13 @@ import { HostBookingsTab } from "@/components/host/bookings-tab";
 import { HostChatTab } from "@/components/host/chat-tab";
 import { HostReviewsTab } from "@/components/host/reviews-tab";
 import { AdminContractsTab } from "@/components/admin/contracts-tab";
+import { HostOperationsTab } from "@/components/host/operations-tab";
 
 type HostView =
   | "overview"
   | "bookings"
   | "contracts"
+  | "operations"
   | "messages"
   | "reviews"
   | "spaces"
@@ -44,10 +47,11 @@ const navItems = [
   { id: "overview", label: "Visão Geral", icon: LayoutDashboard },
   { id: "bookings", label: "Agenda", icon: CalendarDays },
   { id: "contracts", label: "Contratos & Fixos", icon: FileText },
-  { id: "messages", label: "Mensagens", icon: MessageSquare },
-  { id: "reviews", label: "Avaliações", icon: Star },
+  { id: "operations", label: "Controle Interno", icon: Package },
   { id: "spaces", label: "Meus Espaços", icon: Building },
   { id: "availability", label: "Horários", icon: CalendarClock },
+  { id: "messages", label: "Mensagens", icon: MessageSquare },
+  { id: "reviews", label: "Avaliações", icon: Star },
   { id: "financial", label: "Financeiro", icon: Wallet },
 ];
 
@@ -137,7 +141,6 @@ export default function HostPage() {
       {/* CONTEÚDO DINÂMICO */}
       <main className="flex-1 lg:ml-64 pb-20 lg:pb-0 h-screen overflow-hidden">
         <div className="h-full overflow-y-auto">
-          {/* O onNavigate DEVE ficar apenas aqui no HostOverview */}
           {currentView === "overview" && (
             <HostOverview
               onNavigate={(view) => setCurrentView(view as HostView)}
@@ -148,11 +151,12 @@ export default function HostPage() {
 
           {currentView === "contracts" && <AdminContractsTab mode="host" />}
 
+          {currentView === "operations" && <HostOperationsTab />}
+
           {currentView === "messages" && <HostChatTab />}
 
           {currentView === "reviews" && <HostReviewsTab />}
 
-          {/* O HostSpaceList fica sem props, conforme exigido pelo componente */}
           {currentView === "spaces" && <HostSpaceList />}
 
           {currentView === "create_space" && (

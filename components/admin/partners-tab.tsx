@@ -4,13 +4,11 @@ import { useState, useEffect } from "react";
 import { createClient } from "@/utils/supabase/client";
 import {
   Search,
-  Eye,
   ShieldCheck,
   Mail,
   Phone,
   MapPin,
   Calendar as CalendarIcon,
-  Clock,
   TrendingUp,
   Award,
   Wallet,
@@ -24,6 +22,10 @@ import {
   Star,
   FileSpreadsheet,
   Users,
+  FileText,
+  Sparkles,
+  ExternalLink,
+  MessageCircle,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -31,6 +33,24 @@ import { Badge } from "@/components/ui/badge";
 import { format, parseISO, differenceInDays } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useToast } from "@/hooks/use-toast";
+
+interface PartnerBookingDetail {
+  id: string;
+  room_id: string;
+  room_name: string;
+  user_id: string;
+  specialist_name: string;
+  start_time: string;
+  end_time: string;
+  status: string;
+  is_contract: boolean;
+  pricing_label: string;
+  gross_brl: number;
+  platform_fee_brl: number;
+  cohost_name: string | null;
+  cohost_payout_brl: number;
+  partner_net_brl: number;
+}
 
 interface Partner {
   id: string;
@@ -41,16 +61,79 @@ interface Partner {
   state: string;
   created_at: string;
   phone: string;
+  whatsapp: string;
   email: string;
   roomsCount: number;
+  activeRoomsCount: number;
+  contractsCount: number;
   bookingsCount: number;
   gmv: number;
   platformFee: number;
-  partnerNet: number; // Valor líquido do parceiro (90%)
+  cohostTotal: number;
+  partnerNet: number;
   lastBookingDate: string | null;
   tier: "Start" | "Gold" | "Platinum" | "Diamond";
-  status: "active" | "pending" | "blocked";
+  status: "active" | "suspended";
   myRooms: any[];
+  myContracts: any[];
+  detailedBookings: PartnerBookingDetail[];
+}
+
+function normalizeTier(tier?: string | null): "start" | "vip" | "master" {
+  const t = (tier || "start").toLowerCase().trim();
+  if (t.includes("master")) return "master";
+  if (t.includes("vip")) return "vip";
+  return "start";
+}
+
+function formatTierLabel(tier: "start" | "vip" | "master"): string {
+  if (tier === "master") return "Master";
+  if (tier === "vip") return "VIP";
+  return "Basic";
+}
+
+function extractRoomModalitiesHourlyRate(
+  modalities: any,
+  addressDetails?: any,
+): number | null {
+  try {
+    if (modalities) {
+      const parsed =
+        typeof modalities === "string" ? JSON.parse(modalities) : modalities;
+      const candidates = [
+        parsed?.hourly?.price,
+        parsed?.hourlyPrice,
+        parsed?.price_per_hour,
+        parsed?.pricePerHour,
+        parsed?.price,
+      ];
+      for (const c of candidates) {
+        const val = Number(c);
+        if (!isNaN(val) && val > 0 && val <= 250) return val;
+      }
+    }
+    if (addressDetails) {
+      const addr =
+        typeof addressDetails === "string"
+          ? JSON.parse(addressDetails)
+          : addressDetails;
+      const addrPrice = Number(addr?.pricing?.hourly);
+      if (!isNaN(addrPrice) && addrPrice > 0 && addrPrice <= 250) {
+        return addrPrice;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function calculateSlotUnits(startIso: string, endIso: string): number {
+  const diffMinutes =
+    (new Date(endIso).getTime() - new Date(startIso).getTime()) / (1000 * 60);
+  if (diffMinutes <= 0) return 1;
+  if (diffMinutes >= 45 && diffMinutes <= 65) return 1;
+  return Math.max(1, Math.round(diffMinutes / 55));
 }
 
 // Motor Sênior de Exportação para Excel (CSV compatível com o Brasil)
@@ -81,21 +164,22 @@ export function AdminPartnersTab() {
   const supabase = createClient();
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
   const [partners, setPartners] = useState<Partner[]>([]);
 
   const [search, setSearch] = useState("");
-
   const [selectedProfile, setSelectedProfile] = useState<Partner | null>(null);
-  const [profileBookings, setProfileBookings] = useState<any[]>([]);
-  const [profileLoading, setProfileLoading] = useState(false);
 
   // Controles de View do Dossiê
-  const [dossierTab, setDossierTab] = useState<"rooms" | "bookings">(
-    "bookings",
-  );
+  const [dossierTab, setDossierTab] = useState<
+    "bookings" | "rooms" | "contracts"
+  >("bookings");
 
-  // Filtros de Reservas
+  // Filtros de Reservas no Dossiê
   const [roomFilter, setRoomFilter] = useState<"all" | string>("all");
+  const [originFilter, setOriginFilter] = useState<
+    "all" | "marketplace" | "contract"
+  >("all");
   const [bookingFilter, setBookingFilter] = useState<
     "all" | "30" | "90" | "custom"
   >("all");
@@ -114,8 +198,9 @@ export function AdminPartnersTab() {
         .select("*");
       if (rErr) throw rErr;
 
+      const safeRooms = rooms || [];
       const hostIds = [
-        ...new Set(rooms?.map((r) => r.host_id).filter(Boolean) || []),
+        ...new Set(safeRooms.map((r: any) => r.host_id).filter(Boolean)),
       ];
 
       if (hostIds.length === 0) {
@@ -124,45 +209,498 @@ export function AdminPartnersTab() {
         return;
       }
 
-      const { data: profiles, error: pErr } = await supabase
-        .from("profiles")
-        .select("*")
-        .in("id", hostIds);
-      if (pErr) throw pErr;
+      const allRoomIds = safeRooms.map((r: any) => r.id);
 
-      const { data: bookings, error: bErr } = await supabase
-        .from("bookings")
-        .select("id, total_cost, start_time, status, room_id")
-        .in("status", ["confirmed", "completed"]); // Apenas finalizadas/confirmadas para repasse
-      if (bErr) throw bErr;
+      const [
+        profilesRes,
+        bookingsRes,
+        packagesRes,
+        categoriesRes,
+        contractsRes,
+      ] = await Promise.all([
+        supabase.from("profiles").select("*").in("id", hostIds),
+        allRoomIds.length > 0
+          ? supabase
+              .from("bookings")
+              .select(
+                "id, created_at, start_time, end_time, total_cost, upgrade_fee_amount, status, room_id, user_id, contract_id, booking_origin, agreed_value_brl",
+              )
+              .in("room_id", allRoomIds)
+              .in("status", ["confirmed", "completed"])
+              .order("start_time", { ascending: false })
+          : Promise.resolve({ data: [] as any[], error: null }),
+        supabase.from("packages").select("id, tier, hours, price, active"),
+        supabase
+          .from("room_categories")
+          .select("id, name, credit_cost_per_hour, upgrade_fee_per_hour"),
+        allRoomIds.length > 0
+          ? supabase
+              .from("room_contracts")
+              .select("*")
+              .in("room_id", allRoomIds)
+          : Promise.resolve({ data: [] as any[], error: null }),
+      ]);
 
-      const processedData: Partner[] = profiles.map((p) => {
-        const myRooms = rooms?.filter((r) => r.host_id === p.id) || [];
-        const myRoomIds = myRooms.map((r) => r.id);
+      if (profilesRes.error) throw profilesRes.error;
+      if (bookingsRes.error) throw bookingsRes.error;
 
-        const myBookings =
-          bookings?.filter((b) => myRoomIds.includes(b.room_id)) || [];
+      const hostProfiles = profilesRes.data || [];
+      const allBookings = bookingsRes.data || [];
+      const contractsData = contractsRes.data || [];
 
-        const gmv = myBookings.reduce(
-          (acc, curr) => acc + (Number(curr.total_cost) || 0) * 45,
+      const guestUserIds = [
+        ...new Set(allBookings.map((b: any) => b.user_id).filter(Boolean)),
+      ];
+      const bookingIds = allBookings.map((b: any) => b.id).filter(Boolean);
+
+      const [guestProfilesRes, walletRes, subsRes, couponsRes] =
+        await Promise.all([
+          guestUserIds.length > 0
+            ? supabase
+                .from("profiles")
+                .select("id, full_name")
+                .in("id", guestUserIds)
+            : Promise.resolve({ data: [] as any[] }),
+          guestUserIds.length > 0
+            ? supabase
+                .from("wallet_transactions")
+                .select(
+                  "id, user_id, amount, type, description, tier, created_at, expires_at",
+                )
+                .in("user_id", guestUserIds)
+                .order("created_at", { ascending: true })
+            : Promise.resolve({ data: [] as any[] }),
+          guestUserIds.length > 0
+            ? supabase
+                .from("subscriptions")
+                .select("id, user_id, tier, hours, status, created_at")
+                .in("user_id", guestUserIds)
+            : Promise.resolve({ data: [] as any[] }),
+          bookingIds.length > 0
+            ? supabase
+                .from("coupon_uses")
+                .select("booking_id, discount_applied")
+                .in("booking_id", bookingIds)
+            : Promise.resolve({ data: [] as any[] }),
+        ]);
+
+      const guestNameMap = new Map<string, string>(
+        (guestProfilesRes.data || []).map((g: any) => [
+          g.id,
+          g.full_name || "Profissional",
+        ]),
+      );
+
+      const roomsMap = new Map<string, any>(
+        safeRooms.map((r: any) => [r.id, r]),
+      );
+      const categoriesMap = new Map<string, any>(
+        (categoriesRes.data || []).map((c: any) => [c.id, c]),
+      );
+      const contractsById = new Map<string, any>(
+        contractsData.map((c: any) => [c.id, c]),
+      );
+      const activeCohostByRoomId = new Map<string, any>();
+      contractsData.forEach((c: any) => {
+        if (
+          c.status === "active" &&
+          c.contract_type === "monthly_exclusive" &&
+          c.allow_sublease
+        ) {
+          activeCohostByRoomId.set(c.room_id, c);
+        }
+      });
+
+      const packageRateMap: Record<
+        "start" | "vip" | "master",
+        Map<number, number>
+      > = {
+        start: new Map<number, number>(),
+        vip: new Map<number, number>(),
+        master: new Map<number, number>(),
+      };
+
+      (packagesRes.data || []).forEach((pkg: any) => {
+        const t = normalizeTier(pkg.tier);
+        const h = Math.max(1, Number(pkg.hours) || 1);
+        const rawPrice = Number(pkg.price) || 0;
+        if (rawPrice <= 0) return;
+
+        const hourlyRate = h > 1 && rawPrice > 120 ? rawPrice / h : rawPrice;
+        packageRateMap[t].set(h, hourlyRate);
+      });
+
+      const couponDiscountMap = new Map<string, number>();
+      (couponsRes.data || []).forEach((cu: any) => {
+        if (cu.booking_id) {
+          couponDiscountMap.set(
+            cu.booking_id,
+            (couponDiscountMap.get(cu.booking_id) || 0) +
+              Number(cu.discount_applied || 0),
+          );
+        }
+      });
+
+      const userWalletMap = new Map<string, any[]>();
+      (walletRes.data || []).forEach((tx: any) => {
+        const list = userWalletMap.get(tx.user_id) || [];
+        list.push(tx);
+        userWalletMap.set(tx.user_id, list);
+      });
+
+      const userSubsMap = new Map<string, any[]>();
+      (subsRes.data || []).forEach((sub: any) => {
+        const list = userSubsMap.get(sub.user_id) || [];
+        list.push(sub);
+        userSubsMap.set(sub.user_id, list);
+      });
+
+      const getRateFromPackageTable = (
+        tier: "start" | "vip" | "master",
+        targetHours?: number | null,
+      ): { rate: number | null; matchedHours: number | null } => {
+        const tierPackages = packageRateMap[tier];
+        if (!tierPackages || tierPackages.size === 0) {
+          return { rate: null, matchedHours: null };
+        }
+        if (targetHours && tierPackages.has(targetHours)) {
+          return {
+            rate: tierPackages.get(targetHours)!,
+            matchedHours: targetHours,
+          };
+        }
+        if (targetHours && targetHours > 0) {
+          let closestHours: number | null = null;
+          let minDiff = Infinity;
+          for (const [h] of tierPackages.entries()) {
+            const diff = Math.abs(h - targetHours);
+            if (diff < minDiff) {
+              minDiff = diff;
+              closestHours = h;
+            }
+          }
+          if (closestHours !== null && minDiff <= 4) {
+            return {
+              rate: tierPackages.get(closestHours)!,
+              matchedHours: closestHours,
+            };
+          }
+        }
+        if (tierPackages.has(1)) {
+          return { rate: tierPackages.get(1)!, matchedHours: 1 };
+        }
+        const sortedHours = Array.from(tierPackages.keys()).sort(
+          (a, b) => a - b,
+        );
+        const firstH = sortedHours[0];
+        return { rate: tierPackages.get(firstH)!, matchedHours: firstH };
+      };
+
+      // Função unificada que resolve o financeiro exato de cada reserva do parceiro
+      const evaluateBookingDetail = (b: any): PartnerBookingDetail => {
+        const room = roomsMap.get(b.room_id);
+        const roomTier = normalizeTier(room?.tier);
+        const slotUnits =
+          b.start_time && b.end_time
+            ? calculateSlotUnits(b.start_time, b.end_time)
+            : 1;
+
+        const linkedContract = b.contract_id
+          ? contractsById.get(b.contract_id)
+          : null;
+        const isContractBooking = Boolean(
+          b.contract_id ||
+          (b.booking_origin && String(b.booking_origin).startsWith("contract")),
+        );
+
+        // 1. Reserva de Contrato (Usa a % configurada no contrato)
+        if (isContractBooking) {
+          const val =
+            Number(b.agreed_value_brl) > 0
+              ? Number(b.agreed_value_brl)
+              : Number(linkedContract?.session_value || 0);
+          const feePct = Number(linkedContract?.platform_fee_pct ?? 15) / 100;
+          const platformFee = val * feePct;
+          const partnerNet = Math.max(0, val - platformFee);
+
+          const cType = linkedContract?.contract_type || b.booking_origin || "";
+          let typeLabel = "Contrato • Alocação Fixa";
+          if (cType.includes("monthly_exclusive"))
+            typeLabel = "Contrato • Sala Fixa Mensal";
+          else if (cType.includes("fixed_shift"))
+            typeLabel = "Contrato • Turno Fixo";
+          else if (cType.includes("fixed_daily"))
+            typeLabel = "Contrato • Diária Fixa";
+
+          return {
+            id: b.id,
+            room_id: b.room_id,
+            room_name: room?.name || "Sala Removida",
+            user_id: b.user_id,
+            specialist_name:
+              linkedContract?.specialist_name ||
+              guestNameMap.get(b.user_id) ||
+              "Locatário de Contrato",
+            start_time: b.start_time,
+            end_time: b.end_time,
+            status: b.status,
+            is_contract: true,
+            pricing_label: typeLabel,
+            gross_brl: val,
+            platform_fee_brl: platformFee,
+            cohost_name: null,
+            cohost_payout_brl: 0,
+            partner_net_brl: partnerNet,
+          };
+        }
+
+        // Verifica se a sala possui Co-Anfitrião ativo para sublocação
+        const roomCohost = activeCohostByRoomId.get(b.room_id);
+        const cohostName = roomCohost?.specialist_name || null;
+        const cohostSplitPct = roomCohost
+          ? Number(roomCohost.cohost_split_pct || 0)
+          : 0;
+
+        // 2. Reserva Avulsa: Take Rate Fusion de 20%
+        const computeAvulsoSplit = (grossVal: number) => {
+          const platformFee = grossVal * 0.2; // 20% Fusion
+          const netAfterFusion = Math.max(0, grossVal - platformFee); // 80%
+          const cohostPayout =
+            cohostSplitPct > 0 ? netAfterFusion * (cohostSplitPct / 100) : 0;
+          const partnerNet = Math.max(0, netAfterFusion - cohostPayout);
+          return { platformFee, cohostPayout, partnerNet };
+        };
+
+        const rawTotalCost = Number(b.total_cost || 0);
+        const upgradeFee = Number(b.upgrade_fee_amount || 0);
+        const discount = couponDiscountMap.get(b.id) || 0;
+
+        if (Number(b.agreed_value_brl) > 0 || rawTotalCost >= slotUnits * 20) {
+          const baseVal =
+            Number(b.agreed_value_brl) > 0
+              ? Number(b.agreed_value_brl)
+              : rawTotalCost;
+          const grossBrl = Math.max(0, baseVal + upgradeFee - discount);
+          const split = computeAvulsoSplit(grossBrl);
+
+          return {
+            id: b.id,
+            room_id: b.room_id,
+            room_name: room?.name || "Sala Removida",
+            user_id: b.user_id,
+            specialist_name:
+              guestNameMap.get(b.user_id) || "Especialista Parceiro",
+            start_time: b.start_time,
+            end_time: b.end_time,
+            status: b.status,
+            is_contract: false,
+            pricing_label: `${formatTierLabel(roomTier)} • Reserva Direta`,
+            gross_brl: grossBrl,
+            platform_fee_brl: split.platformFee,
+            cohost_name: cohostName,
+            cohost_payout_brl: split.cohostPayout,
+            partner_net_brl: split.partnerNet,
+          };
+        }
+
+        // Reserva via Créditos / Pacotes
+        const creditsForThisSlot =
+          rawTotalCost > 0 && rawTotalCost <= slotUnits * 2
+            ? rawTotalCost
+            : slotUnits;
+
+        const userTxs = userWalletMap.get(b.user_id) || [];
+        const bookingTime = b.created_at
+          ? new Date(b.created_at).getTime()
+          : new Date(b.start_time).getTime();
+
+        let creditTierUsed: "start" | "vip" | "master" = roomTier;
+        const matchingDebit = userTxs.find((tx: any) => {
+          if (Number(tx.amount) >= 0) return false;
+          const txTime = new Date(tx.created_at).getTime();
+          return Math.abs(txTime - bookingTime) <= 10 * 60 * 1000;
+        });
+        if (matchingDebit?.tier) {
+          creditTierUsed = normalizeTier(matchingDebit.tier);
+        }
+
+        const compatibleTiers: ("start" | "vip" | "master")[] =
+          roomTier === "master"
+            ? ["master"]
+            : roomTier === "vip"
+              ? ["vip", "master"]
+              : ["start", "vip", "master"];
+
+        const purchaseCredits = userTxs.filter(
+          (tx: any) =>
+            Number(tx.amount) > 0 &&
+            !String(tx.description || "")
+              .toLowerCase()
+              .includes("estorno"),
+        );
+
+        const validPriorPurchases = purchaseCredits.filter((tx: any) => {
+          const createdMs = new Date(tx.created_at).getTime();
+          const notAfterBooking = createdMs <= bookingTime + 60 * 1000;
+          const notExpiredAtBooking =
+            !tx.expires_at || new Date(tx.expires_at).getTime() >= bookingTime;
+          return notAfterBooking && notExpiredAtBooking;
+        });
+
+        const candidateCredits =
+          validPriorPurchases.length > 0
+            ? validPriorPurchases
+            : purchaseCredits;
+
+        const sourceCreditTx =
+          [...candidateCredits]
+            .reverse()
+            .find((tx: any) => normalizeTier(tx.tier) === creditTierUsed) ||
+          [...candidateCredits]
+            .reverse()
+            .find((tx: any) =>
+              compatibleTiers.includes(normalizeTier(tx.tier)),
+            ) ||
+          candidateCredits[candidateCredits.length - 1];
+
+        let detectedPackageHours: number | null = null;
+        if (sourceCreditTx) {
+          creditTierUsed = normalizeTier(sourceCreditTx.tier || roomTier);
+          const txAmt = Math.round(Number(sourceCreditTx.amount));
+          const descMatch = String(sourceCreditTx.description || "").match(
+            /(\d+)\s*(?:h|hora|horas|crédito|credito)/i,
+          );
+          const candidateHours =
+            descMatch && Number(descMatch[1]) > 0
+              ? Number(descMatch[1])
+              : txAmt;
+
+          if (candidateHours > 0 && candidateHours <= 60) {
+            detectedPackageHours = candidateHours;
+          }
+        } else {
+          const userSubs = userSubsMap.get(b.user_id) || [];
+          const activeSub =
+            userSubs.find((s: any) => s.status === "ACTIVE") || userSubs[0];
+          if (activeSub) {
+            creditTierUsed = normalizeTier(activeSub.tier || roomTier);
+            detectedPackageHours = Number(activeSub.hours) || null;
+          }
+        }
+
+        let { rate: resolvedHourlyRate, matchedHours } =
+          getRateFromPackageTable(creditTierUsed, detectedPackageHours);
+
+        if (resolvedHourlyRate === null && creditTierUsed !== roomTier) {
+          const fallbackRoomPkg = getRateFromPackageTable(
+            roomTier,
+            detectedPackageHours,
+          );
+          resolvedHourlyRate = fallbackRoomPkg.rate;
+          matchedHours = fallbackRoomPkg.matchedHours;
+        }
+
+        let pricingOriginLabel = "";
+        if (resolvedHourlyRate !== null) {
+          pricingOriginLabel = matchedHours
+            ? `${formatTierLabel(creditTierUsed)} • Pacote ${matchedHours}h`
+            : `${formatTierLabel(creditTierUsed)} • Crédito`;
+        } else {
+          const roomModalityRate = extractRoomModalitiesHourlyRate(
+            room?.modalities,
+            room?.address_details,
+          );
+          const categoryObj = room?.category_id
+            ? categoriesMap.get(room.category_id)
+            : null;
+          const categoryRate =
+            categoryObj && Number(categoryObj.credit_cost_per_hour) >= 15
+              ? Number(categoryObj.credit_cost_per_hour)
+              : null;
+          const defaultTierRates: Record<"start" | "vip" | "master", number> = {
+            start: 33.38,
+            vip: 41.13,
+            master: 60,
+          };
+          resolvedHourlyRate =
+            roomModalityRate || categoryRate || defaultTierRates[roomTier];
+          pricingOriginLabel = `${formatTierLabel(roomTier)} • Tarifa da Sala`;
+        }
+
+        const grossBrl = Math.max(
+          0,
+          creditsForThisSlot * resolvedHourlyRate + upgradeFee - discount,
+        );
+        const split = computeAvulsoSplit(grossBrl);
+
+        return {
+          id: b.id,
+          room_id: b.room_id,
+          room_name: room?.name || "Sala Removida",
+          user_id: b.user_id,
+          specialist_name:
+            guestNameMap.get(b.user_id) || "Especialista Parceiro",
+          start_time: b.start_time,
+          end_time: b.end_time,
+          status: b.status,
+          is_contract: false,
+          pricing_label: pricingOriginLabel,
+          gross_brl: grossBrl,
+          platform_fee_brl: split.platformFee,
+          cohost_name: cohostName,
+          cohost_payout_brl: split.cohostPayout,
+          partner_net_brl: split.partnerNet,
+        };
+      };
+
+      const processedData: Partner[] = hostProfiles.map((p: any) => {
+        const myRooms = safeRooms.filter((r: any) => r.host_id === p.id);
+        const myRoomIds = myRooms.map((r: any) => r.id);
+        const activeRoomsCount = myRooms.filter((r: any) => r.is_active).length;
+
+        const myContracts = contractsData.filter((c: any) =>
+          myRoomIds.includes(c.room_id),
+        );
+        const activeContractsCount = myContracts.filter(
+          (c: any) => c.status === "active",
+        ).length;
+
+        const myRawBookings = allBookings.filter((b: any) =>
+          myRoomIds.includes(b.room_id),
+        );
+        const detailedBookings = myRawBookings.map(evaluateBookingDetail);
+
+        const gmv = detailedBookings.reduce(
+          (acc, curr) => acc + curr.gross_brl,
           0,
         );
-        const platformFee = gmv * 0.1; // Take Rate de 10%
-        const partnerNet = gmv * 0.9; // Repasse Líquido 90%
+        const platformFee = detailedBookings.reduce(
+          (acc, curr) => acc + curr.platform_fee_brl,
+          0,
+        );
+        const cohostTotal = detailedBookings.reduce(
+          (acc, curr) => acc + curr.cohost_payout_brl,
+          0,
+        );
+        const partnerNet = detailedBookings.reduce(
+          (acc, curr) => acc + curr.partner_net_brl,
+          0,
+        );
 
-        const lastBooking = myBookings.sort(
-          (a, b) =>
-            new Date(b.start_time).getTime() - new Date(a.start_time).getTime(),
-        )[0];
+        const lastBooking = detailedBookings[0];
 
         let tier: Partner["tier"] = "Start";
         if (gmv >= 20000) tier = "Diamond";
         else if (gmv >= 10000) tier = "Platinum";
         else if (gmv >= 3000) tier = "Gold";
 
-        let defaultCity = "Não informada";
-        let defaultState = "RN";
-        if (myRooms.length > 0 && myRooms[0].address_details) {
+        let defaultCity = p.address_city || "Não informada";
+        let defaultState = p.address_state || "RN";
+        if (
+          defaultCity === "Não informada" &&
+          myRooms.length > 0 &&
+          myRooms[0].address_details
+        ) {
           try {
             const addr =
               typeof myRooms[0].address_details === "string"
@@ -173,31 +711,47 @@ export function AdminPartnersTab() {
           } catch (e) {}
         }
 
+        const isActiveOperation = myRooms.length === 0 || activeRoomsCount > 0;
+
         return {
           id: p.id,
           full_name: p.full_name || "Clínica Parceira",
           avatar_url: p.avatar_url,
-          document_number: p.document_number || "CNPJ/CPF Pendente",
+          document_number: p.cpf || "CNPJ/CPF Pendente",
           city: defaultCity,
           state: defaultState,
-          created_at: p.created_at,
-          phone: p.phone || "Não informado",
+          created_at: p.created_at || new Date().toISOString(),
+          phone: p.phone || p.whatsapp || "Não informado",
+          whatsapp: p.whatsapp || p.phone || "",
           email:
             p.email ||
             `${p.full_name?.split(" ")[0]?.toLowerCase() || "clinica"}@email.com`,
           roomsCount: myRooms.length,
-          bookingsCount: myBookings.length,
+          activeRoomsCount,
+          contractsCount: activeContractsCount,
+          bookingsCount: detailedBookings.length,
           gmv,
           platformFee,
+          cohostTotal,
           partnerNet,
           lastBookingDate: lastBooking ? lastBooking.start_time : null,
           tier,
-          status: "active",
+          status: isActiveOperation ? "active" : "suspended",
           myRooms,
+          myContracts,
+          detailedBookings,
         };
       });
 
-      setPartners(processedData.sort((a, b) => b.gmv - a.gmv));
+      const sortedPartners = processedData.sort((a, b) => b.gmv - a.gmv);
+      setPartners(sortedPartners);
+
+      if (selectedProfile) {
+        const refreshedSelected = sortedPartners.find(
+          (sp) => sp.id === selectedProfile.id,
+        );
+        if (refreshedSelected) setSelectedProfile(refreshedSelected);
+      }
     } catch (err: any) {
       toast({
         variant: "destructive",
@@ -209,68 +763,85 @@ export function AdminPartnersTab() {
     }
   };
 
-  const handleOpenProfile = async (partner: Partner) => {
+  const handleOpenProfile = (partner: Partner) => {
     setSelectedProfile(partner);
-    setProfileLoading(true);
     setDossierTab("bookings");
     setBookingFilter("all");
     setRoomFilter("all");
-
-    try {
-      const roomIds = partner.myRooms.map((r) => r.id);
-      if (roomIds.length > 0) {
-        // ATUALIZAÇÃO SÊNIOR: Retirado o .limit(10) para puxar todo o histórico e permitir o filtro/exportação real
-        const { data, error } = await supabase
-          .from("bookings")
-          .select(
-            `
-            id, start_time, end_time, total_cost, status, user_id,
-            rooms (id, name),
-            profiles!bookings_user_id_fkey (full_name)
-          `,
-          )
-          .in("room_id", roomIds)
-          .order("start_time", { ascending: false });
-
-        if (!error && data) {
-          setProfileBookings(data);
-        }
-      } else {
-        setProfileBookings([]);
-      }
-    } catch (err) {}
-
-    setProfileLoading(false);
+    setOriginFilter("all");
   };
 
-  // Exportação Financeira do Repasse
-  const exportBookings = (dataToExport: any[]) => {
+  // Suspende ou Reativa todas as salas do parceiro no banco
+  const handleTogglePartnerOperation = async (partner: Partner) => {
+    if (partner.myRooms.length === 0) return;
+    const willActivate = partner.status === "suspended";
+
+    if (
+      !confirm(
+        willActivate
+          ? `Deseja REATIVAR todas as ${partner.roomsCount} sala(s) de ${partner.full_name}?`
+          : `Tem certeza que deseja SUSPENDER a operação de ${partner.full_name}?\n\nTodas as ${partner.roomsCount} sala(s) deste parceiro ficarão ocultas no marketplace.`,
+      )
+    )
+      return;
+
+    setActionLoading(true);
+    try {
+      const roomIds = partner.myRooms.map((r) => r.id);
+      const { error } = await supabase
+        .from("rooms")
+        .update({ is_active: willActivate })
+        .in("id", roomIds);
+
+      if (error) throw error;
+
+      toast({
+        title: willActivate
+          ? "Operação do Parceiro Reativada!"
+          : "Operação Suspensa com Sucesso",
+        description: willActivate
+          ? "As salas voltaram a ficar ativas na plataforma."
+          : "As salas do parceiro foram pausadas no marketplace.",
+      });
+
+      await fetchPartners();
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro ao alterar status da operação",
+        description: err.message,
+      });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Exportação Financeira Real do Repasse
+  const exportBookings = (dataToExport: PartnerBookingDetail[]) => {
     const headers = [
       "ID Reserva",
       "Sala",
+      "Origem / Modalidade",
       "Locatário",
       "Data/Período",
       "Status",
       "Valor Bruto (R$)",
-      "Taxa Fusion 10% (R$)",
-      "Repasse Líquido (R$)",
+      "Taxa Fusion (R$)",
+      "Split Co-Anfitrião (R$)",
+      "Repasse Líquido Parceiro (R$)",
     ];
-    const rows = dataToExport.map((b) => {
-      const bruto = b.total_cost * 45;
-      const taxa = bruto * 0.1;
-      const liquido = bruto * 0.9;
-
-      return [
-        b.id,
-        b.rooms?.name || "Desconhecida",
-        b.profiles?.full_name || "Usuário Removido",
-        `${format(parseISO(b.start_time), "dd/MM/yyyy")} (${format(parseISO(b.start_time), "HH:mm")} às ${format(parseISO(b.end_time), "HH:mm")})`,
-        b.status,
-        bruto.toFixed(2).replace(".", ","),
-        taxa.toFixed(2).replace(".", ","),
-        liquido.toFixed(2).replace(".", ","),
-      ];
-    });
+    const rows = dataToExport.map((b) => [
+      b.id,
+      b.room_name,
+      b.pricing_label,
+      b.specialist_name,
+      `${format(parseISO(b.start_time), "dd/MM/yyyy")} (${format(parseISO(b.start_time), "HH:mm")} às ${format(parseISO(b.end_time), "HH:mm")})`,
+      b.status,
+      b.gross_brl.toFixed(2).replace(".", ","),
+      b.platform_fee_brl.toFixed(2).replace(".", ","),
+      b.cohost_payout_brl.toFixed(2).replace(".", ","),
+      b.partner_net_brl.toFixed(2).replace(".", ","),
+    ]);
     exportToCSV(
       headers,
       rows,
@@ -319,6 +890,13 @@ export function AdminPartnersTab() {
     }
   };
 
+  const cleanPhoneForWa = (raw?: string | null) => {
+    if (!raw) return null;
+    const digits = raw.replace(/\D/g, "");
+    if (!digits) return null;
+    return digits.startsWith("55") ? digits : `55${digits}`;
+  };
+
   if (loading)
     return (
       <div className="flex justify-center items-center py-32">
@@ -330,12 +908,11 @@ export function AdminPartnersTab() {
   // RENDERIZAÇÃO: DOSSIÊ DO PARCEIRO (TELA CHEIA)
   // ========================================================
   if (selectedProfile) {
-    // Filtros de Reservas aplicados em Cascata
-    const filteredBookings = profileBookings.filter((b) => {
-      // 1. Filtro de Sala
-      if (roomFilter !== "all" && b.rooms?.id !== roomFilter) return false;
+    const filteredBookings = selectedProfile.detailedBookings.filter((b) => {
+      if (roomFilter !== "all" && b.room_id !== roomFilter) return false;
+      if (originFilter === "contract" && !b.is_contract) return false;
+      if (originFilter === "marketplace" && b.is_contract) return false;
 
-      // 2. Filtro de Data
       const bDate = new Date(b.start_time);
       if (bookingFilter === "30")
         return differenceInDays(new Date(), bDate) <= 30;
@@ -350,12 +927,24 @@ export function AdminPartnersTab() {
           : new Date();
         return bDate >= start && bDate <= end;
       }
-      return true; // "all"
+      return true;
     });
 
     const filteredGMV = filteredBookings.reduce(
-      (acc, curr) => acc + (Number(curr.total_cost) || 0) * 45,
+      (acc, curr) => acc + curr.gross_brl,
       0,
+    );
+    const filteredFusionFee = filteredBookings.reduce(
+      (acc, curr) => acc + curr.platform_fee_brl,
+      0,
+    );
+    const filteredPartnerNet = filteredBookings.reduce(
+      (acc, curr) => acc + curr.partner_net_brl,
+      0,
+    );
+
+    const waNumber = cleanPhoneForWa(
+      selectedProfile.whatsapp || selectedProfile.phone,
     );
 
     return (
@@ -375,11 +964,13 @@ export function AdminPartnersTab() {
                 </h2>
                 {selectedProfile.status === "active" ? (
                   <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold uppercase tracking-wider text-[10px]">
-                    <CheckCircle2 className="w-3 h-3 mr-1" /> Ativo
+                    <CheckCircle2 className="w-3 h-3 mr-1" /> Operação Ativa (
+                    {selectedProfile.activeRoomsCount}/
+                    {selectedProfile.roomsCount} salas)
                   </Badge>
                 ) : (
                   <Badge className="bg-red-100 text-red-800 border-0 font-bold uppercase tracking-wider text-[10px]">
-                    <Ban className="w-3 h-3 mr-1" /> Bloqueado
+                    <Ban className="w-3 h-3 mr-1" /> Operação Suspensa
                   </Badge>
                 )}
               </div>
@@ -388,13 +979,38 @@ export function AdminPartnersTab() {
           <div className="flex gap-2">
             <Button
               variant="outline"
-              className="border-slate-200 text-red-600 hover:bg-red-50 hover:text-red-700 font-bold"
+              disabled={actionLoading}
+              onClick={() => handleTogglePartnerOperation(selectedProfile)}
+              className={`border-slate-200 font-bold ${
+                selectedProfile.status === "active"
+                  ? "text-red-600 hover:bg-red-50 hover:text-red-700"
+                  : "text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"
+              }`}
             >
-              <Ban className="w-4 h-4 mr-2" /> Suspender Operação
+              <Ban className="w-4 h-4 mr-2" />
+              {selectedProfile.status === "active"
+                ? "Suspender Operação"
+                : "Reativar Operação"}
             </Button>
-            <Button className="bg-slate-900 hover:bg-slate-800 text-white font-bold">
-              <Mail className="w-4 h-4 mr-2" /> Contatar Gestor
-            </Button>
+
+            {waNumber ? (
+              <a
+                href={`https://wa.me/${waNumber}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center px-4 h-10 rounded-md bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm"
+              >
+                <MessageCircle className="w-4 h-4 mr-2 text-emerald-400" />
+                Contatar Gestor
+              </a>
+            ) : (
+              <a
+                href={`mailto:${selectedProfile.email}`}
+                className="inline-flex items-center justify-center px-4 h-10 rounded-md bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm"
+              >
+                <Mail className="w-4 h-4 mr-2" /> Contatar Gestor
+              </a>
+            )}
           </div>
         </div>
 
@@ -428,6 +1044,11 @@ export function AdminPartnersTab() {
                   >
                     Doc: {selectedProfile.document_number}
                   </Badge>
+                  {selectedProfile.contractsCount > 0 && (
+                    <Badge className="bg-purple-100 text-purple-800 border-0 font-bold">
+                      {selectedProfile.contractsCount} Contrato(s) Vigente(s)
+                    </Badge>
+                  )}
                 </div>
               </div>
               <p className="text-lg font-bold text-slate-500 mb-6">
@@ -463,10 +1084,12 @@ export function AdminPartnersTab() {
                 </span>
                 {selectedProfile.gmv.toLocaleString("pt-BR", {
                   minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
                 })}
               </h3>
               <p className="text-sm font-medium text-slate-500 mt-2">
-                Valor bruto girado nas salas.
+                Valor bruto real girado nas salas (
+                {selectedProfile.bookingsCount} locações).
               </p>
             </div>
 
@@ -482,10 +1105,11 @@ export function AdminPartnersTab() {
                   </span>
                   {selectedProfile.platformFee.toLocaleString("pt-BR", {
                     minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
                   })}
                 </h3>
                 <p className="text-sm font-medium text-slate-400">
-                  Lucro líquido da plataforma (10%)
+                  Lucro da plataforma (20% avulso + % contratos)
                 </p>
               </div>
             </div>
@@ -500,55 +1124,81 @@ export function AdminPartnersTab() {
                 </span>
                 {selectedProfile.partnerNet.toLocaleString("pt-BR", {
                   minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
                 })}
               </h3>
               <p className="text-sm font-medium text-slate-500 mt-2">
-                Valor devido ao Anfitrião (90%).
+                Valor líquido devido ao Anfitrião (80% avulso + % contratos).
               </p>
             </div>
           </div>
 
-          {/* ÁREA DE ABAS: INVENTÁRIO VS LOCAÇÕES */}
+          {/* ÁREA DE ABAS: REPASSES VS INVENTÁRIO VS CONTRATOS */}
           <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
             <div className="flex border-b border-slate-100">
               <button
                 onClick={() => setDossierTab("bookings")}
                 className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "bookings" ? "border-[#BF4B24] text-[#BF4B24] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
               >
-                Histórico de Repasses (Reservas)
+                Histórico de Repasses ({selectedProfile.bookingsCount})
               </button>
               <button
                 onClick={() => setDossierTab("rooms")}
                 className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "rooms" ? "border-[#BF4B24] text-[#BF4B24] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
               >
-                Inventário de Salas
+                Inventário de Salas ({selectedProfile.roomsCount})
+              </button>
+              <button
+                onClick={() => setDossierTab("contracts")}
+                className={`flex-1 py-4 text-sm font-bold transition-all border-b-2 ${dossierTab === "contracts" ? "border-[#BF4B24] text-[#BF4B24] bg-orange-50/30" : "border-transparent text-slate-500 hover:bg-slate-50"}`}
+              >
+                Contratos da Clínica ({selectedProfile.myContracts.length})
               </button>
             </div>
 
-            {profileLoading ? (
-              <div className="flex justify-center py-20">
-                <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
-              </div>
-            ) : dossierTab === "bookings" ? (
+            {dossierTab === "bookings" ? (
               <div className="p-6">
                 <div className="flex flex-col xl:flex-row xl:items-center justify-between mb-6 gap-4 border-b border-slate-100 pb-6">
                   <div>
                     <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
                       <TrendingUp className="w-5 h-5 text-[#BF4B24]" /> Extrato
-                      de Operação
+                      de Operação & Split
                     </h3>
-                    <p className="text-xs font-medium text-slate-500 mt-1">
-                      Valores baseados no filtro atual: GMV R${" "}
-                      {filteredGMV.toFixed(2).replace(".", ",")}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-3 text-xs font-bold mt-1">
+                      <span className="text-slate-500">
+                        GMV Filtro:{" "}
+                        <strong className="text-slate-900">
+                          R${" "}
+                          {filteredGMV.toLocaleString("pt-BR", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </strong>
+                      </span>
+                      <span className="text-slate-300">•</span>
+                      <span className="text-[#BF4B24]">
+                        Receita Fusion: R${" "}
+                        {filteredFusionFee.toLocaleString("pt-BR", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </span>
+                      <span className="text-slate-300">•</span>
+                      <span className="text-emerald-600">
+                        Líquido Parceiro: R${" "}
+                        {filteredPartnerNet.toLocaleString("pt-BR", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </span>
+                    </div>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-3">
-                    {/* Filtro de Sala */}
                     <select
                       value={roomFilter}
                       onChange={(e) => setRoomFilter(e.target.value)}
-                      className="h-10 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-700 outline-none max-w-[200px] truncate"
+                      className="h-10 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-700 outline-none max-w-[180px] truncate"
                     >
                       <option value="all">Todas as Salas</option>
                       {selectedProfile.myRooms.map((r) => (
@@ -558,7 +1208,16 @@ export function AdminPartnersTab() {
                       ))}
                     </select>
 
-                    {/* Filtro de Data */}
+                    <select
+                      value={originFilter}
+                      onChange={(e) => setOriginFilter(e.target.value as any)}
+                      className="h-10 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-700 outline-none"
+                    >
+                      <option value="all">Todas as Origens</option>
+                      <option value="marketplace">Avulsas (20% Fusion)</option>
+                      <option value="contract">Contratos Fixos</option>
+                    </select>
+
                     <select
                       value={bookingFilter}
                       onChange={(e) => setBookingFilter(e.target.value as any)}
@@ -608,57 +1267,103 @@ export function AdminPartnersTab() {
                   </div>
                 ) : (
                   <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
-                    {filteredBookings.map((b) => {
-                      const bruto = b.total_cost * 45;
-                      const liquido = bruto * 0.9;
-                      return (
-                        <div
-                          key={b.id}
-                          className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-2xl border border-slate-100 hover:border-slate-200 hover:bg-slate-50 transition-colors gap-4"
-                        >
-                          <div className="flex items-center gap-4">
-                            <div className="w-10 h-10 rounded-xl bg-slate-200 flex items-center justify-center shrink-0">
-                              <Users className="w-5 h-5 text-slate-500" />
-                            </div>
-                            <div>
-                              <p className="font-bold text-slate-900 line-clamp-1">
-                                {b.rooms?.name}
-                              </p>
-                              <p className="text-xs font-bold text-slate-500 mt-0.5">
-                                Médico: {b.profiles?.full_name}
-                              </p>
-                              <p className="text-[10px] font-bold text-slate-400 mt-0.5">
-                                {format(parseISO(b.start_time), "dd/MM/yy")} •{" "}
-                                {format(parseISO(b.start_time), "HH:mm")} às{" "}
-                                {format(parseISO(b.end_time), "HH:mm")}
-                              </p>
-                            </div>
+                    {filteredBookings.map((b) => (
+                      <div
+                        key={b.id}
+                        className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-2xl border transition-colors gap-4 ${
+                          b.is_contract
+                            ? "border-purple-200 bg-purple-50/20"
+                            : "border-slate-100 hover:border-slate-200 hover:bg-slate-50"
+                        }`}
+                      >
+                        <div className="flex items-center gap-4">
+                          <div
+                            className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                              b.is_contract
+                                ? "bg-purple-100 text-purple-700"
+                                : "bg-slate-200 text-slate-500"
+                            }`}
+                          >
+                            {b.is_contract ? (
+                              <FileText className="w-5 h-5" />
+                            ) : (
+                              <Users className="w-5 h-5" />
+                            )}
                           </div>
-                          <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center border-t sm:border-0 border-slate-100 pt-3 sm:pt-0">
-                            <div className="text-left sm:text-right">
-                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">
-                                Repasse Líquido
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <p className="font-bold text-slate-900 line-clamp-1">
+                                {b.room_name}
                               </p>
-                              <p className="font-black text-emerald-600">
-                                R${" "}
-                                {liquido.toLocaleString("pt-BR", {
+                              <Badge
+                                className={`border-0 text-[9px] font-black ${
+                                  b.is_contract
+                                    ? "bg-purple-100 text-purple-800"
+                                    : "bg-slate-100 text-slate-600"
+                                }`}
+                              >
+                                {b.pricing_label}
+                              </Badge>
+                            </div>
+                            <p className="text-xs font-bold text-[#BF4B24] mt-0.5">
+                              Especialista: {b.specialist_name}
+                            </p>
+                            {b.cohost_name && !b.is_contract && (
+                              <p className="text-[10px] font-bold text-purple-700 flex items-center gap-1 mt-0.5">
+                                <Sparkles className="w-3 h-3" /> Co-Anfitrião:{" "}
+                                {b.cohost_name} (R${" "}
+                                {b.cohost_payout_brl.toLocaleString("pt-BR", {
                                   minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
                                 })}
+                                )
                               </p>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-[10px] font-bold text-slate-400">
-                                Bruto: R$ {bruto.toFixed(2).replace(".", ",")}
-                              </p>
-                            </div>
+                            )}
+                            <p className="text-[10px] font-bold text-slate-400 mt-0.5">
+                              {format(parseISO(b.start_time), "dd/MM/yyyy")} •{" "}
+                              {format(parseISO(b.start_time), "HH:mm")} às{" "}
+                              {format(parseISO(b.end_time), "HH:mm")}
+                            </p>
                           </div>
                         </div>
-                      );
-                    })}
+
+                        <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center border-t sm:border-0 border-slate-100 pt-3 sm:pt-0">
+                          <div className="text-left sm:text-right">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">
+                              Repasse Líquido Clínica
+                            </p>
+                            <p className="font-black text-emerald-600 text-base">
+                              R${" "}
+                              {b.partner_net_brl.toLocaleString("pt-BR", {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </p>
+                          </div>
+                          <div className="text-right flex items-center gap-2 mt-0.5">
+                            <span className="text-[10px] font-bold text-slate-400">
+                              Bruto: R${" "}
+                              {b.gross_brl.toLocaleString("pt-BR", {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </span>
+                            <span className="text-slate-300">•</span>
+                            <span className="text-[10px] font-bold text-[#BF4B24]">
+                              Fusion: R${" "}
+                              {b.platform_fee_brl.toLocaleString("pt-BR", {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
-            ) : (
+            ) : dossierTab === "rooms" ? (
               <div className="p-6">
                 <div className="flex items-center justify-between mb-6">
                   <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
@@ -671,7 +1376,7 @@ export function AdminPartnersTab() {
                   <div className="text-center py-10 bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
                     <Building2 className="w-10 h-10 text-slate-300 mx-auto mb-3" />
                     <p className="text-slate-500 font-medium">
-                      O anfitrião ainda não possui salas ativas.
+                      O anfitrião ainda não possui salas cadastradas.
                     </p>
                   </div>
                 ) : (
@@ -685,6 +1390,7 @@ export function AdminPartnersTab() {
                           <img
                             src={r.image_url || "/placeholder.jpg"}
                             className="w-full h-full object-cover"
+                            alt={r.name}
                           />
                         </div>
                         <div className="flex-1">
@@ -711,6 +1417,100 @@ export function AdminPartnersTab() {
                   </div>
                 )}
               </div>
+            ) : (
+              <div className="p-6">
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-[#BF4B24]" /> Contratos
+                    Vinculados às Salas deste Parceiro
+                  </h3>
+                </div>
+
+                {selectedProfile.myContracts.length === 0 ? (
+                  <div className="text-center py-10 bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
+                    <FileText className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                    <p className="text-slate-500 font-medium">
+                      Nenhum contrato de turno fixo ou sala mensal registrado
+                      para este parceiro.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
+                    {selectedProfile.myContracts.map((c: any) => {
+                      const roomObj = selectedProfile.myRooms.find(
+                        (r) => r.id === c.room_id,
+                      );
+                      const fusionPct = Number(c.platform_fee_pct ?? 15);
+                      const hostPct =
+                        c.host_split_pct !== undefined &&
+                        c.host_split_pct !== null
+                          ? Number(c.host_split_pct)
+                          : Math.max(0, 100 - fusionPct);
+
+                      return (
+                        <div
+                          key={c.id}
+                          className="p-4 rounded-2xl border border-slate-200 bg-slate-50/70 flex flex-col md:flex-row md:items-center justify-between gap-4"
+                        >
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-black text-slate-900">
+                                {roomObj?.name || "Sala"}
+                              </span>
+                              <Badge className="bg-purple-100 text-purple-800 border-0 text-[10px] font-bold">
+                                {c.contract_type === "monthly_exclusive"
+                                  ? "Fixo Mensal / Exclusivo"
+                                  : c.contract_type === "fixed_shift"
+                                    ? "Turno Fixo"
+                                    : "Diária Fixa"}
+                              </Badge>
+                            </div>
+                            <p className="text-xs font-bold text-[#BF4B24] mt-1">
+                              Locatário: {c.specialist_name}
+                            </p>
+                            <p className="text-[11px] font-medium text-slate-500 mt-0.5">
+                              Vigência:{" "}
+                              {format(parseISO(c.start_date), "dd/MM/yyyy")} até{" "}
+                              {format(parseISO(c.end_date), "dd/MM/yyyy")} •
+                              Pagamento até dia{" "}
+                              {String(c.due_day || 8).padStart(2, "0")}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-4">
+                            <div className="text-right">
+                              <p className="font-black text-slate-900">
+                                R${" "}
+                                {Number(c.contract_value || 0).toLocaleString(
+                                  "pt-BR",
+                                  {
+                                    minimumFractionDigits: 2,
+                                  },
+                                )}
+                              </p>
+                              <p className="text-[10px] font-bold text-slate-500">
+                                Split: {fusionPct}% Fusion / {hostPct}% Parceiro
+                              </p>
+                            </div>
+                            {c.pdf_url && (
+                              <a
+                                href={c.pdf_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"
+                              >
+                                <FileText className="w-3.5 h-3.5" />
+                                PDF
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -730,8 +1530,8 @@ export function AdminPartnersTab() {
             Parceiros (Anfitriões)
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-1">
-            Gestão dos donos de clínicas, acompanhamento de faturamento gerado e
-            controle de espaços listados.
+            Gestão dos donos de clínicas, acompanhamento de faturamento real
+            (Take Rate Avulso 20% + Contratos) e controle de espaços listados.
           </p>
         </div>
       </div>
@@ -748,7 +1548,7 @@ export function AdminPartnersTab() {
             <h3 className="text-2xl font-black text-slate-900">
               {totalRooms}{" "}
               <span className="text-sm font-medium text-slate-500">
-                salas ativas
+                salas cadastradas
               </span>
             </h3>
           </div>
@@ -763,11 +1563,10 @@ export function AdminPartnersTab() {
             </p>
             <h3 className="text-2xl font-black text-slate-900">
               R${" "}
-              {totalGMV >= 1000
-                ? (totalGMV / 1000).toFixed(1) + "k"
-                : totalGMV.toLocaleString("pt-BR", {
-                    minimumFractionDigits: 2,
-                  })}
+              {totalGMV.toLocaleString("pt-BR", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
             </h3>
           </div>
         </div>
@@ -777,15 +1576,14 @@ export function AdminPartnersTab() {
           </div>
           <div>
             <p className="text-xs font-bold text-slate-400 uppercase">
-              Receita Fusion (10%)
+              Receita Fusion (20% + Contratos)
             </p>
             <h3 className="text-2xl font-black text-slate-900">
               R${" "}
-              {totalPlatformFee >= 1000
-                ? (totalPlatformFee / 1000).toFixed(1) + "k"
-                : totalPlatformFee.toLocaleString("pt-BR", {
-                    minimumFractionDigits: 2,
-                  })}
+              {totalPlatformFee.toLocaleString("pt-BR", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
             </h3>
           </div>
         </div>
@@ -809,10 +1607,13 @@ export function AdminPartnersTab() {
             <thead className="bg-white text-slate-400 font-bold text-[10px] uppercase tracking-wider border-b border-slate-100">
               <tr>
                 <th className="px-6 py-4">Anfitrião / Clínica</th>
-                <th className="px-6 py-4 text-center">Salas Listadas</th>
+                <th className="px-6 py-4 text-center">Salas & Contratos</th>
                 <th className="px-6 py-4 text-center">Nível de Parceria</th>
                 <th className="px-6 py-4 text-right">GMV (Gerado)</th>
-                <th className="px-6 py-4 text-right">Receita Fusion (10%)</th>
+                <th className="px-6 py-4 text-right">
+                  Receita Fusion (20% + Contratos)
+                </th>
+                <th className="px-6 py-4 text-right">Repasse Líquido</th>
                 <th className="px-6 py-4 text-center">Ações</th>
               </tr>
             </thead>
@@ -820,7 +1621,7 @@ export function AdminPartnersTab() {
               {filteredPartners.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={7}
                     className="px-6 py-12 text-center text-slate-500 font-medium"
                   >
                     Nenhum parceiro encontrado com os filtros atuais.
@@ -839,6 +1640,7 @@ export function AdminPartnersTab() {
                             <img
                               src={partner.avatar_url}
                               className="w-full h-full object-cover"
+                              alt={partner.full_name}
                             />
                           ) : (
                             <Building2 className="w-5 h-5" />
@@ -858,11 +1660,11 @@ export function AdminPartnersTab() {
                       </div>
                     </td>
                     <td className="px-6 py-4 text-center">
-                      <p className="font-black text-slate-700 text-lg">
-                        {partner.roomsCount}
+                      <p className="font-black text-slate-700 text-base">
+                        {partner.activeRoomsCount}/{partner.roomsCount} salas
                       </p>
-                      <p className="text-[10px] font-bold text-slate-400 uppercase mt-0.5">
-                        Espaços Ativos
+                      <p className="text-[10px] font-bold text-purple-700 mt-0.5">
+                        {partner.contractsCount} contrato(s) ativo(s)
                       </p>
                     </td>
                     <td className="px-6 py-4 text-center">
@@ -873,6 +1675,7 @@ export function AdminPartnersTab() {
                         R${" "}
                         {partner.gmv.toLocaleString("pt-BR", {
                           minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
                         })}
                       </p>
                       <p className="text-[10px] font-bold text-slate-400 mt-0.5">
@@ -880,12 +1683,22 @@ export function AdminPartnersTab() {
                       </p>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200">
+                      <Badge className="bg-orange-50 text-[#BF4B24] border-orange-200 font-black">
                         + R${" "}
                         {partner.platformFee.toLocaleString("pt-BR", {
                           minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
                         })}
                       </Badge>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <p className="font-black text-emerald-600">
+                        R${" "}
+                        {partner.partnerNet.toLocaleString("pt-BR", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </p>
                     </td>
                     <td className="px-6 py-4 text-center">
                       <Button
