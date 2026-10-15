@@ -68,26 +68,49 @@ function normalizeTier(tier?: string | null): "start" | "vip" | "master" {
   return "start";
 }
 
-function extractRoomModalitiesHourlyRate(modalities: any): number | null {
-  if (!modalities) return null;
+function extractRoomModalitiesHourlyRate(
+  modalities: any,
+  addressDetails?: any,
+): number | null {
   try {
-    const parsed =
-      typeof modalities === "string" ? JSON.parse(modalities) : modalities;
-    const candidates = [
-      parsed?.hourly?.price,
-      parsed?.hourlyPrice,
-      parsed?.price_per_hour,
-      parsed?.pricePerHour,
-      parsed?.price,
-    ];
-    for (const c of candidates) {
-      const val = Number(c);
-      if (!isNaN(val) && val > 0) return val;
+    if (modalities) {
+      const parsed =
+        typeof modalities === "string" ? JSON.parse(modalities) : modalities;
+      const candidates = [
+        parsed?.hourly?.price,
+        parsed?.hourlyPrice,
+        parsed?.price_per_hour,
+        parsed?.pricePerHour,
+        parsed?.price,
+      ];
+      for (const c of candidates) {
+        const val = Number(c);
+        if (!isNaN(val) && val > 0 && val <= 250) return val;
+      }
+    }
+    if (addressDetails) {
+      const addr =
+        typeof addressDetails === "string"
+          ? JSON.parse(addressDetails)
+          : addressDetails;
+      const addrPrice = Number(addr?.pricing?.hourly);
+      if (!isNaN(addrPrice) && addrPrice > 0 && addrPrice <= 250) {
+        return addrPrice;
+      }
     }
   } catch {
     return null;
   }
   return null;
+}
+
+// Calcula a quantidade real de blocos/horas de UMA reserva individual (ex: 50min ou 60min = 1h)
+function calculateSlotUnits(startIso: string, endIso: string): number {
+  const diffMinutes =
+    (new Date(endIso).getTime() - new Date(startIso).getTime()) / (1000 * 60);
+  if (diffMinutes <= 0) return 1;
+  if (diffMinutes >= 45 && diffMinutes <= 65) return 1;
+  return Math.max(1, Math.round(diffMinutes / 55));
 }
 
 export function AdminOverviewTab() {
@@ -145,7 +168,7 @@ export function AdminOverviewTab() {
           supabase
             .from("rooms")
             .select(
-              "id, name, host_id, is_active, tier, category_id, modalities",
+              "id, name, host_id, is_active, tier, category_id, modalities, address_details",
             ),
           supabase.from("packages").select("id, tier, hours, price, active"),
           supabase
@@ -241,8 +264,7 @@ export function AdminOverviewTab() {
           const rawPrice = Number(pkg.price) || 0;
           if (rawPrice <= 0) return;
 
-          const hourlyRate =
-            h > 1 && rawPrice / h >= 15 ? rawPrice / h : rawPrice;
+          const hourlyRate = h > 1 && rawPrice > 120 ? rawPrice / h : rawPrice;
           packageRateMap[t].set(h, hourlyRate);
         });
 
@@ -292,7 +314,7 @@ export function AdminOverviewTab() {
                 closestHours = h;
               }
             }
-            if (closestHours !== null) {
+            if (closestHours !== null && minDiff <= 4) {
               return tierPackages.get(closestHours)!;
             }
           }
@@ -315,12 +337,10 @@ export function AdminOverviewTab() {
           const room = roomsMap.get(b.room_id);
           const roomTier = normalizeTier(room?.tier);
 
-          const durationMs =
-            b.end_time && b.start_time
-              ? new Date(b.end_time).getTime() -
-                new Date(b.start_time).getTime()
-              : 3600000;
-          const durationHours = Math.max(0.5, durationMs / (1000 * 60 * 60));
+          const slotUnits =
+            b.start_time && b.end_time
+              ? calculateSlotUnits(b.start_time, b.end_time)
+              : 1;
 
           const linkedContract = b.contract_id
             ? contractsById.get(b.contract_id)
@@ -331,17 +351,17 @@ export function AdminOverviewTab() {
               String(b.booking_origin).startsWith("contract")),
           );
 
-          // Se for reserva de contrato (Turno Fixo / Diária Fixa / Sala Mensal)
+          // 1. Se for reserva de CONTRATO: aplica a porcentagem configurada no contrato
           if (isContractBooking) {
             const val =
               Number(b.agreed_value_brl) > 0
                 ? Number(b.agreed_value_brl)
                 : Number(linkedContract?.session_value || 0);
-            const feePct = Number(linkedContract?.platform_fee_pct ?? 10) / 100;
+            const feePct = Number(linkedContract?.platform_fee_pct ?? 15) / 100;
             return {
               revenue: val,
               fee: val * feePct,
-              durationHours,
+              durationHours: slotUnits,
               isContract: true,
             };
           }
@@ -350,9 +370,10 @@ export function AdminOverviewTab() {
           const upgradeFee = Number(b.upgrade_fee_amount || 0);
           const discount = couponDiscountMap.get(b.id) || 0;
 
+          // 2. Reserva Avulsa Direta (em R$): Take Rate da Fusion = 20% (0.2)
           if (
             Number(b.agreed_value_brl) > 0 ||
-            rawTotalCost >= durationHours * 15
+            rawTotalCost >= slotUnits * 20
           ) {
             const baseVal =
               Number(b.agreed_value_brl) > 0
@@ -361,13 +382,18 @@ export function AdminOverviewTab() {
             const rev = Math.max(0, baseVal + upgradeFee - discount);
             return {
               revenue: rev,
-              fee: rev * 0.1,
-              durationHours,
+              fee: rev * 0.2, // <-- 20% TAKE RATE AVULSO
+              durationHours: slotUnits,
               isContract: false,
             };
           }
 
-          const creditsUsed = rawTotalCost > 0 ? rawTotalCost : durationHours;
+          // 3. Reserva Avulsa via Créditos / Pacotes: Take Rate da Fusion = 20% (0.2)
+          const creditsForThisSlot =
+            rawTotalCost > 0 && rawTotalCost <= slotUnits * 2
+              ? rawTotalCost
+              : slotUnits;
+
           const userTxs = userWalletMap.get(b.user_id) || [];
           const bookingTime = b.created_at
             ? new Date(b.created_at).getTime()
@@ -390,10 +416,15 @@ export function AdminOverviewTab() {
                 ? ["vip", "master"]
                 : ["start", "vip", "master"];
 
-          const positiveTxs = userTxs.filter(
-            (tx: any) => Number(tx.amount) > 0,
+          const purchaseCredits = userTxs.filter(
+            (tx: any) =>
+              Number(tx.amount) > 0 &&
+              !String(tx.description || "")
+                .toLowerCase()
+                .includes("estorno"),
           );
-          const validPriorCredits = positiveTxs.filter((tx: any) => {
+
+          const validPriorPurchases = purchaseCredits.filter((tx: any) => {
             const createdMs = new Date(tx.created_at).getTime();
             const notAfterBooking = createdMs <= bookingTime + 60 * 1000;
             const notExpiredAtBooking =
@@ -403,7 +434,9 @@ export function AdminOverviewTab() {
           });
 
           const candidateCredits =
-            validPriorCredits.length > 0 ? validPriorCredits : positiveTxs;
+            validPriorPurchases.length > 0
+              ? validPriorPurchases
+              : purchaseCredits;
 
           const sourceCreditTx =
             [...candidateCredits]
@@ -423,10 +456,13 @@ export function AdminOverviewTab() {
             const descMatch = String(sourceCreditTx.description || "").match(
               /(\d+)\s*(?:h|hora|horas|crédito|credito)/i,
             );
-            if (descMatch && Number(descMatch[1]) > 0) {
-              detectedPackageHours = Number(descMatch[1]);
-            } else if (txAmt > 0) {
-              detectedPackageHours = txAmt;
+            const candidateHours =
+              descMatch && Number(descMatch[1]) > 0
+                ? Number(descMatch[1])
+                : txAmt;
+
+            if (candidateHours > 0 && candidateHours <= 60) {
+              detectedPackageHours = candidateHours;
             }
           } else {
             const userSubs = userSubsMap.get(b.user_id) || [];
@@ -453,6 +489,7 @@ export function AdminOverviewTab() {
           if (resolvedHourlyRate === null) {
             const roomModalityRate = extractRoomModalitiesHourlyRate(
               room?.modalities,
+              room?.address_details,
             );
             const categoryObj = room?.category_id
               ? categoriesMap.get(room.category_id)
@@ -464,9 +501,9 @@ export function AdminOverviewTab() {
 
             const defaultTierRates: Record<"start" | "vip" | "master", number> =
               {
-                start: 45,
-                vip: 60,
-                master: 80,
+                start: 33.38,
+                vip: 41.13,
+                master: 60,
               };
 
             resolvedHourlyRate =
@@ -475,13 +512,13 @@ export function AdminOverviewTab() {
 
           const rev = Math.max(
             0,
-            creditsUsed * resolvedHourlyRate + upgradeFee - discount,
+            creditsForThisSlot * resolvedHourlyRate + upgradeFee - discount,
           );
 
           return {
             revenue: rev,
-            fee: rev * 0.1,
-            durationHours,
+            fee: rev * 0.2, // <-- 20% TAKE RATE AVULSO
+            durationHours: slotUnits,
             isContract: false,
           };
         };
@@ -640,7 +677,7 @@ export function AdminOverviewTab() {
         ];
         setHeatmapData(orderedHeatmap);
 
-        // Capacidade operacional de referência: 10h/dia útil por sala (retenção do m²)
+        // Capacidade operacional de referência: 8h/dia útil por sala (retenção do m²)
         const availableHoursPerRoom = Math.max(1, daysCount * 8);
 
         const activeRoomsStats = Object.values(roomStats).filter(
@@ -746,8 +783,8 @@ export function AdminOverviewTab() {
             Centro de Comando Fusion
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-1">
-            Visão executiva da plataforma, contratos recorrentes, retenção do m²
-            e comportamento dos usuários.
+            Visão executiva da plataforma (Take Rate Avulso 20% + Contratos),
+            retenção do m² e comportamento dos usuários.
           </p>
         </div>
 
@@ -811,7 +848,7 @@ export function AdminOverviewTab() {
           </h3>
         </div>
 
-        {/* KPI 2: Receita Fusion (Take Rate) */}
+        {/* KPI 2: Receita Fusion (Take Rate 20% + Contratos) */}
         <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-6 rounded-2xl shadow-xl relative overflow-hidden group print:bg-white print:border print:border-slate-200 print:shadow-none">
           <div className="absolute top-0 right-0 w-32 h-32 bg-[#BF4B24]/20 rounded-full blur-2xl -mr-8 -mt-8 transition-transform group-hover:scale-150 print:hidden"></div>
           <div className="relative z-10">
@@ -824,7 +861,7 @@ export function AdminOverviewTab() {
               </Badge>
             </div>
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 print:text-slate-500">
-              Receita Fusion (Take Rate)
+              Receita Fusion (Take Rate 20% + Contratos)
             </p>
             <h3 className="text-3xl font-black text-white print:text-slate-900">
               <span className="text-lg text-emerald-400 font-bold mr-1">
@@ -888,7 +925,8 @@ export function AdminOverviewTab() {
                 Evolução do Faturamento (Avulso + Contratos)
               </h2>
               <p className="text-xs font-medium text-slate-500">
-                Comparativo do Volume Total vs Receita da Plataforma
+                Comparativo do Volume Total vs Receita da Plataforma (20% Avulso
+                + Split Contratos)
               </p>
             </div>
           </div>
