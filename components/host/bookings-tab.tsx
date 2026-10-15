@@ -55,26 +55,48 @@ function formatTierLabel(tier: "start" | "vip" | "master"): string {
   return "Basic";
 }
 
-function extractRoomModalitiesHourlyRate(modalities: any): number | null {
-  if (!modalities) return null;
+function extractRoomModalitiesHourlyRate(
+  modalities: any,
+  addressDetails?: any,
+): number | null {
   try {
-    const parsed =
-      typeof modalities === "string" ? JSON.parse(modalities) : modalities;
-    const candidates = [
-      parsed?.hourly?.price,
-      parsed?.hourlyPrice,
-      parsed?.price_per_hour,
-      parsed?.pricePerHour,
-      parsed?.price,
-    ];
-    for (const c of candidates) {
-      const val = Number(c);
-      if (!isNaN(val) && val > 0) return val;
+    if (modalities) {
+      const parsed =
+        typeof modalities === "string" ? JSON.parse(modalities) : modalities;
+      const candidates = [
+        parsed?.hourly?.price,
+        parsed?.hourlyPrice,
+        parsed?.price_per_hour,
+        parsed?.pricePerHour,
+        parsed?.price,
+      ];
+      for (const c of candidates) {
+        const val = Number(c);
+        if (!isNaN(val) && val > 0 && val <= 250) return val;
+      }
+    }
+    if (addressDetails) {
+      const addr =
+        typeof addressDetails === "string"
+          ? JSON.parse(addressDetails)
+          : addressDetails;
+      const addrPrice = Number(addr?.pricing?.hourly);
+      if (!isNaN(addrPrice) && addrPrice > 0 && addrPrice <= 250) {
+        return addrPrice;
+      }
     }
   } catch {
     return null;
   }
   return null;
+}
+
+function calculateSlotUnits(startIso: string, endIso: string): number {
+  const diffMinutes =
+    (new Date(endIso).getTime() - new Date(startIso).getTime()) / (1000 * 60);
+  if (diffMinutes <= 0) return 1;
+  if (diffMinutes >= 45 && diffMinutes <= 65) return 1;
+  return Math.max(1, Math.round(diffMinutes / 55));
 }
 
 export function HostBookingsTab() {
@@ -100,7 +122,7 @@ export function HostBookingsTab() {
 
         const { data: myRooms, error: roomsErr } = await supabase
           .from("rooms")
-          .select("id, name, tier, category_id, modalities")
+          .select("id, name, tier, category_id, modalities, address_details")
           .eq("host_id", user.id);
 
         if (roomsErr) throw roomsErr;
@@ -205,8 +227,7 @@ export function HostBookingsTab() {
           const rawPrice = Number(pkg.price) || 0;
           if (rawPrice <= 0) return;
 
-          const hourlyRate =
-            h > 1 && rawPrice / h >= 15 ? rawPrice / h : rawPrice;
+          const hourlyRate = h > 1 && rawPrice > 120 ? rawPrice / h : rawPrice;
           packageRateMap[t].set(h, hourlyRate);
         });
 
@@ -263,7 +284,7 @@ export function HostBookingsTab() {
                 closestHours = h;
               }
             }
-            if (closestHours !== null) {
+            if (closestHours !== null && minDiff <= 4) {
               return {
                 rate: tierPackages.get(closestHours)!,
                 matchedHours: closestHours,
@@ -287,10 +308,7 @@ export function HostBookingsTab() {
 
           const startDate = new Date(b.start_time);
           const endDate = new Date(b.end_time);
-          const durationHours = Math.max(
-            0.5,
-            (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60),
-          );
+          const slotUnits = calculateSlotUnits(b.start_time, b.end_time);
 
           let type: "hoje" | "proximos" | "historico" = "proximos";
           if (isToday(startDate)) {
@@ -367,7 +385,6 @@ export function HostBookingsTab() {
             ? Number(roomCohost.cohost_split_pct || 0)
             : 0;
 
-          // Take Rate avulso de 20%
           const computeAvulsoSplit = (grossVal: number) => {
             const platformFee = grossVal * 0.2;
             const netAfterPlatform = Math.max(0, grossVal - platformFee);
@@ -385,7 +402,7 @@ export function HostBookingsTab() {
 
           if (
             Number(b.agreed_value_brl) > 0 ||
-            rawTotalCost >= durationHours * 15
+            rawTotalCost >= slotUnits * 20
           ) {
             const baseVal =
               Number(b.agreed_value_brl) > 0
@@ -415,7 +432,11 @@ export function HostBookingsTab() {
             };
           }
 
-          const creditsUsed = rawTotalCost > 0 ? rawTotalCost : durationHours;
+          const creditsForThisSlot =
+            rawTotalCost > 0 && rawTotalCost <= slotUnits * 2
+              ? rawTotalCost
+              : slotUnits;
+
           const userTxs = userWalletMap.get(b.user_id) || [];
           const bookingTime = b.created_at
             ? new Date(b.created_at).getTime()
@@ -438,10 +459,14 @@ export function HostBookingsTab() {
                 ? ["vip", "master"]
                 : ["start", "vip", "master"];
 
-          const positiveTxs = userTxs.filter(
-            (tx: any) => Number(tx.amount) > 0,
+          const purchaseCredits = userTxs.filter(
+            (tx: any) =>
+              Number(tx.amount) > 0 &&
+              !String(tx.description || "")
+                .toLowerCase()
+                .includes("estorno"),
           );
-          const validPriorCredits = positiveTxs.filter((tx: any) => {
+          const validPriorPurchases = purchaseCredits.filter((tx: any) => {
             const createdMs = new Date(tx.created_at).getTime();
             const notAfterBooking = createdMs <= bookingTime + 60 * 1000;
             const notExpiredAtBooking =
@@ -451,7 +476,9 @@ export function HostBookingsTab() {
           });
 
           const candidateCredits =
-            validPriorCredits.length > 0 ? validPriorCredits : positiveTxs;
+            validPriorPurchases.length > 0
+              ? validPriorPurchases
+              : purchaseCredits;
 
           const sourceCreditTx =
             [...candidateCredits]
@@ -471,10 +498,13 @@ export function HostBookingsTab() {
             const descMatch = String(sourceCreditTx.description || "").match(
               /(\d+)\s*(?:h|hora|horas|crédito|credito)/i,
             );
-            if (descMatch && Number(descMatch[1]) > 0) {
-              detectedPackageHours = Number(descMatch[1]);
-            } else if (txAmt > 0) {
-              detectedPackageHours = txAmt;
+            const candidateHours =
+              descMatch && Number(descMatch[1]) > 0
+                ? Number(descMatch[1])
+                : txAmt;
+
+            if (candidateHours > 0 && candidateHours <= 60) {
+              detectedPackageHours = candidateHours;
             }
           } else {
             const userSubs = userSubsMap.get(b.user_id) || [];
@@ -506,6 +536,7 @@ export function HostBookingsTab() {
           } else {
             const roomModalityRate = extractRoomModalitiesHourlyRate(
               room?.modalities,
+              room?.address_details,
             );
             const categoryObj = room?.category_id
               ? categoriesMap.get(room.category_id)
@@ -516,9 +547,9 @@ export function HostBookingsTab() {
                 : null;
             const defaultTierRates: Record<"start" | "vip" | "master", number> =
               {
-                start: 45,
-                vip: 60,
-                master: 80,
+                start: 33.38,
+                vip: 41.13,
+                master: 60,
               };
             resolvedHourlyRate =
               roomModalityRate || categoryRate || defaultTierRates[roomTier];
@@ -527,7 +558,7 @@ export function HostBookingsTab() {
 
           const grossVal = Math.max(
             0,
-            creditsUsed * resolvedHourlyRate + upgradeFee - discount,
+            creditsForThisSlot * resolvedHourlyRate + upgradeFee - discount,
           );
           const { cohostPayout, hostPayout } = computeAvulsoSplit(grossVal);
 

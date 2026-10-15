@@ -185,7 +185,23 @@ export default function AdminDashboardPage() {
           {activeTab === "salas" && <AdminRoomsTab />}
           {activeTab === "contratos" && <AdminContractsTab mode="admin" />}
           {activeTab === "pacotes" && <PackagesAdminTab />}
-          {activeTab === "agendamentos" && <AdminBookingsTab />}
+          {activeTab === "agendamentos" && (
+            <AdminBookingsTab
+              onOpenSpecialistDossier={(specialistId, specialistName) => {
+                try {
+                  sessionStorage.setItem(
+                    "fusion_admin_selected_specialist_id",
+                    specialistId,
+                  );
+                  sessionStorage.setItem(
+                    "fusion_admin_selected_specialist_name",
+                    specialistName,
+                  );
+                } catch {}
+                setActiveTab("especialistas");
+              }}
+            />
+          )}
           {activeTab === "cupons" && <AdminCouponsTab />}
           {activeTab === "campanhas" && (
             <div className="p-8 flex justify-center items-start animate-in fade-in slide-in-from-bottom-4">

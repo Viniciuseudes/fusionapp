@@ -70,6 +70,21 @@ interface Specialist {
   plan: string;
 }
 
+function normalizeTier(tier?: string | null): "start" | "vip" | "master" {
+  const t = (tier || "start").toLowerCase().trim();
+  if (t.includes("master")) return "master";
+  if (t.includes("vip")) return "vip";
+  return "start";
+}
+
+function calculateSlotUnits(startIso: string, endIso: string): number {
+  const diffMinutes =
+    (new Date(endIso).getTime() - new Date(startIso).getTime()) / (1000 * 60);
+  if (diffMinutes <= 0) return 1;
+  if (diffMinutes >= 45 && diffMinutes <= 65) return 1;
+  return Math.max(1, Math.round(diffMinutes / 55));
+}
+
 // Motor Sênior de Exportação para Excel (CSV compatível com o Brasil)
 const exportToCSV = (headers: string[], rows: any[][], filename: string) => {
   const csvContent = [
@@ -112,6 +127,15 @@ export function AdminSpecialistsTab() {
   const [profileTransactions, setProfileTransactions] = useState<any[]>([]);
   const [profileLoading, setProfileLoading] = useState(false);
 
+  // Mapa de tarifas por Tier para cálculo fiel no Dossiê
+  const [tierBaseRates, setTierBaseRates] = useState<
+    Record<"start" | "vip" | "master", number>
+  >({
+    start: 33.38,
+    vip: 41.13,
+    master: 60,
+  });
+
   // Controles de View do Dossiê
   const [dossierTab, setDossierTab] = useState<"bookings" | "transactions">(
     "bookings",
@@ -142,50 +166,96 @@ export function AdminSpecialistsTab() {
   const fetchSpecialists = async () => {
     setLoading(true);
     try {
-      const { data: profiles, error: pErr } = await supabase
-        .from("profiles")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (pErr) throw pErr;
+      const [profilesRes, bookingsRes, transactionsRes, packagesRes, roomsRes] =
+        await Promise.all([
+          supabase
+            .from("profiles")
+            .select("*")
+            .order("created_at", { ascending: false }),
+          supabase
+            .from("bookings")
+            .select(
+              "id, user_id, room_id, total_cost, agreed_value_brl, start_time, end_time, status",
+            ),
+          supabase
+            .from("wallet_transactions")
+            .select("user_id, amount, expires_at, tier"),
+          supabase.from("packages").select("tier, hours, price"),
+          supabase.from("rooms").select("id, tier"),
+        ]);
 
-      const { data: bookings, error: bErr } = await supabase
-        .from("bookings")
-        .select("user_id, total_cost, start_time, end_time, status");
-      if (bErr) throw bErr;
+      if (profilesRes.error) throw profilesRes.error;
+      if (bookingsRes.error) throw bookingsRes.error;
+      if (transactionsRes.error) throw transactionsRes.error;
 
-      const { data: transactions, error: tErr } = await supabase
-        .from("wallet_transactions")
-        .select("user_id, amount, expires_at, tier");
-      if (tErr) throw tErr;
+      const profiles = profilesRes.data || [];
+      const bookings = bookingsRes.data || [];
+      const transactions = transactionsRes.data || [];
+      const packages = packagesRes.data || [];
+      const rooms = roomsRes.data || [];
+
+      const roomTierMap = new Map<string, "start" | "vip" | "master">(
+        rooms.map((r: any) => [r.id, normalizeTier(r.tier)]),
+      );
+
+      // Calcula a tarifa base de cada Tier a partir da tabela `packages`
+      const computedTierRates: Record<"start" | "vip" | "master", number> = {
+        start: 33.38,
+        vip: 41.13,
+        master: 60,
+      };
+
+      (["start", "vip", "master"] as const).forEach((t) => {
+        const tierPkgs = packages.filter(
+          (p: any) => normalizeTier(p.tier) === t && Number(p.price) > 0,
+        );
+        if (tierPkgs.length > 0) {
+          // Prioriza pacote de 8h ou o menor pacote ativo da categoria
+          const pkg8 =
+            tierPkgs.find((p: any) => Number(p.hours) === 8) || tierPkgs[0];
+          const h = Math.max(1, Number(pkg8.hours) || 1);
+          const rawP = Number(pkg8.price);
+          computedTierRates[t] = h > 1 && rawP > 120 ? rawP / h : rawP;
+        }
+      });
+      setTierBaseRates(computedTierRates);
 
       const now = new Date();
 
-      const processedData: Specialist[] = profiles.map((p) => {
-        const userBookings = bookings?.filter((b) => b.user_id === p.id) || [];
+      const processedData: Specialist[] = profiles.map((p: any) => {
+        const userBookings = bookings.filter((b: any) => b.user_id === p.id);
 
-        // ==========================================
-        // REGRA DE NEGÓCIO SÊNIOR UNIFICADA
-        // Conta estritamente as reservas COMPLETED para não haver fraudes
-        // ==========================================
-        const completedBookings = userBookings.filter(
-          (b) => b.status === "completed",
+        // Considera concluídas e confirmadas para o LTV real do profissional
+        const validBookings = userBookings.filter(
+          (b: any) => b.status === "completed" || b.status === "confirmed",
         );
 
-        const ltv = completedBookings.reduce(
-          (acc, curr) => acc + (Number(curr.total_cost) || 0) * 45,
-          0,
-        );
-        const bookingsCount = completedBookings.length;
+        const ltv = validBookings.reduce((acc: number, curr: any) => {
+          if (Number(curr.agreed_value_brl) > 0) {
+            return acc + Number(curr.agreed_value_brl);
+          }
+          const slotUnits =
+            curr.start_time && curr.end_time
+              ? calculateSlotUnits(curr.start_time, curr.end_time)
+              : 1;
+          const rawCost = Number(curr.total_cost || 0);
+          if (rawCost >= slotUnits * 20) {
+            return acc + rawCost;
+          }
+          const rTier = roomTierMap.get(curr.room_id) || "start";
+          return acc + slotUnits * computedTierRates[rTier];
+        }, 0);
+
+        const bookingsCount = validBookings.length;
         const canceledCount = userBookings.filter(
-          (b) => b.status === "cancelled",
+          (b: any) => b.status === "cancelled",
         ).length;
 
-        const lastBooking = completedBookings.sort(
-          (a, b) =>
+        const lastBooking = [...validBookings].sort(
+          (a: any, b: any) =>
             new Date(b.start_time).getTime() - new Date(a.start_time).getTime(),
         )[0];
 
-        // Lógica de Cadastro Completo Idêntica ao App
         const isProfileComplete = Boolean(
           p.cpf && p.address_street && p.birth_date,
         );
@@ -205,28 +275,32 @@ export function AdminSpecialistsTab() {
         }
 
         const rawSpecialty = p.specialty || "Clínico Geral";
-        let council = "CRM";
-        if (rawSpecialty.toLowerCase().includes("psico")) council = "CRP";
-        if (rawSpecialty.toLowerCase().includes("odonto")) council = "CRO";
-        if (rawSpecialty.toLowerCase().includes("fisio")) council = "CREFITO";
-        if (rawSpecialty.toLowerCase().includes("nutri")) council = "CRN";
+        let council = p.council || "CRM";
+        if (!p.council) {
+          if (rawSpecialty.toLowerCase().includes("psico")) council = "CRP";
+          if (rawSpecialty.toLowerCase().includes("odonto")) council = "CRO";
+          if (rawSpecialty.toLowerCase().includes("fisio")) council = "CREFITO";
+          if (rawSpecialty.toLowerCase().includes("nutri")) council = "CRN";
+        }
 
-        const userTransactions =
-          transactions?.filter((t) => t.user_id === p.id) || [];
+        const userTransactions = transactions.filter(
+          (t: any) => t.user_id === p.id,
+        );
         let startBal = 0,
           vipBal = 0,
           masterBal = 0;
 
-        userTransactions.forEach((tx) => {
+        userTransactions.forEach((tx: any) => {
           const amt = Number(tx.amount);
           if (amt > 0 && tx.expires_at && new Date(tx.expires_at) < now) return;
 
-          if (tx.tier === "master") masterBal += amt;
-          else if (tx.tier === "vip") vipBal += amt;
+          const normT = normalizeTier(tx.tier);
+          if (normT === "master") masterBal += amt;
+          else if (normT === "vip") vipBal += amt;
           else startBal += amt;
         });
 
-        const validCredits = startBal + vipBal + masterBal;
+        const validCredits = Math.max(0, startBal + vipBal + masterBal);
         const plan = p.subscription_plan || "Básico (Start)";
 
         const fullAddress = p.address_street
@@ -245,8 +319,8 @@ export function AdminSpecialistsTab() {
           address: fullAddress,
           city: p.address_city || "Não informada",
           state: p.address_state || "RN",
-          created_at: p.created_at,
-          phone: p.phone || "Não informado",
+          created_at: p.created_at || new Date().toISOString(),
+          phone: p.whatsapp || p.phone || "Não informado",
           email: p.email || "E-mail protegido/Não sincronizado",
           ltv,
           bookingsCount,
@@ -255,16 +329,48 @@ export function AdminSpecialistsTab() {
           tier,
           status: "active",
           walletBalance: validCredits,
-          walletBalances: { start: startBal, vip: vipBal, master: masterBal },
+          walletBalances: {
+            start: Math.max(0, startBal),
+            vip: Math.max(0, vipBal),
+            master: Math.max(0, masterBal),
+          },
           plan,
         };
       });
 
-      setSpecialists(
-        processedData.filter(
-          (s) => s.specialty || s.bookingsCount > 0 || s.tier !== "Iniciante",
-        ),
+      const finalList = processedData.filter(
+        (s) => s.specialty || s.bookingsCount > 0 || s.tier !== "Iniciante",
       );
+      setSpecialists(finalList);
+
+      // =========================================================================
+      // REDIRECIONAMENTO DIRETO DA ABA DE AGENDAMENTOS PARA O DOSSIÊ DO MÉDICO
+      // =========================================================================
+      try {
+        const targetId = sessionStorage.getItem(
+          "fusion_admin_selected_specialist_id",
+        );
+        const targetName = sessionStorage.getItem(
+          "fusion_admin_selected_specialist_name",
+        );
+
+        if (targetId || targetName) {
+          sessionStorage.removeItem("fusion_admin_selected_specialist_id");
+          sessionStorage.removeItem("fusion_admin_selected_specialist_name");
+
+          const matchedSpecialist =
+            processedData.find((s) => s.id === targetId) ||
+            processedData.find(
+              (s) =>
+                targetName &&
+                s.full_name.toLowerCase() === targetName.toLowerCase(),
+            );
+
+          if (matchedSpecialist) {
+            handleOpenProfile(matchedSpecialist);
+          }
+        }
+      } catch {}
     } catch (err: any) {
       toast({
         variant: "destructive",
@@ -287,7 +393,7 @@ export function AdminSpecialistsTab() {
       const { data: bData } = await supabase
         .from("bookings")
         .select(
-          `id, start_time, end_time, total_cost, status, rooms (name, tier, image_url)`,
+          `id, start_time, end_time, total_cost, agreed_value_brl, status, rooms (name, tier, image_url)`,
         )
         .eq("user_id", specialist.id)
         .order("start_time", { ascending: false });
@@ -312,8 +418,10 @@ export function AdminSpecialistsTab() {
     setActionLoading(true);
     try {
       const hours = parseInt(creditAmount, 10);
-      if (hours <= 0)
-        throw new Error("A quantidade de horas deve ser maior que zero.");
+      if (isNaN(hours) || hours === 0)
+        throw new Error(
+          "Informe uma quantidade de horas válida diferente de zero.",
+        );
 
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 30);
@@ -323,30 +431,42 @@ export function AdminSpecialistsTab() {
         .insert({
           user_id: selectedProfile.id,
           amount: hours,
-          type: "admin_bonus",
+          type: hours > 0 ? "admin_bonus" : "debit",
           tier: creditTier,
-          description: `Bônus Admin: ${creditTier.toUpperCase()}`,
-          expires_at: expiresAt.toISOString(),
+          description:
+            hours > 0
+              ? `Bônus Admin: ${creditTier.toUpperCase()} (+${hours}h)`
+              : `Ajuste Admin: ${creditTier.toUpperCase()} (${hours}h)`,
+          expires_at: hours > 0 ? expiresAt.toISOString() : null,
         });
 
       if (txError) throw txError;
 
-      const novoSaldoTotal = selectedProfile.walletBalance + hours;
-      await supabase
-        .from("profiles")
-        .update({ wallet_balance: novoSaldoTotal })
-        .eq("id", selectedProfile.id);
-
+      const novoSaldoTotal = Math.max(0, selectedProfile.walletBalance + hours);
       const novoWalletBalances = { ...selectedProfile.walletBalances };
-      if (creditTier === "start") novoWalletBalances.start += hours;
-      else if (creditTier === "vip") novoWalletBalances.vip += hours;
-      else if (creditTier === "master") novoWalletBalances.master += hours;
+      if (creditTier === "start")
+        novoWalletBalances.start = Math.max(
+          0,
+          novoWalletBalances.start + hours,
+        );
+      else if (creditTier === "vip")
+        novoWalletBalances.vip = Math.max(0, novoWalletBalances.vip + hours);
+      else if (creditTier === "master")
+        novoWalletBalances.master = Math.max(
+          0,
+          novoWalletBalances.master + hours,
+        );
 
-      setSelectedProfile({
+      const updatedProfile = {
         ...selectedProfile,
         walletBalance: novoSaldoTotal,
         walletBalances: novoWalletBalances,
-      });
+      };
+
+      setSelectedProfile(updatedProfile);
+      setSpecialists((prev) =>
+        prev.map((s) => (s.id === updatedProfile.id ? updatedProfile : s)),
+      );
 
       const { data: tData } = await supabase
         .from("wallet_transactions")
@@ -357,7 +477,7 @@ export function AdminSpecialistsTab() {
 
       toast({
         title: "Créditos Injetados com Sucesso!",
-        description: `${hours} Horas (${creditTier.toUpperCase()}) adicionadas.`,
+        description: `${hours} Horas (${creditTier.toUpperCase()}) aplicadas na carteira de ${selectedProfile.full_name}.`,
       });
 
       setCreditModalOpen(false);
@@ -374,6 +494,18 @@ export function AdminSpecialistsTab() {
     }
   };
 
+  const resolveBookingBrlValue = (b: any): number => {
+    if (Number(b.agreed_value_brl) > 0) return Number(b.agreed_value_brl);
+    const slotUnits =
+      b.start_time && b.end_time
+        ? calculateSlotUnits(b.start_time, b.end_time)
+        : 1;
+    const rawCost = Number(b.total_cost || 0);
+    if (rawCost >= slotUnits * 20) return rawCost;
+    const rTier = normalizeTier(b.rooms?.tier);
+    return slotUnits * tierBaseRates[rTier];
+  };
+
   const exportBookings = (dataToExport: any[]) => {
     const headers = [
       "ID Reserva",
@@ -384,15 +516,22 @@ export function AdminSpecialistsTab() {
       "Custo (CR)",
       "Equivalente (R$)",
     ];
-    const rows = dataToExport.map((b) => [
-      b.id,
-      b.rooms?.name || "Desconhecida",
-      b.rooms?.tier || "Basic",
-      `${format(parseISO(b.start_time), "dd/MM/yyyy")} (${format(parseISO(b.start_time), "HH:mm")} às ${format(parseISO(b.end_time), "HH:mm")})`,
-      b.status,
-      b.total_cost,
-      (b.total_cost * 45).toFixed(2).replace(".", ","),
-    ]);
+    const rows = dataToExport.map((b) => {
+      const slotUnits =
+        b.start_time && b.end_time
+          ? calculateSlotUnits(b.start_time, b.end_time)
+          : 1;
+      const valBrl = resolveBookingBrlValue(b);
+      return [
+        b.id,
+        b.rooms?.name || "Desconhecida",
+        b.rooms?.tier || "Basic",
+        `${format(parseISO(b.start_time), "dd/MM/yyyy")} (${format(parseISO(b.start_time), "HH:mm")} às ${format(parseISO(b.end_time), "HH:mm")})`,
+        b.status,
+        slotUnits,
+        valBrl.toFixed(2).replace(".", ","),
+      ];
+    });
     exportToCSV(
       headers,
       rows,
@@ -726,13 +865,14 @@ export function AdminSpecialistsTab() {
                   </span>
                   {selectedProfile.ltv.toLocaleString("pt-BR", {
                     minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
                   })}
                 </h3>
               </div>
 
               <div className="flex flex-col justify-center bg-slate-50 rounded-2xl p-5 border border-slate-100">
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                  Locações Concluídas
+                  Locações Realizadas
                 </p>
                 <h3 className="text-2xl font-black text-slate-900">
                   {selectedProfile.bookingsCount}
@@ -834,48 +974,55 @@ export function AdminSpecialistsTab() {
                   </div>
                 ) : (
                   <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
-                    {filteredBookings.map((b) => (
-                      <div
-                        key={b.id}
-                        className="flex items-center justify-between p-4 rounded-2xl border border-slate-100 hover:border-slate-200 hover:bg-slate-50 transition-colors"
-                      >
-                        <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 rounded-xl bg-slate-200 overflow-hidden shrink-0">
-                            <img
-                              src={b.rooms?.image_url || "/placeholder.jpg"}
-                              className="w-full h-full object-cover"
-                            />
+                    {filteredBookings.map((b) => {
+                      const slotUnits =
+                        b.start_time && b.end_time
+                          ? calculateSlotUnits(b.start_time, b.end_time)
+                          : 1;
+                      const valBrl = resolveBookingBrlValue(b);
+
+                      return (
+                        <div
+                          key={b.id}
+                          className="flex items-center justify-between p-4 rounded-2xl border border-slate-100 hover:border-slate-200 hover:bg-slate-50 transition-colors"
+                        >
+                          <div className="flex items-center gap-4">
+                            <div className="w-12 h-12 rounded-xl bg-slate-200 overflow-hidden shrink-0">
+                              <img
+                                src={b.rooms?.image_url || "/placeholder.jpg"}
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                            <div>
+                              <p className="font-bold text-slate-900">
+                                {b.rooms?.name || "Sala Removida"}
+                              </p>
+                              <p className="text-xs font-bold text-slate-500 mt-0.5">
+                                {format(parseISO(b.start_time), "dd/MM/yyyy", {
+                                  locale: ptBR,
+                                })}{" "}
+                                • {format(parseISO(b.start_time), "HH:mm")} às{" "}
+                                {format(parseISO(b.end_time), "HH:mm")}
+                              </p>
+                            </div>
                           </div>
-                          <div>
-                            <p className="font-bold text-slate-900">
-                              {b.rooms?.name || "Sala Removida"}
+                          <div className="text-right">
+                            <p className="font-black text-emerald-600 mb-1">
+                              {slotUnits} CR{" "}
+                              <span className="text-xs text-slate-400 font-medium">
+                                / R$ {valBrl.toFixed(2).replace(".", ",")}
+                              </span>
                             </p>
-                            <p className="text-xs font-bold text-slate-500 mt-0.5">
-                              {format(parseISO(b.start_time), "dd/MM/yyyy", {
-                                locale: ptBR,
-                              })}{" "}
-                              • {format(parseISO(b.start_time), "HH:mm")} às{" "}
-                              {format(parseISO(b.end_time), "HH:mm")}
-                            </p>
+                            <Badge
+                              variant="outline"
+                              className={`text-[10px] uppercase tracking-widest ${b.status === "cancelled" ? "bg-red-50 text-red-600 border-red-200" : ""}`}
+                            >
+                              {b.status}
+                            </Badge>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <p className="font-black text-emerald-600 mb-1">
-                            {b.total_cost} CR{" "}
-                            <span className="text-xs text-slate-400 font-medium">
-                              / R${" "}
-                              {(b.total_cost * 45).toFixed(2).replace(".", ",")}
-                            </span>
-                          </p>
-                          <Badge
-                            variant="outline"
-                            className={`text-[10px] uppercase tracking-widest ${b.status === "cancelled" ? "bg-red-50 text-red-600 border-red-200" : ""}`}
-                          >
-                            {b.status}
-                          </Badge>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1115,7 +1262,12 @@ export function AdminSpecialistsTab() {
             </p>
             <h3 className="text-2xl font-black text-slate-900">
               R${" "}
-              {totalLTV >= 1000 ? (totalLTV / 1000).toFixed(1) + "k" : totalLTV}
+              {totalLTV >= 1000
+                ? (totalLTV / 1000).toFixed(1) + "k"
+                : totalLTV.toLocaleString("pt-BR", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
             </h3>
           </div>
         </div>
@@ -1219,6 +1371,7 @@ export function AdminSpecialistsTab() {
                         R${" "}
                         {spec.ltv.toLocaleString("pt-BR", {
                           minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
                         })}
                       </p>
                       <p className="text-[10px] font-bold text-slate-400 mt-0.5">

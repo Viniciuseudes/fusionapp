@@ -89,6 +89,13 @@ interface BookingInfo {
   host_payout_brl: number;
 }
 
+interface AdminBookingsTabProps {
+  onOpenSpecialistDossier?: (
+    specialistId: string,
+    specialistName: string,
+  ) => void;
+}
+
 function normalizeTier(tier?: string | null): "start" | "vip" | "master" {
   const t = (tier || "start").toLowerCase().trim();
   if (t.includes("master")) return "master";
@@ -102,21 +109,35 @@ function formatTierLabel(tier: "start" | "vip" | "master"): string {
   return "Basic";
 }
 
-function extractRoomModalitiesHourlyRate(modalities: any): number | null {
-  if (!modalities) return null;
+function extractRoomModalitiesHourlyRate(
+  modalities: any,
+  addressDetails?: any,
+): number | null {
   try {
-    const parsed =
-      typeof modalities === "string" ? JSON.parse(modalities) : modalities;
-    const candidates = [
-      parsed?.hourly?.price,
-      parsed?.hourlyPrice,
-      parsed?.price_per_hour,
-      parsed?.pricePerHour,
-      parsed?.price,
-    ];
-    for (const c of candidates) {
-      const val = Number(c);
-      if (!isNaN(val) && val > 0) return val;
+    if (modalities) {
+      const parsed =
+        typeof modalities === "string" ? JSON.parse(modalities) : modalities;
+      const candidates = [
+        parsed?.hourly?.price,
+        parsed?.hourlyPrice,
+        parsed?.price_per_hour,
+        parsed?.pricePerHour,
+        parsed?.price,
+      ];
+      for (const c of candidates) {
+        const val = Number(c);
+        if (!isNaN(val) && val > 0 && val <= 250) return val;
+      }
+    }
+    if (addressDetails) {
+      const addr =
+        typeof addressDetails === "string"
+          ? JSON.parse(addressDetails)
+          : addressDetails;
+      const addrPrice = Number(addr?.pricing?.hourly);
+      if (!isNaN(addrPrice) && addrPrice > 0 && addrPrice <= 250) {
+        return addrPrice;
+      }
     }
   } catch {
     return null;
@@ -124,7 +145,17 @@ function extractRoomModalitiesHourlyRate(modalities: any): number | null {
   return null;
 }
 
-export function AdminBookingsTab() {
+function calculateSlotUnits(startIso: string, endIso: string): number {
+  const diffMinutes =
+    (new Date(endIso).getTime() - new Date(startIso).getTime()) / (1000 * 60);
+  if (diffMinutes <= 0) return 1;
+  if (diffMinutes >= 45 && diffMinutes <= 65) return 1;
+  return Math.max(1, Math.round(diffMinutes / 55));
+}
+
+export function AdminBookingsTab({
+  onOpenSpecialistDossier,
+}: AdminBookingsTabProps) {
   const supabase = createClient();
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
@@ -136,12 +167,14 @@ export function AdminBookingsTab() {
   const [originFilter, setOriginFilter] = useState("all");
   const [search, setSearch] = useState("");
 
+  // Modal de Visualização de Reserva (Sheet)
   const [selectedBooking, setSelectedBooking] = useState<BookingInfo | null>(
     null,
   );
   const [isViewOpen, setIsViewOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
+  // Modal de Reagendamento (Dialog)
   const [isRescheduleOpen, setIsRescheduleOpen] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState<Date | undefined>(
     new Date(),
@@ -208,7 +241,9 @@ export function AdminBookingsTab() {
         roomIds.length > 0
           ? supabase
               .from("rooms")
-              .select("id, name, host_id, tier, category_id, modalities")
+              .select(
+                "id, name, host_id, tier, category_id, modalities, address_details",
+              )
               .in("id", roomIds)
           : Promise.resolve({ data: [] as any[] }),
         supabase.from("packages").select("id, tier, hours, price, active"),
@@ -268,6 +303,13 @@ export function AdminBookingsTab() {
         hostsRes.data?.map((h: any) => [h.id, h.full_name]) || [],
       );
 
+      const userWalletMap = new Map<string, any[]>();
+      (walletRes.data || []).forEach((tx: any) => {
+        const list = userWalletMap.get(tx.user_id) || [];
+        list.push(tx);
+        userWalletMap.set(tx.user_id, list);
+      });
+
       const contractsData = contractsRes.data || [];
       const contractsById = new Map<string, any>(
         contractsData.map((c: any) => [c.id, c]),
@@ -298,8 +340,7 @@ export function AdminBookingsTab() {
         const rawPrice = Number(pkg.price) || 0;
         if (rawPrice <= 0) return;
 
-        const hourlyRate =
-          h > 1 && rawPrice / h >= 15 ? rawPrice / h : rawPrice;
+        const hourlyRate = h > 1 && rawPrice > 120 ? rawPrice / h : rawPrice;
         packageRateMap[t].set(h, hourlyRate);
       });
 
@@ -316,13 +357,6 @@ export function AdminBookingsTab() {
               Number(cu.discount_applied || 0),
           );
         }
-      });
-
-      const userWalletMap = new Map<string, any[]>();
-      (walletRes.data || []).forEach((tx: any) => {
-        const list = userWalletMap.get(tx.user_id) || [];
-        list.push(tx);
-        userWalletMap.set(tx.user_id, list);
       });
 
       const userSubsMap = new Map<string, any[]>();
@@ -358,7 +392,7 @@ export function AdminBookingsTab() {
               closestHours = h;
             }
           }
-          if (closestHours !== null) {
+          if (closestHours !== null && minDiff <= 4) {
             return {
               rate: tierPackages.get(closestHours)!,
               matchedHours: closestHours,
@@ -381,10 +415,10 @@ export function AdminBookingsTab() {
         const hostId = room?.host_id;
         const clinicName = hostId ? hostsMap.get(hostId) : "Fusion Clinic";
         const roomTier = normalizeTier(room?.tier);
+        const specialistName =
+          usersMap.get(b.user_id) || "Especialista Desconhecido";
 
-        const durationMs =
-          new Date(b.end_time).getTime() - new Date(b.start_time).getTime();
-        const durationHours = Math.max(0.5, durationMs / (1000 * 60 * 60));
+        const slotUnits = calculateSlotUnits(b.start_time, b.end_time);
 
         const linkedContract = b.contract_id
           ? contractsById.get(b.contract_id)
@@ -394,7 +428,6 @@ export function AdminBookingsTab() {
           (b.booking_origin && String(b.booking_origin).startsWith("contract")),
         );
 
-        // 0. RESERVA DE CONTRATO (Usa as porcentagens personalizadas do contrato)
         if (isContractBooking) {
           const contractSessionVal =
             Number(b.agreed_value_brl) > 0
@@ -421,20 +454,17 @@ export function AdminBookingsTab() {
             start_time: b.start_time,
             end_time: b.end_time,
             status: b.status,
-            total_cost: durationHours,
+            total_cost: slotUnits,
             credits_used: 0,
             credit_tier_raw: room?.tier || roomTier,
             credit_tx_type: "contract",
             credit_expires_at: null,
             gross_value_brl: contractSessionVal,
-            hourly_rate_brl: contractSessionVal / durationHours,
+            hourly_rate_brl: contractSessionVal / slotUnits,
             pricing_label: typeLabel,
             room_tier: roomTier,
             room_id: b.room_id,
-            specialist_name:
-              linkedContract?.specialist_name ||
-              usersMap.get(b.user_id) ||
-              "Locatário de Contrato",
+            specialist_name: linkedContract?.specialist_name || specialistName,
             room_name: room?.name || "Sala Removida",
             clinic_name: clinicName || "Fusion Clinic",
             is_contract: true,
@@ -449,17 +479,15 @@ export function AdminBookingsTab() {
           };
         }
 
-        // Verifica Co-Anfitrião ativo para sublocação em horas avulsas
         const roomCohostContract = activeCohostByRoomId.get(b.room_id);
         const cohostName = roomCohostContract?.specialist_name || null;
         const cohostSplitPct = roomCohostContract
           ? Number(roomCohostContract.cohost_split_pct || 0)
           : 0;
 
-        // Take Rate padrão da Fusion em horas avulsas agora é 20% (80% para o anfitrião)
         const computeAvulsoSplit = (grossVal: number) => {
-          const platformFee = grossVal * 0.2; // 20% Fusion
-          const netAfterPlatform = Math.max(0, grossVal - platformFee); // 80%
+          const platformFee = grossVal * 0.2;
+          const netAfterPlatform = Math.max(0, grossVal - platformFee);
           const cohostPayout =
             cohostSplitPct > 0 ? netAfterPlatform * (cohostSplitPct / 100) : 0;
           const hostPayout = Math.max(0, netAfterPlatform - cohostPayout);
@@ -483,19 +511,12 @@ export function AdminBookingsTab() {
         const defaultPositiveType =
           positiveTxs[positiveTxs.length - 1]?.type || "credit";
 
-        // Caso 1: `total_cost` já salvo em Reais (checkout direto)
-        if (
-          Number(b.agreed_value_brl) > 0 ||
-          rawTotalCost >= durationHours * 15
-        ) {
+        if (Number(b.agreed_value_brl) > 0 || rawTotalCost >= slotUnits * 20) {
           const baseVal =
             Number(b.agreed_value_brl) > 0
               ? Number(b.agreed_value_brl)
               : rawTotalCost;
           const finalBrl = Math.max(0, baseVal + upgradeFee - discount);
-          const creditsEquivalent = matchingDebit
-            ? Math.abs(Number(matchingDebit.amount))
-            : durationHours;
           const split = computeAvulsoSplit(finalBrl);
 
           return {
@@ -506,17 +527,16 @@ export function AdminBookingsTab() {
             end_time: b.end_time,
             status: b.status,
             total_cost: rawTotalCost,
-            credits_used: creditsEquivalent,
+            credits_used: slotUnits,
             credit_tier_raw: matchingDebit?.tier || room?.tier || roomTier,
             credit_tx_type: defaultPositiveType,
             credit_expires_at: null,
             gross_value_brl: finalBrl,
-            hourly_rate_brl: finalBrl / durationHours,
+            hourly_rate_brl: finalBrl / slotUnits,
             pricing_label: `${formatTierLabel(roomTier)} • Reserva Direta`,
             room_tier: roomTier,
             room_id: b.room_id,
-            specialist_name:
-              usersMap.get(b.user_id) || "Especialista Desconhecido",
+            specialist_name: specialistName,
             room_name: room?.name || "Sala Removida",
             clinic_name: clinicName || "Fusion Clinic",
             is_contract: false,
@@ -531,12 +551,10 @@ export function AdminBookingsTab() {
           };
         }
 
-        // Caso 2: Reserva via Créditos / Horas
-        const creditsUsed = matchingDebit
-          ? Math.abs(Number(matchingDebit.amount))
-          : rawTotalCost > 0
+        const creditsForThisSlot =
+          rawTotalCost > 0 && rawTotalCost <= slotUnits * 2
             ? rawTotalCost
-            : durationHours;
+            : slotUnits;
 
         let creditTierUsed: "start" | "vip" | "master" = roomTier;
         let rawTierString: string = room?.tier || roomTier;
@@ -553,7 +571,14 @@ export function AdminBookingsTab() {
               ? ["vip", "master"]
               : ["start", "vip", "master"];
 
-        const validPriorCredits = positiveTxs.filter((tx: any) => {
+        const purchaseCredits = positiveTxs.filter(
+          (tx: any) =>
+            !String(tx.description || "")
+              .toLowerCase()
+              .includes("estorno"),
+        );
+
+        const validPriorPurchases = purchaseCredits.filter((tx: any) => {
           const createdMs = new Date(tx.created_at).getTime();
           const notAfterBooking = createdMs <= bookingTime + 60 * 1000;
           const notExpiredAtBooking =
@@ -562,7 +587,9 @@ export function AdminBookingsTab() {
         });
 
         const candidateCredits =
-          validPriorCredits.length > 0 ? validPriorCredits : positiveTxs;
+          validPriorPurchases.length > 0
+            ? validPriorPurchases
+            : purchaseCredits;
 
         const sourceCreditTx =
           [...candidateCredits]
@@ -585,10 +612,13 @@ export function AdminBookingsTab() {
           const descMatch = String(sourceCreditTx.description || "").match(
             /(\d+)\s*(?:h|hora|horas|crédito|credito)/i,
           );
-          if (descMatch && Number(descMatch[1]) > 0) {
-            detectedPackageHours = Number(descMatch[1]);
-          } else if (txAmt > 0) {
-            detectedPackageHours = txAmt;
+          const candidateHours =
+            descMatch && Number(descMatch[1]) > 0
+              ? Number(descMatch[1])
+              : txAmt;
+
+          if (candidateHours > 0 && candidateHours <= 60) {
+            detectedPackageHours = candidateHours;
           }
         } else {
           const userSubs = userSubsMap.get(b.user_id) || [];
@@ -623,6 +653,7 @@ export function AdminBookingsTab() {
         } else {
           const roomModalityRate = extractRoomModalitiesHourlyRate(
             room?.modalities,
+            room?.address_details,
           );
           const categoryObj = room?.category_id
             ? categoriesMap.get(room.category_id)
@@ -641,9 +672,9 @@ export function AdminBookingsTab() {
           } else {
             const defaultTierRates: Record<"start" | "vip" | "master", number> =
               {
-                start: 45,
-                vip: 60,
-                master: 80,
+                start: 33.38,
+                vip: 41.13,
+                master: 60,
               };
             resolvedHourlyRate = defaultTierRates[roomTier];
             pricingOriginLabel = `${formatTierLabel(roomTier)} • Padrão`;
@@ -652,7 +683,7 @@ export function AdminBookingsTab() {
 
         const grossBrl = Math.max(
           0,
-          creditsUsed * resolvedHourlyRate + upgradeFee - discount,
+          creditsForThisSlot * resolvedHourlyRate + upgradeFee - discount,
         );
         const split = computeAvulsoSplit(grossBrl);
 
@@ -664,7 +695,7 @@ export function AdminBookingsTab() {
           end_time: b.end_time,
           status: b.status,
           total_cost: rawTotalCost,
-          credits_used: creditsUsed,
+          credits_used: creditsForThisSlot,
           credit_tier_raw: rawTierString || creditTierUsed,
           credit_tx_type: sourceCreditTx?.type || defaultPositiveType,
           credit_expires_at: sourceCreditTx?.expires_at || null,
@@ -673,8 +704,7 @@ export function AdminBookingsTab() {
           pricing_label: pricingOriginLabel,
           room_tier: roomTier,
           room_id: b.room_id,
-          specialist_name:
-            usersMap.get(b.user_id) || "Especialista Desconhecido",
+          specialist_name: specialistName,
           room_name: room?.name || "Sala Removida",
           clinic_name: clinicName || "Fusion Clinic",
           is_contract: false,
@@ -700,6 +730,28 @@ export function AdminBookingsTab() {
       setBookings([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Redirecionamento direto ao clicar no nome do especialista
+  const handleDirectToSpecialistTab = (
+    userId: string,
+    specialistName: string,
+  ) => {
+    try {
+      sessionStorage.setItem(
+        "fusion_admin_selected_specialist_id",
+        userId || "",
+      );
+      sessionStorage.setItem(
+        "fusion_admin_selected_specialist_name",
+        specialistName || "",
+      );
+    } catch {}
+
+    setIsViewOpen(false);
+    if (onOpenSpecialistDossier) {
+      onOpenSpecialistDossier(userId, specialistName);
     }
   };
 
@@ -936,7 +988,7 @@ export function AdminBookingsTab() {
       return;
     }
 
-    const hoursToRefund = Number(selectedBooking.credits_used) || 0;
+    const hoursToRefund = Number(selectedBooking.credits_used) || 1;
     const tierLabel = formatTierLabel(
       normalizeTier(selectedBooking.credit_tier_raw),
     );
@@ -1115,7 +1167,7 @@ export function AdminBookingsTab() {
 
   const handleExportFinances = () => {
     if (filteredBookings.length === 0)
-      return toast({ title: "Sem dados para exportار." });
+      return toast({ title: "Sem dados para exportar." });
     let csv =
       "ID da Reserva;Clínica (Anfitrião);Sala;Modalidade;Especialista (Cliente);Co-Anfitrião (Sublocação);Valor Bruto (R$);Taxa Fusion (R$);Repasse Co-Anfitrião (R$);Repasse Clínica (R$);Status\n";
     filteredBookings.forEach((b) => {
@@ -1375,9 +1427,20 @@ export function AdminBookingsTab() {
                       </p>
                     </td>
                     <td className="px-6 py-4">
-                      <p className="font-bold text-[#BF4B24]">
-                        {booking.specialist_name}
-                      </p>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleDirectToSpecialistTab(
+                            booking.user_id,
+                            booking.specialist_name,
+                          )
+                        }
+                        title="Ir diretamente para o dossiê do especialista"
+                        className="font-bold text-[#BF4B24] hover:text-[#9A3C1D] hover:underline flex items-center gap-1.5 text-left transition-colors cursor-pointer"
+                      >
+                        <span>{booking.specialist_name}</span>
+                        <ExternalLink className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+                      </button>
                       {booking.cohost_name && !booking.is_contract && (
                         <p className="text-[10px] font-bold text-purple-700 flex items-center gap-1 mt-0.5">
                           <Sparkles className="w-3 h-3" /> Co-Anfitrião:{" "}
@@ -1603,9 +1666,21 @@ export function AdminBookingsTab() {
                   <Label className="text-slate-500 font-bold">
                     Especialista (Locatário)
                   </Label>
-                  <p className="font-medium text-[#BF4B24]">
-                    {selectedBooking.specialist_name}
-                  </p>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleDirectToSpecialistTab(
+                          selectedBooking.user_id,
+                          selectedBooking.specialist_name,
+                        )
+                      }
+                      className="font-bold text-[#BF4B24] hover:underline inline-flex items-center gap-1.5"
+                    >
+                      {selectedBooking.specialist_name}
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <Label className="text-slate-500 font-bold">
