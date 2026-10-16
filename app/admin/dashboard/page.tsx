@@ -25,7 +25,6 @@ import {
   Eye,
   Trash2,
   Loader2,
-  Clock,
   LogOut,
   MapPin,
   User,
@@ -49,6 +48,8 @@ import {
   UserCheck,
   Megaphone,
   Ticket,
+  Menu,
+  X,
 } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
@@ -69,73 +70,136 @@ import {
 import { ptBR } from "date-fns/locale";
 
 // ==========================================
-// COMPONENTE PRINCIPAL (TORRE DE CONTROLE ADMIN)
+// COMPONENTE PRINCIPAL (TORRE DE CONTROLE ADMIN — DESKTOP & MOBILE)
 // ==========================================
 export default function AdminDashboardPage() {
   const [activeTab, setActiveTab] = useState("dashboard");
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const menuItems = [
-    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { id: "especialistas", label: "Especialistas", icon: Users },
-    { id: "parceiros", label: "Parceiros", icon: ShieldCheck },
-    { id: "salas", label: "Gestão de Salas", icon: Building2 },
-    { id: "contratos", label: "Contratos & Fixos", icon: FileText },
-    { id: "pacotes", label: "Precificação (Pacotes)", icon: Tags },
-    { id: "cupons", label: "Motor de Cupons", icon: Ticket },
-    { id: "agendamentos", label: "Agendamentos", icon: CalendarDays },
-    { id: "campanhas", label: "Campanhas Push", icon: Megaphone },
+    {
+      id: "dashboard",
+      label: "Dashboard",
+      shortLabel: "Início",
+      icon: LayoutDashboard,
+    },
+    {
+      id: "agendamentos",
+      label: "Agendamentos",
+      shortLabel: "Agenda",
+      icon: CalendarDays,
+    },
+    {
+      id: "especialistas",
+      label: "Especialistas",
+      shortLabel: "Médicos",
+      icon: Users,
+    },
+    {
+      id: "parceiros",
+      label: "Parceiros",
+      shortLabel: "Clínicas",
+      icon: ShieldCheck,
+    },
+    {
+      id: "salas",
+      label: "Gestão de Salas",
+      shortLabel: "Salas",
+      icon: Building2,
+    },
+    {
+      id: "contratos",
+      label: "Contratos & Fixos",
+      shortLabel: "Contratos",
+      icon: FileText,
+    },
+    {
+      id: "pacotes",
+      label: "Precificação (Pacotes)",
+      shortLabel: "Pacotes",
+      icon: Tags,
+    },
+    {
+      id: "cupons",
+      label: "Motor de Cupons",
+      shortLabel: "Cupons",
+      icon: Ticket,
+    },
+    {
+      id: "campanhas",
+      label: "Campanhas Push",
+      shortLabel: "Push",
+      icon: Megaphone,
+    },
   ];
 
-  // ==========================================
-  // MOTOR DE LOGOUT BLINDADO
-  // ==========================================
+  const handleSelectTab = (tabId: string) => {
+    setActiveTab(tabId);
+    setIsMobileMenuOpen(false);
+  };
+
   const handleLogout = async () => {
     try {
       const supabase = createClient();
-
-      // 1. Destrói a sessão real no banco de dados (Supabase)
       await supabase.auth.signOut();
-
-      // 2. Limpa qualquer lixo de sessão do navegador
       sessionStorage.clear();
       localStorage.clear();
-
-      // 3. HARD RELOAD: Força a página a recarregar limpando o cache
       window.location.replace("/admin/login");
     } catch (error) {
       console.error("Erro ao sair:", error);
     }
   };
 
+  const currentMenuLabel =
+    menuItems.find((m) => m.id === activeTab)?.label || activeTab;
+
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
-      {/* SIDEBAR LIGHT MODE (Padrão Médico) */}
-      <aside className="w-64 bg-white border-r border-slate-200 flex flex-col shrink-0 z-20">
-        <div className="p-6 border-b border-slate-100 flex flex-col items-start gap-4">
-          <img
-            src="/logo-fusion-orange.png"
-            alt="Fusion Clinic"
-            className="h-10 w-auto object-contain"
-          />
-          <div>
-            <h1 className="font-black text-slate-900 text-lg leading-tight tracking-tight">
-              Admin
-            </h1>
-            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-              Torre de Controle
-            </p>
+    <div className="flex h-svh bg-slate-50 overflow-hidden font-sans">
+      {/* ==================================================================== */}
+      {/* SIDEBAR DESKTOP (RECOLHÍVEL PARA TELA CHEIA) */}
+      {/* ==================================================================== */}
+      <aside
+        className={`hidden lg:flex bg-white border-r border-slate-200 flex-col shrink-0 z-20 transition-all duration-300 ease-in-out overflow-hidden ${
+          isSidebarCollapsed ? "w-0 border-r-0" : "w-64"
+        }`}
+      >
+        <div className="p-6 border-b border-slate-100 flex items-center justify-between gap-2 min-w-[16rem]">
+          <div className="flex flex-col items-start gap-3">
+            <img
+              src="/logo-fusion-orange.png"
+              alt="Fusion Clinic"
+              className="h-9 w-auto object-contain"
+            />
+            <div>
+              <h1 className="font-black text-slate-900 text-lg leading-tight tracking-tight">
+                Admin
+              </h1>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                Torre de Controle
+              </p>
+            </div>
           </div>
+
+          <button
+            type="button"
+            onClick={() => setIsSidebarCollapsed(true)}
+            title="Recolher menu lateral (Tela Cheia)"
+            className="p-2 rounded-xl border border-slate-200 text-slate-500 hover:text-[#BF4B24] hover:bg-orange-50 transition-colors"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
         </div>
 
-        <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
+        <nav className="flex-1 px-4 py-6 space-y-1.5 overflow-y-auto min-w-[16rem]">
           {menuItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
             return (
               <button
                 key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${
+                onClick={() => handleSelectTab(item.id)}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${
                   isActive
                     ? "bg-[#BF4B24]/10 text-[#BF4B24]"
                     : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
@@ -150,35 +214,138 @@ export default function AdminDashboardPage() {
           })}
         </nav>
 
-        <div className="p-4 border-t border-slate-100">
+        <div className="p-4 border-t border-slate-100 min-w-[16rem]">
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-slate-500 hover:bg-red-50 hover:text-red-600 transition-all"
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm text-slate-500 hover:bg-red-50 hover:text-red-600 transition-all"
           >
             <LogOut className="w-5 h-5" /> Sair do Painel
           </button>
         </div>
       </aside>
 
-      <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
-        <header className="h-20 bg-white border-b border-slate-200 flex items-center justify-between px-8 shrink-0 shadow-sm z-10">
-          <h2 className="text-xl font-black text-slate-800 capitalize">
-            {activeTab.replace("-", " ")}
-          </h2>
-          <div className="flex items-center gap-4">
+      {/* ==================================================================== */}
+      {/* DRAWER MENU MOBILE (DESLIZA AO TOCAR NO BOTÃO DE MENU NO CELULAR) */}
+      {/* ==================================================================== */}
+      {isMobileMenuOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden flex">
+          <div
+            className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs"
+            onClick={() => setIsMobileMenuOpen(false)}
+          />
+          <aside className="relative w-72 max-w-[82vw] bg-white h-full flex flex-col z-10 shadow-2xl animate-in slide-in-from-left duration-200">
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <img
+                  src="/logo-fusion-orange.png"
+                  alt="Fusion Clinic"
+                  className="h-8 w-auto object-contain"
+                />
+                <div>
+                  <h2 className="font-black text-slate-900 text-sm">
+                    Fusion Admin
+                  </h2>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase">
+                    Torre de Controle
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="p-2 rounded-xl bg-slate-100 text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+              {menuItems.map((item) => {
+                const Icon = item.icon;
+                const isActive = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => handleSelectTab(item.id)}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${
+                      isActive
+                        ? "bg-[#BF4B24] text-white shadow-sm"
+                        : "text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    <Icon
+                      className={`w-5 h-5 ${isActive ? "text-white" : "text-slate-400"}`}
+                    />
+                    {item.label}
+                  </button>
+                );
+              })}
+            </nav>
+
+            <div className="p-4 border-t border-slate-100">
+              <button
+                onClick={handleLogout}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-bold text-sm bg-red-50 text-red-600"
+              >
+                <LogOut className="w-4 h-4" /> Sair da Conta Admin
+              </button>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* ==================================================================== */}
+      {/* ÁREA PRINCIPAL DE CONTEÚDO */}
+      {/* ==================================================================== */}
+      <main className="flex-1 flex flex-col h-svh overflow-hidden relative">
+        <header className="h-16 lg:h-20 bg-white border-b border-slate-200 flex items-center justify-between px-4 lg:px-8 shrink-0 shadow-2xs z-10">
+          <div className="flex items-center gap-2.5 min-w-0">
+            {/* Botão Hamburger no Mobile */}
+            <button
+              type="button"
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="lg:hidden flex items-center justify-center h-9 w-9 rounded-xl border border-slate-200 bg-slate-50 text-slate-700 shrink-0"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+
+            {/* Botão Recolher/Expandir no Desktop */}
+            <button
+              type="button"
+              onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+              title={
+                isSidebarCollapsed
+                  ? "Expandir menu lateral"
+                  : "Recolher menu lateral (Tela Cheia)"
+              }
+              className="hidden lg:flex items-center justify-center h-9 w-9 rounded-xl border border-slate-200 bg-slate-50 text-slate-600 hover:text-[#BF4B24] hover:border-orange-200 hover:bg-orange-50 transition-all shrink-0"
+            >
+              {isSidebarCollapsed ? (
+                <ChevronRight className="w-4 h-4" />
+              ) : (
+                <ChevronLeft className="w-4 h-4" />
+              )}
+            </button>
+
+            <h2 className="text-base sm:text-xl font-black text-slate-800 truncate">
+              {currentMenuLabel}
+            </h2>
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0">
             <div className="text-right hidden md:block">
               <p className="text-sm font-bold text-slate-900">Administrador</p>
               <p className="text-xs text-slate-500 font-medium">
                 tecnologia@fusionclinic.com.br
               </p>
             </div>
-            <div className="h-10 w-10 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-black text-slate-600">
+            <div className="h-9 w-9 lg:h-10 lg:w-10 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-black text-slate-600 text-sm">
               A
             </div>
           </div>
         </header>
-        <div className="flex-1 overflow-y-auto relative bg-slate-50">
-          {/* Renderização Condicional das Abas */}
+
+        <div className="flex-1 overflow-y-auto relative bg-slate-50 pb-20 lg:pb-0">
           {activeTab === "dashboard" && <AdminOverviewTab />}
           {activeTab === "especialistas" && <AdminSpecialistsTab />}
           {activeTab === "parceiros" && <AdminPartnersTab />}
@@ -204,33 +371,50 @@ export default function AdminDashboardPage() {
           )}
           {activeTab === "cupons" && <AdminCouponsTab />}
           {activeTab === "campanhas" && (
-            <div className="p-8 flex justify-center items-start animate-in fade-in slide-in-from-bottom-4">
+            <div className="p-4 lg:p-8 flex justify-center items-start">
               <PushCampaignManager />
             </div>
           )}
-          {/* Fallback caso a aba não exista ou esteja em construção */}
-          {activeTab !== "salas" &&
-            activeTab !== "contratos" &&
-            activeTab !== "pacotes" &&
-            activeTab !== "dashboard" &&
-            activeTab !== "especialistas" &&
-            activeTab !== "parceiros" &&
-            activeTab !== "agendamentos" &&
-            activeTab !== "campanhas" &&
-            activeTab !== "cupons" && (
-              <div className="h-full flex flex-col items-center justify-center text-slate-400">
-                <Loader2 className="w-10 h-10 animate-spin mb-4 text-slate-300" />
-                <p className="font-bold">Módulo em construção...</p>
-              </div>
-            )}
         </div>
+
+        {/* ================================================================== */}
+        {/* BARRA INFERIOR MOBILE (BOTTOM NAV ESTILO APP NATIVO) */}
+        {/* ================================================================== */}
+        <nav className="fixed inset-x-0 bottom-0 z-40 flex lg:hidden items-stretch justify-around border-t border-slate-200 bg-white/95 backdrop-blur-md pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_20px_rgba(0,0,0,0.06)]">
+          {menuItems.slice(0, 4).map((item) => {
+            const Icon = item.icon;
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => handleSelectTab(item.id)}
+                className={`flex flex-col items-center justify-center gap-1 py-2.5 px-2 flex-1 text-[10px] font-bold transition-all ${
+                  isActive ? "text-[#BF4B24]" : "text-slate-400"
+                }`}
+              >
+                <Icon className="w-5 h-5" />
+                <span className="truncate">{item.shortLabel}</span>
+              </button>
+            );
+          })}
+
+          <button
+            type="button"
+            onClick={() => setIsMobileMenuOpen(true)}
+            className="flex flex-col items-center justify-center gap-1 py-2.5 px-2 flex-1 text-[10px] font-bold text-slate-600"
+          >
+            <Menu className="w-5 h-5" />
+            <span>Mais Abas</span>
+          </button>
+        </nav>
       </main>
     </div>
   );
 }
 
 // ==========================================
-// MÓDULO: GESTÃO DE SALAS E RESERVA MANUAL
+// MÓDULO: GESTÃO DE SALAS E RESERVA MANUAL (RESPONSIVO DESKTOP + MOBILE)
 // ==========================================
 function AdminRoomsTab() {
   const supabase = createClient();
@@ -260,15 +444,10 @@ function AdminRoomsTab() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [blockedDates, setBlockedDates] = useState<string[]>([]);
 
-  // ==========================================
-  // ESTADOS PARA RESERVA MANUAL (MULTI-SLOT CARRINHO)
-  // ==========================================
   const [manualDate, setManualDate] = useState<Date>(new Date());
-
   const [selectedSlots, setSelectedSlots] = useState<
     { date: Date; slot: string }[]
   >([]);
-
   const [takenSlots, setTakenSlots] = useState<string[]>([]);
   const [professionals, setProfessionals] = useState<any[]>([]);
   const [profSearch, setProfSearch] = useState("");
@@ -348,32 +527,6 @@ function AdminRoomsTab() {
     if (exception) {
       if (exception.type === "block") {
         if (exception.isFullDay) return [];
-
-        if (
-          checkIsHoliday(date) ||
-          !weekConfig.find((c: any) => c.day === dayOfWeek)?.enabled
-        ) {
-          baseSlots = [];
-        } else {
-          const dayConfig = weekConfig.find((c: any) => c.day === dayOfWeek);
-          if (dayConfig?.rentalType === "hourly")
-            baseSlots = dayConfig.availableHours || [];
-          else if (dayConfig?.rentalType === "shift") {
-            const shifts = dayConfig.selectedShifts || [];
-            if (shifts.includes("morning"))
-              baseSlots.push("08h-09h", "09h-10h", "10h-11h", "11h-12h");
-            if (shifts.includes("afternoon"))
-              baseSlots.push(
-                "13h-14h",
-                "14h-15h",
-                "15h-16h",
-                "16h-17h",
-                "17h-18h",
-              );
-            if (shifts.includes("night"))
-              baseSlots.push("18h-19h", "19h-20h", "20h-21h", "21h-22h");
-          }
-        }
         baseSlots = baseSlots.filter(
           (slot: string) => !(exception.hours || []).includes(slot),
         );
@@ -458,7 +611,6 @@ function AdminRoomsTab() {
     }
   };
 
-  // Expande reservas de 1h, turnos ou diárias contratuais para bloquear todas as horas ocupadas
   const loadTakenSlots = async (date: Date) => {
     if (!evaluatingRoom) return;
     const startOfDayDate = new Date(date);
@@ -566,7 +718,6 @@ function AdminRoomsTab() {
       setSelectedSlots([]);
       loadTakenSlots(manualDate);
     } catch (error: any) {
-      console.error("Erro na reserva manual múltipla:", error);
       toast({
         variant: "destructive",
         title: "Falha na Reserva",
@@ -744,11 +895,11 @@ function AdminRoomsTab() {
     const weekDays = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 
     const weekDaysRow = (
-      <div className="grid grid-cols-7 mb-2 gap-2" key="weekdays">
+      <div className="grid grid-cols-7 mb-2 gap-1.5" key="weekdays">
         {weekDays.map((wd) => (
           <div
             key={wd}
-            className="text-center font-black text-xs text-slate-400 uppercase tracking-widest"
+            className="text-center font-black text-[10px] text-slate-400 uppercase"
           >
             {wd}
           </div>
@@ -769,9 +920,9 @@ function AdminRoomsTab() {
             key={day.toString()}
             onClick={() => !isPast && toggleBlockDate(cloneDay)}
             className={`
-              h-14 border flex items-center justify-center text-sm font-bold transition-all rounded-xl cursor-pointer relative overflow-hidden
-              ${!isCurrentMonth ? "text-slate-300 bg-slate-50 border-slate-100" : "bg-white border-slate-200 hover:border-[#BF4B24] hover:shadow-md"}
-              ${isPast ? "opacity-40 cursor-not-allowed hover:border-slate-200 hover:shadow-none" : ""}
+              h-11 sm:h-14 border flex items-center justify-center text-xs sm:text-sm font-bold transition-all rounded-xl cursor-pointer relative overflow-hidden
+              ${!isCurrentMonth ? "text-slate-300 bg-slate-50 border-slate-100" : "bg-white border-slate-200 hover:border-[#BF4B24]"}
+              ${isPast ? "opacity-40 cursor-not-allowed" : ""}
               ${isBlocked && !isPast ? "bg-red-50 border-red-200 text-red-700" : "text-slate-700"}
             `}
           >
@@ -784,7 +935,7 @@ function AdminRoomsTab() {
         day = addDays(day, 1);
       }
       rows.push(
-        <div className="grid grid-cols-7 gap-2 mb-2" key={day.toString()}>
+        <div className="grid grid-cols-7 gap-1.5 mb-1.5" key={day.toString()}>
           {days}
         </div>,
       );
@@ -849,128 +1000,113 @@ function AdminRoomsTab() {
           })
         : [];
 
+    const roomSubTabs = [
+      { id: "auditoria", label: "Auditoria & Selos", icon: ShieldCheck },
+      { id: "editar", label: "Editar Dados", icon: FileText },
+      { id: "agenda", label: "Gerenciar Agenda", icon: CalendarIcon },
+      { id: "contratos", label: "Contratos da Sala", icon: FileText },
+      { id: "reservar", label: "Reserva Manual", icon: CalendarPlus },
+    ];
+
     return (
-      <div className="absolute inset-0 bg-slate-50 z-20 flex flex-col animate-in fade-in zoom-in-95 duration-200">
-        <div className="bg-white border-b border-slate-200 px-8 py-5 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-6">
+      <div className="flex flex-col min-h-full bg-slate-50 pb-24">
+        <div className="bg-white border-b border-slate-200 px-4 lg:px-8 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3 min-w-0">
             <button
               onClick={closeAuditPanel}
-              className="p-2 hover:bg-slate-100 rounded-full transition-colors flex items-center justify-center text-slate-500"
+              className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-500 shrink-0"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
-            <div>
-              <div className="flex items-center gap-3">
-                <h2 className="text-2xl font-black text-slate-900 leading-none">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg lg:text-2xl font-black text-slate-900 truncate">
                   {evaluatingRoom.name}
                 </h2>
                 {evaluatingRoom.is_active ? (
-                  <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold uppercase tracking-wider text-[10px]">
+                  <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold text-[10px]">
                     Ativa
                   </Badge>
                 ) : (
-                  <Badge className="bg-amber-100 text-amber-800 border-0 font-bold uppercase tracking-wider text-[10px]">
+                  <Badge className="bg-amber-100 text-amber-800 border-0 font-bold text-[10px]">
                     Pendente
                   </Badge>
                 )}
               </div>
-              <p className="text-sm font-medium text-slate-500 mt-1 flex items-center gap-1">
-                <User className="w-4 h-4" /> Anfitrião:{" "}
-                {evaluatingRoom.profiles?.full_name}
+              <p className="text-xs font-medium text-slate-500 truncate">
+                Anfitrião: {evaluatingRoom.profiles?.full_name}
               </p>
             </div>
           </div>
         </div>
 
-        <div className="flex-1 flex overflow-hidden">
-          <div className="w-72 bg-white border-r border-slate-200 p-6 flex flex-col gap-2 shrink-0 overflow-y-auto">
-            <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2 pl-2">
-              Menu da Sala
-            </p>
-            <button
-              onClick={() => setAuditTab("auditoria")}
-              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "auditoria" ? "bg-[#BF4B24]/10 text-[#BF4B24]" : "text-slate-500 hover:bg-slate-50"}`}
-            >
-              <ShieldCheck className="w-5 h-5" /> Auditoria & Selos
-            </button>
-            <button
-              onClick={() => setAuditTab("editar")}
-              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "editar" ? "bg-[#BF4B24]/10 text-[#BF4B24]" : "text-slate-500 hover:bg-slate-50"}`}
-            >
-              <FileText className="w-5 h-5" /> Editar Informações
-            </button>
-            <button
-              onClick={() => setAuditTab("agenda")}
-              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "agenda" ? "bg-[#BF4B24]/10 text-[#BF4B24]" : "text-slate-500 hover:bg-slate-50"}`}
-            >
-              <CalendarIcon className="w-5 h-5" /> Gerenciar Agenda
-            </button>
-            <button
-              onClick={() => setAuditTab("contratos")}
-              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "contratos" ? "bg-[#BF4B24]/10 text-[#BF4B24]" : "text-slate-500 hover:bg-slate-50"}`}
-            >
-              <FileText className="w-5 h-5" /> Contratos & Fixos da Sala
-            </button>
-            <button
-              onClick={() => setAuditTab("reservar")}
-              className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${auditTab === "reservar" ? "bg-[#BF4B24]/10 text-[#BF4B24] border border-[#BF4B24]/20" : "text-slate-500 hover:bg-slate-50"}`}
-            >
-              <CalendarPlus className="w-5 h-5" /> Reserva Manual
-            </button>
+        {/* Barra de Abas da Sala no Mobile + Sidebar no Desktop */}
+        <div className="flex flex-col lg:flex-row flex-1">
+          <div className="flex lg:flex-col lg:w-64 bg-white border-b lg:border-b-0 lg:border-r border-slate-200 p-2 lg:p-5 gap-1.5 overflow-x-auto shrink-0">
+            {roomSubTabs.map((t) => {
+              const Icon = t.icon;
+              const active = auditTab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setAuditTab(t.id as any)}
+                  className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl font-bold text-xs lg:text-sm whitespace-nowrap transition-all ${
+                    active
+                      ? "bg-[#BF4B24] lg:bg-[#BF4B24]/10 text-white lg:text-[#BF4B24]"
+                      : "text-slate-500 hover:bg-slate-50"
+                  }`}
+                >
+                  <Icon className="w-4 h-4 shrink-0" />
+                  {t.label}
+                </button>
+              );
+            })}
           </div>
 
-          <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
+          <div className="flex-1 p-4 lg:p-8">
             {auditTab === "contratos" ? (
-              <div className="w-full">
-                <AdminContractsTab
-                  mode="admin"
-                  preselectedRoomId={evaluatingRoom.id}
-                />
-              </div>
+              <AdminContractsTab
+                mode="admin"
+                preselectedRoomId={evaluatingRoom.id}
+              />
             ) : (
-              <div className="max-w-4xl">
-                {/* ABA: AUDITORIA */}
+              <div className="max-w-4xl mx-auto">
                 {auditTab === "auditoria" && (
-                  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                    <div className="grid grid-cols-2 gap-6">
-                      <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="bg-white border border-slate-200 p-5 rounded-2xl">
+                        <p className="text-[10px] font-black text-slate-400 uppercase mb-3">
                           Mídia da Sala
                         </p>
-                        <div className="w-full h-48 rounded-xl overflow-hidden bg-slate-100 border border-slate-100 relative">
+                        <div className="w-full h-44 rounded-xl overflow-hidden bg-slate-100 relative">
                           <img
                             src={mainImage}
                             className="w-full h-full object-cover"
                             alt="Principal"
                           />
-                          {evalImages.length > 1 && (
-                            <div className="absolute bottom-2 right-2 bg-slate-900/80 text-white text-[10px] font-bold px-2 py-1 rounded backdrop-blur-md">
-                              +{evalImages.length - 1} fotos
-                            </div>
-                          )}
                         </div>
                       </div>
-                      <div className="space-y-6">
-                        <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
-                            <MapPin className="w-3 h-3" /> Localização
+                      <div className="space-y-4">
+                        <div className="bg-white border border-slate-200 p-5 rounded-2xl">
+                          <p className="text-[10px] font-black text-slate-400 uppercase mb-1">
+                            Localização
                           </p>
                           <p className="font-bold text-slate-900">
                             {evalAddress.street || "Endereço Pendente"}
                           </p>
-                          <p className="text-sm font-medium text-slate-500">
+                          <p className="text-sm text-slate-500">
                             {evalAddress.city} - {evalAddress.state}
                           </p>
                         </div>
-                        <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
-                            <User className="w-3 h-3" /> Anfitrião / Cadastro
+                        <div className="bg-white border border-slate-200 p-5 rounded-2xl">
+                          <p className="text-[10px] font-black text-slate-400 uppercase mb-1">
+                            Anfitrião / Valor
                           </p>
                           <p className="font-bold text-slate-900">
                             {evaluatingRoom.profiles?.full_name}
                           </p>
-                          <p className="text-sm font-medium text-slate-500">
-                            Valor Base (Hora):{" "}
+                          <p className="text-sm text-slate-500">
+                            Valor Base:{" "}
                             <strong className="text-[#BF4B24]">
                               R$ {evalPricing.hourly || "0"}
                             </strong>
@@ -979,571 +1115,272 @@ function AdminRoomsTab() {
                       </div>
                     </div>
 
-                    <div className="bg-white border border-slate-200 p-8 rounded-2xl shadow-sm">
-                      <h3 className="text-lg font-black text-slate-900 mb-6">
+                    <div className="bg-white border border-slate-200 p-5 lg:p-8 rounded-2xl">
+                      <h3 className="text-lg font-black text-slate-900 mb-4">
                         Definir Categoria
                       </h3>
-
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-                        <label
-                          className={`flex flex-col gap-3 p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedTier === "start" ? "border-slate-800 bg-slate-50" : "border-slate-100 hover:border-slate-200 bg-white"}`}
-                        >
-                          <input
-                            type="radio"
-                            value="start"
-                            checked={selectedTier === "start"}
-                            onChange={() => setSelectedTier("start")}
-                            className="sr-only"
-                          />
-                          <div
-                            className={`w-10 h-10 rounded-full flex items-center justify-center ${selectedTier === "start" ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-400"}`}
-                          >
-                            <Shield className="w-5 h-5" />
-                          </div>
-                          <div>
-                            <h4
-                              className={`font-bold ${selectedTier === "start" ? "text-slate-900" : "text-slate-700"}`}
-                            >
-                              START
-                            </h4>
-                            <p className="text-xs text-slate-500 font-medium mt-1">
-                              Salas padrão. Custo-benefício.
-                            </p>
-                          </div>
-                        </label>
-
-                        <label
-                          className={`flex flex-col gap-3 p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedTier === "vip" ? "border-purple-500 bg-purple-50/50" : "border-slate-100 hover:border-slate-200 bg-white"}`}
-                        >
-                          <input
-                            type="radio"
-                            value="vip"
-                            checked={selectedTier === "vip"}
-                            onChange={() => setSelectedTier("vip")}
-                            className="sr-only"
-                          />
-                          <div
-                            className={`w-10 h-10 rounded-full flex items-center justify-center ${selectedTier === "vip" ? "bg-purple-500 text-white" : "bg-slate-100 text-slate-400"}`}
-                          >
-                            <Star className="w-5 h-5" />
-                          </div>
-                          <div>
-                            <h4
-                              className={`font-bold ${selectedTier === "vip" ? "text-purple-900" : "text-slate-700"}`}
-                            >
-                              VIP
-                            </h4>
-                            <p className="text-xs text-slate-500 font-medium mt-1">
-                              Ambientes diferenciados.
-                            </p>
-                          </div>
-                        </label>
-
-                        <label
-                          className={`flex flex-col gap-3 p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedTier === "master" ? "border-amber-500 bg-amber-50/50" : "border-slate-100 hover:border-slate-200 bg-white"}`}
-                        >
-                          <input
-                            type="radio"
-                            value="master"
-                            checked={selectedTier === "master"}
-                            onChange={() => setSelectedTier("master")}
-                            className="sr-only"
-                          />
-                          <div
-                            className={`w-10 h-10 rounded-full flex items-center justify-center ${selectedTier === "master" ? "bg-amber-500 text-white" : "bg-slate-100 text-slate-400"}`}
-                          >
-                            <Crown className="w-5 h-5" />
-                          </div>
-                          <div>
-                            <h4
-                              className={`font-bold ${selectedTier === "master" ? "text-amber-900" : "text-slate-700"}`}
-                            >
-                              MASTER
-                            </h4>
-                            <p className="text-xs text-slate-500 font-medium mt-1">
-                              Alto padrão e premium.
-                            </p>
-                          </div>
-                        </label>
-                      </div>
-
-                      <div className="p-6 border border-orange-200 bg-orange-50/50 rounded-2xl mb-8 flex flex-col md:flex-row md:items-center justify-between gap-6">
-                        <div className="flex items-start gap-4">
-                          <div className="p-3 bg-white rounded-xl shadow-sm text-[#BF4B24] shrink-0">
-                            <Sparkles className="w-6 h-6" />
-                          </div>
-                          <div>
-                            <h4 className="font-black text-slate-900 text-lg">
-                              Selo Fusion Partner
-                            </h4>
-                            <p className="text-sm font-medium text-slate-600 mb-2">
-                              Destacar esta sala como parceira oficial da
-                              plataforma.
-                            </p>
-                            {isPartner ? (
-                              <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold">
-                                <CheckCircle2 className="w-3.5 h-3.5 mr-1" />{" "}
-                                Locação "Por Hora" Liberada
-                              </Badge>
-                            ) : (
-                              <Badge className="bg-amber-100 text-amber-800 border-0 font-bold">
-                                <AlertTriangle className="w-3.5 h-3.5 mr-1" />{" "}
-                                Apenas Turnos/Fixos
-                              </Badge>
-                            )}
-                          </div>
-                        </div>
-                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                          <input
-                            type="checkbox"
-                            checked={isPartner}
-                            onChange={(e) => setIsPartner(e.target.checked)}
-                            className="sr-only peer"
-                          />
-                          <div className="w-14 h-7 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-[#BF4B24]"></div>
-                        </label>
-                      </div>
-
-                      <div className="flex gap-4">
-                        {!evaluatingRoom.is_active && (
-                          <Button
-                            onClick={() => {
-                              handleStatusChange(evaluatingRoom.id, false);
-                              closeAuditPanel();
-                            }}
-                            disabled={actionLoading}
-                            variant="outline"
-                            className="h-14 px-8 text-red-600 hover:bg-red-50 border-red-200 font-bold text-base"
-                          >
-                            Reprovar Sala
-                          </Button>
-                        )}
-                        <Button
-                          onClick={handleSaveAudit}
-                          disabled={actionLoading}
-                          className="flex-1 h-14 bg-slate-900 hover:bg-slate-800 text-white font-bold text-base shadow-lg"
-                        >
-                          {actionLoading
-                            ? "Salvando..."
-                            : "Salvar Configurações de Auditoria"}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* ABA: EDITAR INFORMAÇÕES */}
-                {auditTab === "editar" && (
-                  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                    <div className="bg-orange-50 border border-orange-200 p-5 rounded-xl flex gap-4">
-                      <AlertTriangle className="w-6 h-6 text-orange-600 shrink-0 mt-0.5" />
-                      <div>
-                        <h4 className="text-base font-black text-orange-900">
-                          Modo de Edição Avançada
-                        </h4>
-                        <p className="text-sm font-medium text-orange-700 mt-1">
-                          Você está alterando os dados originais do anfitrião
-                          direto no banco de dados.
-                        </p>
-                      </div>
-                    </div>
-                    <div className="bg-white border border-slate-200 p-8 rounded-2xl shadow-sm space-y-6">
-                      <div>
-                        <label className="text-sm font-bold text-slate-700 mb-2 block">
-                          Nome de Exibição da Sala
-                        </label>
-                        <Input
-                          value={editForm.name}
-                          onChange={(e) =>
-                            setEditForm({ ...editForm, name: e.target.value })
-                          }
-                          className="bg-slate-50 border-slate-200 h-14 font-bold text-lg"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-sm font-bold text-slate-700 mb-2 block">
-                          Descrição (Marketing)
-                        </label>
-                        <textarea
-                          value={editForm.description}
-                          onChange={(e) =>
-                            setEditForm({
-                              ...editForm,
-                              description: e.target.value,
-                            })
-                          }
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 font-medium text-base min-h-[160px]"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-sm font-bold text-slate-700 mb-2 block">
-                          Valor Base por Hora (R$)
-                        </label>
-                        <Input
-                          type="number"
-                          value={editForm.price}
-                          onChange={(e) =>
-                            setEditForm({ ...editForm, price: e.target.value })
-                          }
-                          className="bg-slate-50 border-slate-200 h-14 font-black text-lg max-w-xs"
-                        />
-                      </div>
-                      <div className="pt-6 border-t border-slate-100 mt-8">
-                        <Button
-                          onClick={handleSaveInfoEdit}
-                          disabled={actionLoading}
-                          className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black text-base shadow-lg"
-                        >
-                          {actionLoading ? (
-                            "Salvando..."
-                          ) : (
-                            <>
-                              <Save className="w-5 h-5 mr-2" /> Salvar Edições
-                              Permanentemente
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* ABA: GERENCIAR AGENDA */}
-                {auditTab === "agenda" && (
-                  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                    <div className="flex items-start justify-between bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
-                      <div>
-                        <h3 className="text-xl font-black text-slate-900 mb-2 flex items-center gap-2">
-                          <CalendarIcon className="w-6 h-6 text-[#BF4B24]" />{" "}
-                          Central de Reservas e Bloqueios
-                        </h3>
-                        <p className="text-sm font-medium text-slate-500 max-w-lg">
-                          Clique nos dias no calendário para bloquear o uso
-                          integral da sala. Dias vermelhos impedem qualquer
-                          reserva médica.
-                        </p>
-                      </div>
-                      <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-center min-w-[140px]">
-                        <p className="text-3xl font-black text-slate-900">
-                          {blockedDates.length}
-                        </p>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
-                          Dias Bloqueados
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="bg-white border border-slate-200 p-8 rounded-2xl shadow-sm">
-                      <div className="flex items-center justify-between mb-8">
-                        <h3 className="text-2xl font-black text-slate-900 capitalize">
-                          {format(currentMonth, "MMMM yyyy", { locale: ptBR })}
-                        </h3>
-                        <div className="flex gap-2">
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            onClick={() =>
-                              setCurrentMonth(subMonths(currentMonth, 1))
-                            }
-                            className="h-10 w-10 rounded-xl border-slate-200 hover:bg-slate-50"
-                          >
-                            <ChevronLeft className="w-5 h-5" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            onClick={() =>
-                              setCurrentMonth(addMonths(currentMonth, 1))
-                            }
-                            className="h-10 w-10 rounded-xl border-slate-200 hover:bg-slate-50"
-                          >
-                            <ChevronRight className="w-5 h-5" />
-                          </Button>
-                        </div>
-                      </div>
-
-                      {renderCalendar()}
-
-                      <div className="mt-8 pt-6 border-t border-slate-100 flex justify-end">
-                        <Button
-                          onClick={handleSaveBlocks}
-                          disabled={actionLoading}
-                          className="bg-slate-900 hover:bg-slate-800 text-white font-bold h-14 px-8 text-base shadow-lg"
-                        >
-                          {actionLoading ? "Salvando..." : "Salvar Calendário"}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* ABA: RESERVA MANUAL */}
-                {auditTab === "reservar" && (
-                  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                    <div className="bg-white border border-slate-200 p-8 rounded-3xl shadow-sm">
-                      <div className="mb-6 border-b border-slate-100 pb-6">
-                        <h3 className="text-xl font-black text-slate-900 flex items-center gap-2">
-                          <CalendarPlus className="w-6 h-6 text-[#BF4B24]" />{" "}
-                          Nova Reserva Avulsa
-                        </h3>
-                        <p className="text-sm font-medium text-slate-500 mt-1 max-w-2xl">
-                          Abaixo você visualiza os horários originais da sala.
-                          Navegue pelos dias e selecione quantos horários
-                          desejar para adicionar ao carrinho do profissional.
-                        </p>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                        {/* PASSO 1: Selecionar Data e Slot */}
-                        <div className="space-y-6">
-                          <div>
-                            <label className="text-sm font-bold text-slate-700 mb-2 block">
-                              1. Data da Sessão
-                            </label>
-                            <Input
-                              type="date"
-                              value={format(manualDate, "yyyy-MM-dd")}
-                              onChange={(e) => {
-                                const d = new Date(
-                                  `${e.target.value}T12:00:00`,
-                                );
-                                setManualDate(d);
-                              }}
-                              className="h-12 bg-slate-50 border-slate-200 rounded-xl font-bold"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="text-sm font-bold text-slate-700 mb-2 flex items-center justify-between">
-                              <span>2. Escolha os Horários</span>
-                              <span className="text-[10px] text-[#BF4B24] font-medium bg-[#BF4B24]/10 border border-[#BF4B24]/20 px-2 py-1 rounded-md">
-                                Multi-Seleção Ativa
-                              </span>
-                            </label>
-
-                            <div className="grid grid-cols-3 gap-2 bg-slate-50 p-4 rounded-2xl border border-slate-100 max-h-[300px] overflow-y-auto shadow-inner">
-                              {availableSlots.length === 0 ? (
-                                <div className="col-span-3 text-center py-6">
-                                  <AlertTriangle className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                                  <p className="text-slate-500 font-medium text-sm">
-                                    Nenhum horário disponível para esta data.
-                                  </p>
-                                </div>
-                              ) : (
-                                availableSlots.map((slot) => {
-                                  const isTaken = takenSlots.includes(slot);
-                                  const currentDateStr = format(
-                                    manualDate,
-                                    "yyyy-MM-dd",
-                                  );
-                                  const isSelected = selectedSlots.some(
-                                    (s) =>
-                                      format(s.date, "yyyy-MM-dd") ===
-                                        currentDateStr && s.slot === slot,
-                                  );
-
-                                  return (
-                                    <button
-                                      key={slot}
-                                      type="button"
-                                      disabled={isTaken && !isSelected}
-                                      onClick={() =>
-                                        toggleSlot(manualDate, slot)
-                                      }
-                                      className={`py-2 text-xs font-bold rounded-lg transition-all border ${
-                                        isTaken && !isSelected
-                                          ? "bg-slate-200 text-slate-400 border-slate-200 cursor-not-allowed opacity-50"
-                                          : isSelected
-                                            ? "bg-[#BF4B24] text-white border-[#BF4B24] shadow-md transform scale-105"
-                                            : "bg-white text-slate-700 hover:border-[#BF4B24]/40 border-slate-200 shadow-sm"
-                                      }`}
-                                    >
-                                      {slot}
-                                    </button>
-                                  );
-                                })
-                              )}
-                            </div>
-                          </div>
-
-                          {/* RESUMO DO CARRINHO */}
-                          {selectedSlots.length > 0 && (
-                            <div className="p-4 bg-orange-50 border border-orange-200 rounded-2xl">
-                              <p className="text-xs font-black text-orange-900 uppercase tracking-widest mb-3">
-                                Carrinho: {selectedSlots.length} Sessão(ões)
-                              </p>
-                              <div className="flex flex-wrap gap-2">
-                                {selectedSlots.map((s, idx) => (
-                                  <Badge
-                                    key={idx}
-                                    className="bg-[#BF4B24] text-white border-0 py-1 px-2"
-                                  >
-                                    {format(s.date, "dd/MM")} • {s.slot}
-                                    <button
-                                      type="button"
-                                      onClick={() => toggleSlot(s.date, s.slot)}
-                                      className="ml-2 hover:text-red-300 transition-colors"
-                                    >
-                                      <XCircle className="w-3 h-3" />
-                                    </button>
-                                  </Badge>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* PASSO 2: Especialista e Pagamento */}
-                        <div className="space-y-6">
-                          <div>
-                            <label className="text-sm font-bold text-slate-700 mb-2 block">
-                              3. Selecionar Especialista
-                            </label>
-
-                            {!selectedProf ? (
-                              <div className="relative">
-                                <Search className="absolute left-3 top-3.5 w-4 h-4 text-slate-400" />
-                                <Input
-                                  placeholder="Digite o nome do profissional..."
-                                  value={profSearch}
-                                  onChange={(e) =>
-                                    setProfSearch(e.target.value)
-                                  }
-                                  className="h-12 pl-10 bg-slate-50 border-slate-200 rounded-xl z-10 relative"
-                                />
-
-                                {profSearch.length > 0 && (
-                                  <div className="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-60 overflow-y-auto">
-                                    {filteredProfessionals.length === 0 ? (
-                                      <div className="p-4 text-center text-sm text-slate-500 font-medium">
-                                        Nenhum profissional encontrado.
-                                      </div>
-                                    ) : (
-                                      filteredProfessionals.map((p) => (
-                                        <div
-                                          key={p.id}
-                                          onClick={() => setSelectedProf(p)}
-                                          className="p-3 hover:bg-slate-50 cursor-pointer border-b border-slate-100 last:border-0 flex justify-between items-center transition-colors"
-                                        >
-                                          <div>
-                                            <p className="text-sm font-bold text-slate-900">
-                                              {p.full_name ||
-                                                "Sem Nome Cadastrado"}
-                                            </p>
-                                            <p className="text-[10px] text-slate-500">
-                                              CPF: {p.cpf || "Não informado"}
-                                            </p>
-                                          </div>
-                                          <Badge className="bg-slate-100 text-slate-600 border-0">
-                                            {p.wallet_balance || 0} CR
-                                          </Badge>
-                                        </div>
-                                      ))
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            ) : (
-                              <div className="flex items-center justify-between bg-orange-50 border border-orange-200 p-3 rounded-xl">
-                                <div className="flex items-center gap-3">
-                                  <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center border border-orange-200">
-                                    <UserCheck className="w-5 h-5 text-[#BF4B24]" />
-                                  </div>
-                                  <div>
-                                    <p className="font-bold text-orange-900 text-sm">
-                                      {selectedProf.full_name}
-                                    </p>
-                                    <p className="text-xs font-medium text-[#BF4B24]">
-                                      Saldo atual:{" "}
-                                      {selectedProf.wallet_balance || 0} CR
-                                    </p>
-                                  </div>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedProf(null);
-                                    setProfSearch("");
-                                  }}
-                                  className="text-xs font-bold text-[#BF4B24] hover:text-[#9A3C1D] hover:underline"
-                                >
-                                  Trocar
-                                </button>
-                              </div>
-                            )}
-                          </div>
-
-                          <div
-                            className={`transition-opacity duration-300 ${!selectedProf || selectedSlots.length === 0 ? "opacity-30 pointer-events-none" : "opacity-100"}`}
-                          >
-                            <label className="text-sm font-bold text-slate-700 mb-2 block">
-                              4. Forma de Pagamento
-                            </label>
-                            <div className="grid grid-cols-2 gap-3">
-                              <button
-                                type="button"
-                                onClick={() => setManualPaymentMethod("wallet")}
-                                className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "wallet" ? "border-[#BF4B24] bg-[#BF4B24]/10 text-[#BF4B24]" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
-                              >
-                                <Wallet className="w-5 h-5" />
-                                <span className="text-xs font-bold text-center">
-                                  Abater da Carteira (-
-                                  {selectedSlots.length || 1} CR)
-                                </span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setManualPaymentMethod("pix")}
-                                className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "pix" ? "border-emerald-600 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
-                              >
-                                <QrCode className="w-5 h-5" />
-                                <span className="text-xs font-bold text-center">
-                                  Pix Recebido Externo
-                                </span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setManualPaymentMethod("card")}
-                                className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "card" ? "border-blue-600 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
-                              >
-                                <CreditCard className="w-5 h-5" />
-                                <span className="text-xs font-bold text-center">
-                                  Maquininha (Cartão)
-                                </span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setManualPaymentMethod("cash")}
-                                className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "cash" ? "border-amber-600 bg-amber-50 text-amber-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
-                              >
-                                <Banknote className="w-5 h-5" />
-                                <span className="text-xs font-bold text-center">
-                                  Dinheiro em Espécie
-                                </span>
-                              </button>
-                            </div>
-                          </div>
-
-                          <div className="pt-4 border-t border-slate-100">
-                            <Button
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+                        {(["start", "vip", "master"] as const).map(
+                          (tierKey) => (
+                            <button
+                              key={tierKey}
                               type="button"
-                              onClick={handleManualBookingSubmit}
-                              disabled={
-                                !selectedProf ||
-                                selectedSlots.length === 0 ||
-                                actionLoading
-                              }
-                              className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black text-base shadow-lg"
+                              onClick={() => setSelectedTier(tierKey)}
+                              className={`p-4 rounded-xl border-2 text-left transition-all ${
+                                selectedTier === tierKey
+                                  ? "border-[#BF4B24] bg-orange-50/40"
+                                  : "border-slate-100 bg-white"
+                              }`}
                             >
-                              {actionLoading ? (
-                                <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                              ) : (
-                                <CheckCircle2 className="w-5 h-5 mr-2" />
-                              )}
-                              Confirmar {selectedSlots.length} Reserva(s)
-                            </Button>
+                              <h4 className="font-black uppercase text-slate-900">
+                                {tierKey}
+                              </h4>
+                            </button>
+                          ),
+                        )}
+                      </div>
+
+                      <div className="p-4 border border-orange-200 bg-orange-50/50 rounded-2xl mb-6 flex items-center justify-between gap-4">
+                        <div>
+                          <h4 className="font-black text-slate-900 text-sm">
+                            Selo Fusion Partner
+                          </h4>
+                          <p className="text-xs text-slate-600">
+                            Habilitar locação por hora avulsa.
+                          </p>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={isPartner}
+                          onChange={(e) => setIsPartner(e.target.checked)}
+                          className="h-5 w-5 accent-[#BF4B24]"
+                        />
+                      </div>
+
+                      <Button
+                        onClick={handleSaveAudit}
+                        disabled={actionLoading}
+                        className="w-full h-12 bg-slate-900 hover:bg-slate-800 text-white font-bold"
+                      >
+                        {actionLoading ? "Salvando..." : "Salvar Configurações"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {auditTab === "editar" && (
+                  <div className="bg-white border border-slate-200 p-5 lg:p-8 rounded-2xl space-y-5">
+                    <div>
+                      <label className="text-sm font-bold text-slate-700 mb-1.5 block">
+                        Nome da Sala
+                      </label>
+                      <Input
+                        value={editForm.name}
+                        onChange={(e) =>
+                          setEditForm({ ...editForm, name: e.target.value })
+                        }
+                        className="h-12 font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-bold text-slate-700 mb-1.5 block">
+                        Descrição
+                      </label>
+                      <textarea
+                        value={editForm.description}
+                        onChange={(e) =>
+                          setEditForm({
+                            ...editForm,
+                            description: e.target.value,
+                          })
+                        }
+                        className="w-full border border-slate-200 rounded-xl p-3 min-h-[130px]"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-bold text-slate-700 mb-1.5 block">
+                        Valor Base Hora (R$)
+                      </label>
+                      <Input
+                        type="number"
+                        value={editForm.price}
+                        onChange={(e) =>
+                          setEditForm({ ...editForm, price: e.target.value })
+                        }
+                        className="h-12 font-black max-w-xs"
+                      />
+                    </div>
+                    <Button
+                      onClick={handleSaveInfoEdit}
+                      disabled={actionLoading}
+                      className="w-full h-12 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black"
+                    >
+                      Salvar Edições
+                    </Button>
+                  </div>
+                )}
+
+                {auditTab === "agenda" && (
+                  <div className="bg-white border border-slate-200 p-5 lg:p-8 rounded-2xl space-y-6">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-lg font-black text-slate-900 capitalize">
+                        {format(currentMonth, "MMMM yyyy", { locale: ptBR })}
+                      </h3>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() =>
+                            setCurrentMonth(subMonths(currentMonth, 1))
+                          }
+                        >
+                          <ChevronLeft className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() =>
+                            setCurrentMonth(addMonths(currentMonth, 1))
+                          }
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+                    {renderCalendar()}
+                    <Button
+                      onClick={handleSaveBlocks}
+                      disabled={actionLoading}
+                      className="w-full h-12 bg-slate-900 text-white font-bold"
+                    >
+                      Salvar Calendário
+                    </Button>
+                  </div>
+                )}
+
+                {auditTab === "reservar" && (
+                  <div className="bg-white border border-slate-200 p-5 lg:p-8 rounded-2xl space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-4">
+                        <div>
+                          <label className="text-sm font-bold text-slate-700 mb-1.5 block">
+                            1. Data da Sessão
+                          </label>
+                          <Input
+                            type="date"
+                            value={format(manualDate, "yyyy-MM-dd")}
+                            onChange={(e) =>
+                              setManualDate(
+                                new Date(`${e.target.value}T12:00:00`),
+                              )
+                            }
+                            className="h-11 font-bold"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-sm font-bold text-slate-700 mb-1.5 block">
+                            2. Horários Disponíveis
+                          </label>
+                          <div className="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-100 max-h-[260px] overflow-y-auto">
+                            {availableSlots.map((slot) => {
+                              const isTaken = takenSlots.includes(slot);
+                              const currentDateStr = format(
+                                manualDate,
+                                "yyyy-MM-dd",
+                              );
+                              const isSelected = selectedSlots.some(
+                                (s) =>
+                                  format(s.date, "yyyy-MM-dd") ===
+                                    currentDateStr && s.slot === slot,
+                              );
+                              return (
+                                <button
+                                  key={slot}
+                                  type="button"
+                                  disabled={isTaken && !isSelected}
+                                  onClick={() => toggleSlot(manualDate, slot)}
+                                  className={`py-2 text-xs font-bold rounded-lg border ${
+                                    isTaken && !isSelected
+                                      ? "bg-slate-200 text-slate-400 opacity-50"
+                                      : isSelected
+                                        ? "bg-[#BF4B24] text-white border-[#BF4B24]"
+                                        : "bg-white text-slate-700"
+                                  }`}
+                                >
+                                  {slot}
+                                </button>
+                              );
+                            })}
                           </div>
                         </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        <div>
+                          <label className="text-sm font-bold text-slate-700 mb-1.5 block">
+                            3. Selecionar Especialista
+                          </label>
+                          {!selectedProf ? (
+                            <div className="relative">
+                              <Input
+                                placeholder="Buscar profissional..."
+                                value={profSearch}
+                                onChange={(e) => setProfSearch(e.target.value)}
+                                className="h-11"
+                              />
+                              {profSearch.length > 0 && (
+                                <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-52 overflow-y-auto">
+                                  {filteredProfessionals.map((p) => (
+                                    <div
+                                      key={p.id}
+                                      onClick={() => setSelectedProf(p)}
+                                      className="p-3 hover:bg-slate-50 cursor-pointer border-b border-slate-100 flex justify-between items-center"
+                                    >
+                                      <span className="text-xs font-bold">
+                                        {p.full_name}
+                                      </span>
+                                      <Badge className="bg-slate-100 text-slate-700 border-0">
+                                        {p.wallet_balance || 0} CR
+                                      </Badge>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between bg-orange-50 border border-orange-200 p-3 rounded-xl">
+                              <div>
+                                <p className="font-bold text-sm">
+                                  {selectedProf.full_name}
+                                </p>
+                                <p className="text-xs text-[#BF4B24] font-bold">
+                                  Saldo: {selectedProf.wallet_balance || 0} CR
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedProf(null)}
+                                className="text-xs font-bold text-[#BF4B24] underline"
+                              >
+                                Trocar
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        <Button
+                          type="button"
+                          onClick={handleManualBookingSubmit}
+                          disabled={
+                            !selectedProf ||
+                            selectedSlots.length === 0 ||
+                            actionLoading
+                          }
+                          className="w-full h-12 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black"
+                        >
+                          Confirmar {selectedSlots.length} Reserva(s)
+                        </Button>
                       </div>
                     </div>
                   </div>
@@ -1556,13 +1393,10 @@ function AdminRoomsTab() {
     );
   }
 
-  // ==========================================
-  // LISTAGEM PADRÃO DAS SALAS
-  // ==========================================
   return (
-    <div className="space-y-8 max-w-7xl mx-auto pb-12 p-8 animate-in fade-in">
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="p-4 lg:p-8 max-w-7xl mx-auto pb-24">
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+        <div className="p-4 lg:p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <h3 className="text-lg font-black text-slate-900">
               Listagem Completa de Salas
@@ -1571,7 +1405,7 @@ function AdminRoomsTab() {
               Gerencie todo o inventário da plataforma
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
@@ -1587,7 +1421,7 @@ function AdminRoomsTab() {
                 placeholder="Buscar sala ou anfitrião..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="h-10 pl-9 w-64 rounded-xl border-slate-200 bg-slate-50 font-medium"
+                className="h-10 pl-9 sm:w-64 rounded-xl border-slate-200 bg-slate-50 font-medium"
               />
             </div>
           </div>
@@ -1617,7 +1451,7 @@ function AdminRoomsTab() {
                 return (
                   <tr
                     key={room.id}
-                    className="hover:bg-slate-50/80 transition-colors group"
+                    className="hover:bg-slate-50/80 transition-colors"
                   >
                     <td className="px-6 py-4">
                       <p className="font-bold text-slate-900">{room.name}</p>
@@ -1631,7 +1465,7 @@ function AdminRoomsTab() {
                           Partner
                         </Badge>
                       )}
-                      <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                      <span className="text-xs font-bold text-slate-500 uppercase">
                         {room.tier || "Start"}
                       </span>
                     </td>
@@ -1652,39 +1486,34 @@ function AdminRoomsTab() {
                         </Badge>
                       )}
                     </td>
-                    <td className="px-6 py-4 flex items-center justify-end gap-2 opacity-50 group-hover:opacity-100 transition-opacity">
+                    <td className="px-6 py-4 flex items-center justify-end gap-1.5">
                       <Button
                         variant="ghost"
                         size="icon"
                         onClick={() => openAuditPanel(room)}
-                        className="h-8 w-8 text-slate-500 hover:text-slate-900 hover:bg-slate-100"
+                        className="h-8 w-8 text-slate-600 hover:bg-slate-100"
                       >
                         <Eye className="w-4 h-4" />
                       </Button>
-                      {room.is_active ? (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleStatusChange(room.id, false)}
-                          className="h-8 w-8 text-slate-400 hover:text-amber-600 hover:bg-amber-50"
-                        >
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() =>
+                          handleStatusChange(room.id, !room.is_active)
+                        }
+                        className="h-8 w-8 text-slate-500"
+                      >
+                        {room.is_active ? (
                           <XCircle className="w-4 h-4" />
-                        </Button>
-                      ) : (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleStatusChange(room.id, true)}
-                          className="h-8 w-8 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50"
-                        >
+                        ) : (
                           <CheckCircle2 className="w-4 h-4" />
-                        </Button>
-                      )}
+                        )}
+                      </Button>
                       <Button
                         variant="ghost"
                         size="icon"
                         onClick={() => handleDelete(room.id)}
-                        className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                        className="h-8 w-8 text-slate-400 hover:text-red-600"
                       >
                         <Trash2 className="w-4 h-4" />
                       </Button>

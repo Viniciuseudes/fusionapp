@@ -18,6 +18,16 @@ import {
   FileText,
   Sparkles,
   ExternalLink,
+  User,
+  Phone,
+  Mail,
+  MapPin,
+  Award,
+  Wallet,
+  MessageCircle,
+  PlusCircle,
+  FolderOpen,
+  CheckCircle2,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -57,6 +67,33 @@ import {
 } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useToast } from "@/hooks/use-toast";
+
+interface SpecialistProfile {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  phone: string | null;
+  whatsapp: string | null;
+  cpf: string | null;
+  specialty: string | null;
+  council: string | null;
+  council_number: string | null;
+  gender: string | null;
+  birth_date: string | null;
+  avatar_url: string | null;
+  cep: string | null;
+  address_street: string | null;
+  address_number: string | null;
+  address_complement: string | null;
+  address_neighborhood: string | null;
+  address_city: string | null;
+  address_state: string | null;
+  created_at: string | null;
+  wallet_start: number;
+  wallet_vip: number;
+  wallet_master: number;
+  wallet_total: number;
+}
 
 interface BookingInfo {
   id: string;
@@ -160,6 +197,9 @@ export function AdminBookingsTab({
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [bookings, setBookings] = useState<BookingInfo[]>([]);
+  const [profilesById, setProfilesById] = useState<
+    Map<string, SpecialistProfile>
+  >(new Map());
 
   const [startDate, setStartDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [endDate, setEndDate] = useState(format(new Date(), "yyyy-MM-dd"));
@@ -173,6 +213,18 @@ export function AdminBookingsTab({
   );
   const [isViewOpen, setIsViewOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+
+  // Modal de Perfil do Profissional e Injeção de Créditos (Sheet)
+  const [selectedSpecialist, setSelectedSpecialist] =
+    useState<SpecialistProfile | null>(null);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [injectAmount, setInjectAmount] = useState("8");
+  const [injectTier, setInjectTier] = useState<"start" | "vip" | "master">(
+    "start",
+  );
+  const [injectValidityDays, setInjectValidityDays] = useState("30");
+  const [injectReason, setInjectReason] = useState("");
+  const [injectLoading, setInjectLoading] = useState(false);
 
   // Modal de Reagendamento (Dialog)
   const [isRescheduleOpen, setIsRescheduleOpen] = useState(false);
@@ -272,7 +324,12 @@ export function AdminBookingsTab({
               .in("booking_id", bookingIds)
           : Promise.resolve({ data: [] as any[] }),
         userIds.length > 0
-          ? supabase.from("profiles").select("id, full_name").in("id", userIds)
+          ? supabase
+              .from("profiles")
+              .select(
+                "id, full_name, email, phone, whatsapp, cpf, specialty, council, council_number, gender, birth_date, avatar_url, cep, address_street, address_number, address_complement, address_neighborhood, address_city, address_state, created_at",
+              )
+              .in("id", userIds)
           : Promise.resolve({ data: [] as any[] }),
         roomIds.length > 0
           ? supabase.from("room_contracts").select("*").in("room_id", roomIds)
@@ -296,9 +353,6 @@ export function AdminBookingsTab({
               .in("id", hostIds)
           : { data: [] as any[] };
 
-      const usersMap = new Map<string, string>(
-        usersRes.data?.map((u: any) => [u.id, u.full_name]) || [],
-      );
       const hostsMap = new Map<string, string>(
         hostsRes.data?.map((h: any) => [h.id, h.full_name]) || [],
       );
@@ -309,6 +363,40 @@ export function AdminBookingsTab({
         list.push(tx);
         userWalletMap.set(tx.user_id, list);
       });
+
+      const nowDate = new Date();
+      const richProfilesMap = new Map<string, SpecialistProfile>();
+      (usersRes.data || []).forEach((u: any) => {
+        const txs = userWalletMap.get(u.id) || [];
+        let startBal = 0;
+        let vipBal = 0;
+        let masterBal = 0;
+
+        txs.forEach((tx: any) => {
+          const amt = Number(tx.amount || 0);
+          if (amt > 0 && tx.expires_at && new Date(tx.expires_at) < nowDate) {
+            return;
+          }
+          const t = normalizeTier(tx.tier);
+          if (t === "master") masterBal += amt;
+          else if (t === "vip") vipBal += amt;
+          else startBal += amt;
+        });
+
+        richProfilesMap.set(u.id, {
+          ...u,
+          wallet_start: Math.max(0, startBal),
+          wallet_vip: Math.max(0, vipBal),
+          wallet_master: Math.max(0, masterBal),
+          wallet_total: Math.max(0, startBal + vipBal + masterBal),
+        });
+      });
+      setProfilesById(richProfilesMap);
+
+      // Se a gaveta de especialista estiver aberta, atualiza os saldos em tela
+      if (selectedSpecialist && richProfilesMap.has(selectedSpecialist.id)) {
+        setSelectedSpecialist(richProfilesMap.get(selectedSpecialist.id)!);
+      }
 
       const contractsData = contractsRes.data || [];
       const contractsById = new Map<string, any>(
@@ -415,8 +503,7 @@ export function AdminBookingsTab({
         const hostId = room?.host_id;
         const clinicName = hostId ? hostsMap.get(hostId) : "Fusion Clinic";
         const roomTier = normalizeTier(room?.tier);
-        const specialistName =
-          usersMap.get(b.user_id) || "Especialista Desconhecido";
+        const specialistProfile = richProfilesMap.get(b.user_id);
 
         const slotUnits = calculateSlotUnits(b.start_time, b.end_time);
 
@@ -464,7 +551,10 @@ export function AdminBookingsTab({
             pricing_label: typeLabel,
             room_tier: roomTier,
             room_id: b.room_id,
-            specialist_name: linkedContract?.specialist_name || specialistName,
+            specialist_name:
+              linkedContract?.specialist_name ||
+              specialistProfile?.full_name ||
+              "Locatário de Contrato",
             room_name: room?.name || "Sala Removida",
             clinic_name: clinicName || "Fusion Clinic",
             is_contract: true,
@@ -536,7 +626,8 @@ export function AdminBookingsTab({
             pricing_label: `${formatTierLabel(roomTier)} • Reserva Direta`,
             room_tier: roomTier,
             room_id: b.room_id,
-            specialist_name: specialistName,
+            specialist_name:
+              specialistProfile?.full_name || "Especialista Desconhecido",
             room_name: room?.name || "Sala Removida",
             clinic_name: clinicName || "Fusion Clinic",
             is_contract: false,
@@ -704,7 +795,8 @@ export function AdminBookingsTab({
           pricing_label: pricingOriginLabel,
           room_tier: roomTier,
           room_id: b.room_id,
-          specialist_name: specialistName,
+          specialist_name:
+            specialistProfile?.full_name || "Especialista Desconhecido",
           room_name: room?.name || "Sala Removida",
           clinic_name: clinicName || "Fusion Clinic",
           is_contract: false,
@@ -733,25 +825,171 @@ export function AdminBookingsTab({
     }
   };
 
-  // Redirecionamento direto ao clicar no nome do especialista
-  const handleDirectToSpecialistTab = (
-    userId: string,
-    specialistName: string,
-  ) => {
+  // Abre a gaveta de Perfil Completo do Profissional
+  const handleOpenSpecialistProfile = async (userId: string) => {
+    if (!userId) return;
+    setInjectAmount("8");
+    setInjectTier("start");
+    setInjectValidityDays("30");
+    setInjectReason("");
+
+    const cached = profilesById.get(userId);
+    if (cached) {
+      setSelectedSpecialist(cached);
+      setIsProfileOpen(true);
+      return;
+    }
+
+    setActionLoading(true);
     try {
-      sessionStorage.setItem(
-        "fusion_admin_selected_specialist_id",
-        userId || "",
-      );
+      const { data: prof } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", userId)
+        .single();
+
+      if (prof) {
+        const specObj: SpecialistProfile = {
+          ...prof,
+          wallet_start: 0,
+          wallet_vip: 0,
+          wallet_master: 0,
+          wallet_total: 0,
+        };
+        setSelectedSpecialist(specObj);
+        setIsProfileOpen(true);
+      }
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Não foi possível abrir o perfil",
+        description: err.message,
+      });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // --- ENGINE DE INJEÇÃO DE CRÉDITOS DIRETO NA GAVETA DO ESPECIALISTA ---
+  const handleInjectCredits = async () => {
+    if (!selectedSpecialist) return;
+    const hoursNum = Number(injectAmount);
+    if (isNaN(hoursNum) || hoursNum === 0) {
+      return toast({
+        variant: "destructive",
+        title: "Quantidade inválida",
+        description:
+          "Informe a quantidade de créditos/horas que deseja injetar (ex: 8, 16 ou -1 para abater).",
+      });
+    }
+
+    setInjectLoading(true);
+    try {
+      const days = Math.max(1, Number(injectValidityDays) || 30);
+      const expiresAtIso =
+        hoursNum > 0
+          ? new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString()
+          : null;
+
+      const tierName = formatTierLabel(injectTier);
+      const defaultDesc =
+        hoursNum > 0
+          ? `Recarga Admin Manual (${hoursNum}h ${tierName})`
+          : `Ajuste/Débito Admin Manual (${hoursNum}h ${tierName})`;
+
+      const finalDescription = injectReason.trim()
+        ? `${injectReason.trim()} (${hoursNum}h ${tierName})`
+        : defaultDesc;
+
+      const { error: txErr } = await supabase
+        .from("wallet_transactions")
+        .insert({
+          user_id: selectedSpecialist.id,
+          amount: hoursNum,
+          type: hoursNum > 0 ? "credit" : "debit",
+          tier: injectTier,
+          description: finalDescription,
+          expires_at: expiresAtIso,
+        });
+
+      if (txErr) throw txErr;
+
+      // Notifica o especialista se for injeção positiva
+      if (hoursNum > 0) {
+        try {
+          await supabase.from("notifications").insert({
+            user_id: selectedSpecialist.id,
+            type: "wallet_credit",
+            title: "Novos Créditos Adicionados! 🎉",
+            content: `Foram adicionadas ${hoursNum}h de créditos (${tierName}) em sua carteira.`,
+            link: "/dashboard",
+            is_read: false,
+          });
+        } catch {}
+      }
+
+      // Atualiza imediatamente o estado visual da carteira na gaveta
+      const updatedSpec: SpecialistProfile = {
+        ...selectedSpecialist,
+        wallet_start:
+          injectTier === "start"
+            ? Math.max(0, selectedSpecialist.wallet_start + hoursNum)
+            : selectedSpecialist.wallet_start,
+        wallet_vip:
+          injectTier === "vip"
+            ? Math.max(0, selectedSpecialist.wallet_vip + hoursNum)
+            : selectedSpecialist.wallet_vip,
+        wallet_master:
+          injectTier === "master"
+            ? Math.max(0, selectedSpecialist.wallet_master + hoursNum)
+            : selectedSpecialist.wallet_master,
+        wallet_total: Math.max(0, selectedSpecialist.wallet_total + hoursNum),
+      };
+
+      setSelectedSpecialist(updatedSpec);
+      const nextMap = new Map(profilesById);
+      nextMap.set(updatedSpec.id, updatedSpec);
+      setProfilesById(nextMap);
+      setInjectReason("");
+
+      toast({
+        title:
+          hoursNum > 0
+            ? "Créditos injetados com sucesso!"
+            : "Saldo ajustado com sucesso!",
+        description: `${hoursNum > 0 ? `+${hoursNum}h` : `${hoursNum}h`} (${tierName}) aplicado na carteira de ${selectedSpecialist.full_name}.`,
+      });
+
+      fetchBookings();
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro ao injetar créditos",
+        description: err.message,
+      });
+    } finally {
+      setInjectLoading(false);
+    }
+  };
+
+  // Navega diretamente para a aba Especialistas (Dossiê Completo)
+  const handleGoToFullDossier = (spec: SpecialistProfile) => {
+    try {
+      sessionStorage.setItem("fusion_admin_selected_specialist_id", spec.id);
       sessionStorage.setItem(
         "fusion_admin_selected_specialist_name",
-        specialistName || "",
+        spec.full_name || "",
       );
     } catch {}
 
-    setIsViewOpen(false);
+    setIsProfileOpen(false);
     if (onOpenSpecialistDossier) {
-      onOpenSpecialistDossier(userId, specialistName);
+      onOpenSpecialistDossier(spec.id, spec.full_name || "");
+    } else {
+      toast({
+        title: "Redirecionando para Especialistas",
+        description: `Abra a aba Especialistas para ver o dossiê de ${spec.full_name}.`,
+      });
     }
   };
 
@@ -1258,6 +1496,23 @@ export function AdminBookingsTab({
     selectedRoomDetails?.image_url || selectedRoomDetails?.images,
   );
 
+  const specialistBookingsInView = selectedSpecialist
+    ? bookings.filter(
+        (b) => b.user_id === selectedSpecialist.id && b.status !== "cancelled",
+      )
+    : [];
+  const specialistTotalSpentInView = specialistBookingsInView.reduce(
+    (acc, curr) => acc + curr.gross_value_brl,
+    0,
+  );
+
+  const cleanPhoneForWa = (raw?: string | null) => {
+    if (!raw) return null;
+    const digits = raw.replace(/\D/g, "");
+    if (!digits) return null;
+    return digits.startsWith("55") ? digits : `55${digits}`;
+  };
+
   return (
     <div className="p-4 lg:p-8 animate-in fade-in duration-500 w-full pb-32 font-sans">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
@@ -1430,12 +1685,9 @@ export function AdminBookingsTab({
                       <button
                         type="button"
                         onClick={() =>
-                          handleDirectToSpecialistTab(
-                            booking.user_id,
-                            booking.specialist_name,
-                          )
+                          handleOpenSpecialistProfile(booking.user_id)
                         }
-                        title="Ir diretamente para o dossiê do especialista"
+                        title="Clique para abrir o perfil e injetar créditos"
                         className="font-bold text-[#BF4B24] hover:text-[#9A3C1D] hover:underline flex items-center gap-1.5 text-left transition-colors cursor-pointer"
                       >
                         <span>{booking.specialist_name}</span>
@@ -1529,6 +1781,333 @@ export function AdminBookingsTab({
           </p>
         </div>
       </div>
+
+      {/* MODAL 0: FICHA DE PERFIL DO PROFISSIONAL + INJEÇÃO DE CRÉDITOS + ATALHO DOSSIÊ */}
+      <Sheet open={isProfileOpen} onOpenChange={setIsProfileOpen}>
+        <SheetContent className="overflow-y-auto w-full sm:max-w-md">
+          <SheetHeader>
+            <SheetTitle className="text-2xl font-black text-slate-900">
+              Perfil & Carteira do Especialista
+            </SheetTitle>
+            <SheetDescription>
+              Gerencie os créditos, dados de contato ou acesse o dossiê
+              completo.
+            </SheetDescription>
+          </SheetHeader>
+
+          {selectedSpecialist && (
+            <div className="mt-6 space-y-5 pb-8">
+              {/* CABEÇALHO DO PROFISSIONAL */}
+              <div className="flex items-center gap-4 p-4 rounded-2xl bg-slate-50 border border-slate-200">
+                <div className="w-16 h-16 rounded-full bg-orange-100 border-2 border-[#BF4B24]/30 overflow-hidden flex items-center justify-center shrink-0">
+                  {selectedSpecialist.avatar_url ? (
+                    <img
+                      src={selectedSpecialist.avatar_url}
+                      alt={selectedSpecialist.full_name || "Avatar"}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <User className="w-8 h-8 text-[#BF4B24]" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-lg font-black text-slate-900 truncate">
+                    {selectedSpecialist.full_name || "Sem Nome"}
+                  </h3>
+                  <p className="text-xs font-bold text-[#BF4B24]">
+                    {selectedSpecialist.specialty ||
+                      "Especialidade não informada"}
+                  </p>
+                  {(selectedSpecialist.council ||
+                    selectedSpecialist.council_number) && (
+                    <Badge className="mt-1.5 bg-slate-900 text-white border-0 text-[10px] font-bold">
+                      <Award className="w-3 h-3 mr-1" />
+                      {selectedSpecialist.council || "Conselho"}:{" "}
+                      {selectedSpecialist.council_number || "S/N"}
+                    </Badge>
+                  )}
+                </div>
+              </div>
+
+              {/* BOTÃO DE NAVEGAÇÃO DIRETA PARA O DOSSIÊ COMPLETO NA ABA ESPECIALISTAS */}
+              <Button
+                type="button"
+                onClick={() => handleGoToFullDossier(selectedSpecialist)}
+                className="w-full h-11 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-black text-xs shadow-md flex items-center justify-center gap-2"
+              >
+                <FolderOpen className="w-4 h-4 text-orange-400" />
+                Abrir Dossiê Completo na Aba Especialistas
+                <ExternalLink className="w-3.5 h-3.5 ml-1 opacity-70" />
+              </Button>
+
+              {/* SALDO ATUAL NA CARTEIRA POR CATEGORIA */}
+              <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <Wallet className="w-3.5 h-3.5 text-orange-400" />
+                    Saldo Atual na Carteira
+                  </span>
+                  <Badge className="bg-emerald-500/20 text-emerald-300 border-0 font-black">
+                    Total: {selectedSpecialist.wallet_total}h
+                  </Badge>
+                </div>
+                <div className="grid grid-cols-3 gap-2 pt-1">
+                  <div className="bg-slate-800 p-2.5 rounded-xl text-center">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase">
+                      Basic / Start
+                    </p>
+                    <p className="text-base font-black text-white mt-0.5">
+                      {selectedSpecialist.wallet_start}h
+                    </p>
+                  </div>
+                  <div className="bg-slate-800 p-2.5 rounded-xl text-center">
+                    <p className="text-[10px] font-bold text-purple-300 uppercase">
+                      VIP
+                    </p>
+                    <p className="text-base font-black text-purple-300 mt-0.5">
+                      {selectedSpecialist.wallet_vip}h
+                    </p>
+                  </div>
+                  <div className="bg-slate-800 p-2.5 rounded-xl text-center">
+                    <p className="text-[10px] font-bold text-amber-300 uppercase">
+                      Master
+                    </p>
+                    <p className="text-base font-black text-amber-300 mt-0.5">
+                      {selectedSpecialist.wallet_master}h
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* MOTOR DE INJEÇÃO DIRETA DE CRÉDITOS NA CARTEIRA */}
+              <div className="p-4 rounded-2xl border-2 border-[#BF4B24]/30 bg-orange-50/40 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-black uppercase tracking-wider text-[#BF4B24] flex items-center gap-1.5">
+                    <PlusCircle className="w-4 h-4" />
+                    Injetar / Ajustar Créditos na Carteira
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <Label className="text-[10px] font-bold text-slate-600 uppercase">
+                      Horas (CR)
+                    </Label>
+                    <Input
+                      type="number"
+                      value={injectAmount}
+                      onChange={(e) => setInjectAmount(e.target.value)}
+                      placeholder="Ex: 8"
+                      className="mt-1 h-9 bg-white font-black text-slate-900"
+                    />
+                  </div>
+
+                  <div>
+                    <Label className="text-[10px] font-bold text-slate-600 uppercase">
+                      Categoria
+                    </Label>
+                    <select
+                      value={injectTier}
+                      onChange={(e) =>
+                        setInjectTier(
+                          e.target.value as "start" | "vip" | "master",
+                        )
+                      }
+                      className="mt-1 w-full h-9 rounded-md border border-slate-200 bg-white px-2 text-xs font-bold text-slate-800"
+                    >
+                      <option value="start">Basic / Start</option>
+                      <option value="vip">VIP</option>
+                      <option value="master">Master</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <Label className="text-[10px] font-bold text-slate-600 uppercase">
+                      Validade (Dias)
+                    </Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      value={injectValidityDays}
+                      onChange={(e) => setInjectValidityDays(e.target.value)}
+                      placeholder="30"
+                      className="mt-1 h-9 bg-white font-bold text-slate-700"
+                    />
+                  </div>
+                </div>
+
+                {/* Atalhos rápidos de pacotes */}
+                <div className="flex flex-wrap gap-1.5">
+                  {[1, 4, 8, 16, 20, -1].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setInjectAmount(String(preset))}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-black border transition-all ${
+                        Number(injectAmount) === preset
+                          ? "bg-[#BF4B24] text-white border-[#BF4B24]"
+                          : "bg-white text-slate-600 border-slate-200 hover:border-orange-300"
+                      }`}
+                    >
+                      {preset > 0 ? `+${preset}h` : `${preset}h`}
+                    </button>
+                  ))}
+                </div>
+
+                <div>
+                  <Label className="text-[10px] font-bold text-slate-600 uppercase">
+                    Observação / Motivo (Opcional)
+                  </Label>
+                  <Input
+                    value={injectReason}
+                    onChange={(e) => setInjectReason(e.target.value)}
+                    placeholder="Ex: Pacote 8h pago via Pix direto / Bônus"
+                    className="mt-1 h-9 bg-white text-xs"
+                  />
+                </div>
+
+                <Button
+                  type="button"
+                  disabled={injectLoading}
+                  onClick={handleInjectCredits}
+                  className="w-full h-10 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black text-xs shadow-sm"
+                >
+                  {injectLoading ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="w-4 h-4 mr-2" />
+                  )}
+                  Confirmar Injeção de {injectAmount || 0}h (
+                  {formatTierLabel(injectTier)})
+                </Button>
+              </div>
+
+              {/* CONTATOS E AÇÃO RÁPIDA DE WHATSAPP */}
+              <div className="space-y-3 bg-white p-4 rounded-2xl border border-slate-200">
+                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                  Dados de Contato & Identificação
+                </p>
+
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <span className="text-slate-400 font-bold block">CPF</span>
+                    <span className="font-bold text-slate-800">
+                      {selectedSpecialist.cpf || "Não informado"}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 font-bold block">
+                      Data de Nascimento
+                    </span>
+                    <span className="font-bold text-slate-800">
+                      {selectedSpecialist.birth_date
+                        ? format(
+                            parseISO(selectedSpecialist.birth_date),
+                            "dd/MM/yyyy",
+                          )
+                        : "Não informada"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-100 space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500 font-bold flex items-center gap-1.5">
+                      <Phone className="w-3.5 h-3.5 text-slate-400" />
+                      WhatsApp / Telefone:
+                    </span>
+                    <span className="font-bold text-slate-900">
+                      {selectedSpecialist.whatsapp ||
+                        selectedSpecialist.phone ||
+                        "Não informado"}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500 font-bold flex items-center gap-1.5">
+                      <Mail className="w-3.5 h-3.5 text-slate-400" />
+                      E-mail:
+                    </span>
+                    <span className="font-bold text-slate-900 truncate max-w-[200px]">
+                      {selectedSpecialist.email || "Não informado"}
+                    </span>
+                  </div>
+                </div>
+
+                {cleanPhoneForWa(
+                  selectedSpecialist.whatsapp || selectedSpecialist.phone,
+                ) && (
+                  <a
+                    href={`https://wa.me/${cleanPhoneForWa(selectedSpecialist.whatsapp || selectedSpecialist.phone)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-3 w-full inline-flex items-center justify-center gap-2 h-10 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm transition-colors"
+                  >
+                    <MessageCircle className="w-4 h-4" />
+                    Conversar no WhatsApp
+                  </a>
+                )}
+              </div>
+
+              {/* ENDEREÇO CADASTRADO */}
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-1.5 text-xs">
+                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                  <MapPin className="w-3.5 h-3.5" /> Endereço Cadastrado
+                </p>
+                {selectedSpecialist.address_street ? (
+                  <>
+                    <p className="font-bold text-slate-800">
+                      {selectedSpecialist.address_street},{" "}
+                      {selectedSpecialist.address_number || "S/N"}
+                      {selectedSpecialist.address_complement
+                        ? ` (${selectedSpecialist.address_complement})`
+                        : ""}
+                    </p>
+                    <p className="text-slate-600 font-medium">
+                      {selectedSpecialist.address_neighborhood || ""} •{" "}
+                      {selectedSpecialist.address_city || ""} -{" "}
+                      {selectedSpecialist.address_state || ""}
+                    </p>
+                    {selectedSpecialist.cep && (
+                      <p className="text-slate-400 font-mono">
+                        CEP: {selectedSpecialist.cep}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-slate-400 font-medium">
+                    Endereço ainda não preenchido pelo profissional.
+                  </p>
+                )}
+              </div>
+
+              {/* RESUMO NO PERÍODO FILTRADO */}
+              <div className="p-4 rounded-2xl bg-orange-50/70 border border-orange-200 flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] font-black uppercase text-orange-900">
+                    Reservas Ativas no Filtro Atual
+                  </p>
+                  <p className="text-xs font-bold text-orange-700 mt-0.5">
+                    {specialistBookingsInView.length} agendamento(s)
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] font-bold uppercase text-orange-800">
+                    Volume no Período
+                  </p>
+                  <p className="text-base font-black text-[#BF4B24]">
+                    R${" "}
+                    {specialistTotalSpentInView.toLocaleString("pt-BR", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
 
       {/* MODAL 1: VISUALIZAR DETALHES, CONTRATO E REPASSES */}
       <Sheet open={isViewOpen} onOpenChange={setIsViewOpen}>
@@ -1669,12 +2248,10 @@ export function AdminBookingsTab({
                   <div>
                     <button
                       type="button"
-                      onClick={() =>
-                        handleDirectToSpecialistTab(
-                          selectedBooking.user_id,
-                          selectedBooking.specialist_name,
-                        )
-                      }
+                      onClick={() => {
+                        setIsViewOpen(false);
+                        handleOpenSpecialistProfile(selectedBooking.user_id);
+                      }}
                       className="font-bold text-[#BF4B24] hover:underline inline-flex items-center gap-1.5"
                     >
                       {selectedBooking.specialist_name}

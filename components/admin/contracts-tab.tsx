@@ -417,7 +417,6 @@ export function AdminContractsTab({
       } catch {}
     }
 
-    // Se for a 1ª faixa adicionada, cria já o Período 1 e o Período 2 para facilitar o preenchimento
     if (pricingTiers.length === 0) {
       let midDateStr = form.start_date;
       let nextAfterMidStr = form.end_date;
@@ -474,7 +473,6 @@ export function AdminContractsTab({
       const updated = prev.map((t) =>
         t.id === id ? { ...t, [field]: value } : t,
       );
-      // Sincroniza o valor principal do formulário com a faixa vigente ou 1ª faixa
       if (updated.length > 0 && field === "contract_value") {
         const activeOrFirst =
           updated.find(
@@ -522,7 +520,6 @@ export function AdminContractsTab({
     contract: RoomContract,
     fallbackUserId: string | null,
   ) => {
-    // Remove agendamentos deste contrato a partir da data de início do contrato para atualizar valores de todos os períodos
     const deleteFromIso = new Date(
       `${contract.start_date}T00:00:00`,
     ).toISOString();
@@ -853,7 +850,6 @@ export function AdminContractsTab({
         };
       });
 
-    // Se o utilizador preencheu faixas de período, o valor principal do contrato assume a faixa vigente (ou a 1ª faixa)
     const activeOrFirstTier =
       validTiers.find(
         (t) => todayIsoDate >= t.start_date && todayIsoDate <= t.end_date,
@@ -872,7 +868,6 @@ export function AdminContractsTab({
       });
     }
 
-    // Se houver faixas escalonadas, garante que start_date e end_date englobem todas as faixas
     let effectiveStartDate = form.start_date;
     let effectiveEndDate = form.end_date;
     if (validTiers.length > 0) {
@@ -1145,7 +1140,7 @@ export function AdminContractsTab({
     return matchesType && matchesStatus && matchesSearch;
   });
 
-  // KPIs Executivos de Contratos (considerando o valor do período vigente de cada contrato)
+  // KPIs Executivos de Contratos
   const activeContracts = contracts.filter((c) => c.status === "active");
   const totalContractRevenue = activeContracts.reduce(
     (acc, curr) => acc + getEffectiveContractPricing(curr).contractValue,
@@ -1263,22 +1258,22 @@ export function AdminContractsTab({
   const previewHostPct = Number(form.host_split_pct) || 0;
 
   return (
-    <div className="p-4 lg:p-8 animate-in fade-in duration-500 w-full pb-32 font-sans">
+    <div className="p-4 lg:p-8 w-full pb-32 font-sans">
       {/* HEADER */}
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6">
         <div>
-          <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-2">
-            <FileText className="w-8 h-8 text-[#BF4B24]" />
+          <h1 className="text-xl md:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-2">
+            <FileText className="w-7 h-7 text-[#BF4B24] shrink-0" />
             Gestão de Contratos, Turnos Fixos & Co-Anfitriões
           </h1>
-          <p className="text-sm text-slate-500 font-medium mt-1">
+          <p className="text-xs md:text-sm text-slate-500 font-medium mt-1">
             Controle de salas fixas mensais, valores escalonados por período,
             porcentagens personalizadas (Fusion vs Anfitrião) e PDFs.
           </p>
         </div>
         <Button
           onClick={openCreateModal}
-          className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black h-12 px-6 rounded-xl shadow-md"
+          className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black h-12 px-6 rounded-xl shadow-md w-full sm:w-auto"
         >
           <Plus className="w-5 h-5 mr-2" /> Novo Contrato de Sala
         </Button>
@@ -1286,7 +1281,7 @@ export function AdminContractsTab({
 
       {/* KPIs DE CONTRATOS */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold text-slate-400 uppercase">
               Volume Contratual Vigente
@@ -1309,7 +1304,7 @@ export function AdminContractsTab({
           </p>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold text-slate-400 uppercase">
               Contratos Vigentes
@@ -1324,7 +1319,7 @@ export function AdminContractsTab({
           </p>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold text-slate-400 uppercase">
               Salas com Co-Anfitrião
@@ -1337,7 +1332,7 @@ export function AdminContractsTab({
           </p>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold text-slate-400 uppercase">
               Mensalidades Vencidas ({currentMonthLabel})
@@ -1358,48 +1353,44 @@ export function AdminContractsTab({
       </div>
 
       {/* BARRA DE FILTROS */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-4 mb-6 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3 flex-1">
-          <div className="relative min-w-[240px] flex-1 max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <Input
-              placeholder="Buscar especialista, sala ou clínica..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="h-10 pl-9 rounded-xl border-slate-200"
-            />
-          </div>
-
-          <select
-            value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}
-            className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none"
-          >
-            <option value="all">Todas as Modalidades</option>
-            <option value="monthly_exclusive">
-              Fixo Mensal / Co-Anfitrião
-            </option>
-            <option value="fixed_shift">Turno Fixo Semanal</option>
-            <option value="fixed_daily">Diária Fixa Semanal</option>
-          </select>
-
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none"
-          >
-            <option value="all">Todos os Status</option>
-            <option value="active">Vigentes</option>
-            <option value="overdue">Pagamento em Atraso no Mês</option>
-            <option value="pending_signature">Aguardando Assinatura</option>
-            <option value="expired">Encerrados</option>
-            <option value="cancelled">Cancelados</option>
-          </select>
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-xs p-4 mb-6 flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center justify-between gap-3">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <Input
+            placeholder="Buscar especialista, sala ou clínica..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-10 pl-9 rounded-xl border-slate-200 w-full"
+          />
         </div>
+
+        <select
+          value={typeFilter}
+          onChange={(e) => setTypeFilter(e.target.value)}
+          className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none"
+        >
+          <option value="all">Todas as Modalidades</option>
+          <option value="monthly_exclusive">Fixo Mensal / Co-Anfitrião</option>
+          <option value="fixed_shift">Turno Fixo Semanal</option>
+          <option value="fixed_daily">Diária Fixa Semanal</option>
+        </select>
+
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none"
+        >
+          <option value="all">Todos os Status</option>
+          <option value="active">Vigentes</option>
+          <option value="overdue">Pagamento em Atraso no Mês</option>
+          <option value="pending_signature">Aguardando Assinatura</option>
+          <option value="expired">Encerrados</option>
+          <option value="cancelled">Cancelados</option>
+        </select>
       </div>
 
       {/* TABELA DE CONTRATOS */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
         {loading ? (
           <div className="py-20 flex justify-center">
             <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
@@ -1560,7 +1551,7 @@ export function AdminContractsTab({
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
                           {tiersList.length > 0 && (
-                            <Badge className="bg-indigo-100 text-indigo-800 border-0 text-[9px] font-black">
+                            <Badge className="bg-orange-100 text-[#BF4B24] border-0 text-[9px] font-black">
                               <Layers className="w-3 h-3 mr-1" />
                               Escalonado ({tiersList.length} períodos)
                             </Badge>
@@ -1577,7 +1568,7 @@ export function AdminContractsTab({
                         </div>
 
                         {tiersList.length > 0 && (
-                          <div className="mt-1 space-y-0.5 text-[10px] text-indigo-700 font-bold">
+                          <div className="mt-1 space-y-0.5 text-[10px] text-[#BF4B24] font-bold">
                             {tiersList.map((t, i) => (
                               <p key={t.id || i}>
                                 {i + 1}º:{" "}
@@ -1627,7 +1618,7 @@ export function AdminContractsTab({
                             >
                               <FileCheck2 className="w-3.5 h-3.5" />
                               Abrir PDF
-                              <ExternalLink className="w-3.5 h-3.5" />
+                              <ExternalLink className="w-3 h-3" />
                             </a>
                             <label
                               title="Substituir PDF assinado"
@@ -1697,11 +1688,11 @@ export function AdminContractsTab({
         )}
       </div>
 
-      {/* MODAL CRIAR / EDITAR CONTRATO */}
+      {/* MODAL COMPLETO CRIAR / EDITAR CONTRATO */}
       <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
-        <DialogContent className="sm:max-w-3xl max-h-[92vh] overflow-y-auto bg-white">
+        <DialogContent className="max-w-[95vw] sm:max-w-3xl max-h-[92vh] overflow-y-auto bg-white">
           <DialogHeader>
-            <DialogTitle className="text-xl font-black text-slate-900 flex items-center gap-2">
+            <DialogTitle className="text-lg sm:text-xl font-black text-slate-900 flex items-center gap-2">
               <FileText className="w-5 h-5 text-[#BF4B24]" />
               {editingContract
                 ? "Editar Contrato de Locação"
@@ -2005,7 +1996,7 @@ export function AdminContractsTab({
                         onClick={() => toggleDayOfWeek(d.id)}
                         className={`px-3.5 py-2 rounded-xl text-xs font-black border transition-all ${
                           active
-                            ? "bg-[#BF4B24] text-white border-[#BF4B24] shadow-sm"
+                            ? "bg-[#BF4B24] text-white border-[#BF4B24] shadow-xs"
                             : "bg-white text-slate-600 border-slate-200 hover:border-orange-300"
                         }`}
                       >
@@ -2095,7 +2086,7 @@ export function AdminContractsTab({
                   type="button"
                   size="sm"
                   onClick={handleAddPricingTier}
-                  className="h-8 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-lg"
+                  className="h-8 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black text-xs rounded-lg"
                 >
                   <Layers className="w-3.5 h-3.5 mr-1.5" />
                   {pricingTiers.length === 0
@@ -2104,8 +2095,8 @@ export function AdminContractsTab({
                 </Button>
               </div>
 
-              {/* CAMPOS PADRÃO (VALOR ÚNICO OU CICLO + DIA LIMITE) */}
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              {/* CAMPOS PADRÃO */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
                 <div>
                   <Label className="text-xs font-bold text-slate-300">
                     Ciclo de Faturamento
@@ -2180,11 +2171,11 @@ export function AdminContractsTab({
                 </div>
               </div>
 
-              {/* TABELA DE FAIXAS DE PREÇO POR PERÍODO (QUANDO ATIVADA) */}
+              {/* TABELA DE FAIXAS DE PREÇO POR PERÍODO */}
               {pricingTiers.length > 0 && (
-                <div className="p-3.5 rounded-xl bg-indigo-950/60 border border-indigo-500/40 space-y-3">
+                <div className="p-3.5 rounded-xl bg-slate-800/80 border border-orange-500/30 space-y-3">
                   <div className="flex items-center justify-between">
-                    <p className="text-xs font-black text-indigo-300 flex items-center gap-1.5">
+                    <p className="text-xs font-black text-orange-300 flex items-center gap-1.5">
                       <Layers className="w-4 h-4" />
                       Escalonamento de Valores por Período (Cada reserva na
                       agenda usará o valor da sua respectiva data)
@@ -2207,10 +2198,10 @@ export function AdminContractsTab({
                       return (
                         <div
                           key={tier.id}
-                          className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end bg-slate-900/90 p-3 rounded-xl border border-slate-800"
+                          className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end bg-slate-900/90 p-3 rounded-xl border border-slate-700"
                         >
                           <div className="md:col-span-3">
-                            <Label className="text-[10px] font-bold text-indigo-300 uppercase">
+                            <Label className="text-[10px] font-bold text-orange-300 uppercase">
                               {idx + 1}º Período: Início
                             </Label>
                             <Input
@@ -2228,7 +2219,7 @@ export function AdminContractsTab({
                           </div>
 
                           <div className="md:col-span-3">
-                            <Label className="text-[10px] font-bold text-indigo-300 uppercase">
+                            <Label className="text-[10px] font-bold text-orange-300 uppercase">
                               Até a Data
                             </Label>
                             <Input
@@ -2261,7 +2252,7 @@ export function AdminContractsTab({
                                   e.target.value,
                                 )
                               }
-                              className="mt-1 h-9 bg-slate-800 border-indigo-500/50 text-white text-xs font-black"
+                              className="mt-1 h-9 bg-slate-800 border-orange-500/50 text-white text-xs font-black"
                             />
                           </div>
 
@@ -2353,38 +2344,52 @@ export function AdminContractsTab({
               </div>
             </div>
 
-            {/* 6. ANEXO DO CONTRATO ASSINADO (PDF) */}
-            <div className="p-4 rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/60 flex flex-col md:flex-row items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-[#BF4B24] shrink-0">
-                  <UploadCloud className="w-5 h-5" />
+            {/* 6. ANEXO DO CONTRATO ASSINADO (PDF) + OBSERVAÇÕES */}
+            <div className="space-y-4">
+              <div className="p-4 rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/60 flex flex-col md:flex-row items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-[#BF4B24] shrink-0">
+                    <UploadCloud className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-black text-slate-900">
+                      Anexar Contrato Assinado (PDF)
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {pdfFile
+                        ? `Selecionado: ${pdfFile.name}`
+                        : editingContract?.pdf_filename
+                          ? `Arquivo atual: ${editingContract.pdf_filename}`
+                          : "Salve o PDF assinado pelas duas partes para consulta do Admin e do Anfitrião."}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-sm font-black text-slate-900">
-                    Anexar Contrato Assinado (PDF)
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    {pdfFile
-                      ? `Selecionado: ${pdfFile.name}`
-                      : editingContract?.pdf_filename
-                        ? `Arquivo atual: ${editingContract.pdf_filename}`
-                        : "Salve o PDF assinado pelas duas partes para consulta do Admin e do Anfitrião."}
-                  </p>
-                </div>
+                <label className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer shrink-0 transition-colors">
+                  Escolher Arquivo PDF
+                  <input
+                    type="file"
+                    accept="application/pdf"
+                    className="hidden"
+                    onChange={(e) => setPdfFile(e.target.files?.[0] || null)}
+                  />
+                </label>
               </div>
-              <label className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer shrink-0 transition-colors">
-                Escolher Arquivo PDF
-                <input
-                  type="file"
-                  accept="application/pdf"
-                  className="hidden"
-                  onChange={(e) => setPdfFile(e.target.files?.[0] || null)}
+
+              <div>
+                <Label className="text-xs font-bold text-slate-600">
+                  Observações Internas do Contrato (Opcional)
+                </Label>
+                <Input
+                  value={form.notes}
+                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                  placeholder="Ex: Reajuste acordado após o 3º mês / Cláusula específica"
+                  className="mt-1 bg-white"
                 />
-              </label>
+              </div>
             </div>
           </div>
 
-          <DialogFooter className="mt-4">
+          <DialogFooter className="mt-4 gap-2">
             <Button
               variant="ghost"
               onClick={() => setIsModalOpen(false)}
@@ -2415,3 +2420,5 @@ export function AdminContractsTab({
     </div>
   );
 }
+
+export default AdminContractsTab;

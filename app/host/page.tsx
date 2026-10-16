@@ -15,6 +15,8 @@ import {
   LogOut,
   FileText,
   Package,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 
 // Importações dos sub-componentes
@@ -60,19 +62,13 @@ export default function HostPage() {
 
   const [currentView, setCurrentView] = useState<HostView>("overview");
   const [selectedSpaceId, setSelectedSpaceId] = useState<string | null>(null);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
-  // LOGOUT SÊNIOR COM HARD RELOAD E LIMPEZA DE CACHE
   const handleLogout = async () => {
     try {
       const supabase = createClient();
-
-      // 1. Destrói a sessão real no banco de dados (Supabase)
       await supabase.auth.signOut();
-
-      // 2. Limpa qualquer lixo de sessão do navegador
       sessionStorage.clear();
-
-      // 3. HARD RELOAD: Força a página a recarregar limpando o cache do Next.js
       window.location.replace("/login");
     } catch (error) {
       console.error("Erro ao sair:", error);
@@ -81,22 +77,38 @@ export default function HostPage() {
 
   return (
     <div className="flex min-h-svh flex-col bg-slate-50">
-      {/* SIDEBAR DESKTOP */}
-      <aside className="hidden lg:flex fixed inset-y-0 left-0 z-40 w-64 flex-col border-r border-slate-200 bg-slate-900 shadow-xl">
-        <div className="flex items-center gap-3 px-6 py-6 border-b border-slate-800">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary shadow-sm">
-            <span className="text-primary-foreground font-black text-xl">
-              F
-            </span>
+      {/* SIDEBAR DESKTOP RECOLHÍVEL */}
+      <aside
+        className={cn(
+          "hidden lg:flex fixed inset-y-0 left-0 z-40 w-64 flex-col border-r border-slate-200 bg-slate-900 shadow-xl transition-transform duration-300 ease-in-out",
+          isSidebarCollapsed ? "-translate-x-full" : "translate-x-0",
+        )}
+      >
+        <div className="flex items-center justify-between gap-3 px-6 py-6 border-b border-slate-800">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary shadow-sm">
+              <span className="text-primary-foreground font-black text-xl">
+                F
+              </span>
+            </div>
+            <div>
+              <h1 className="text-base font-black text-white tracking-tight">
+                Fusion Host
+              </h1>
+              <p className="text-xs text-slate-400 font-medium uppercase tracking-wider">
+                Gestão de Clínicas
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-base font-black text-white tracking-tight">
-              Fusion Host
-            </h1>
-            <p className="text-xs text-slate-400 font-medium uppercase tracking-wider">
-              Gestão de Clínicas
-            </p>
-          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsSidebarCollapsed(true)}
+            title="Recolher menu lateral (Tela Cheia)"
+            className="p-2 rounded-xl border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
         </div>
 
         <nav className="flex flex-col gap-1 p-4 flex-1 overflow-y-auto">
@@ -138,8 +150,26 @@ export default function HostPage() {
         </div>
       </aside>
 
+      {/* BOTÃO FLUTUANTE PARA REABRIR SIDEBAR QUANDO RECOLHIDA NO DESKTOP */}
+      {isSidebarCollapsed && (
+        <button
+          type="button"
+          onClick={() => setIsSidebarCollapsed(false)}
+          title="Expandir menu lateral"
+          className="hidden lg:flex fixed top-4 left-4 z-50 items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 text-white shadow-lg border border-slate-700 hover:bg-slate-800 transition-all text-xs font-bold"
+        >
+          <ChevronRight className="h-4 w-4 text-[#BF4B24]" />
+          Menu
+        </button>
+      )}
+
       {/* CONTEÚDO DINÂMICO */}
-      <main className="flex-1 lg:ml-64 pb-20 lg:pb-0 h-screen overflow-hidden">
+      <main
+        className={cn(
+          "flex-1 pb-20 lg:pb-0 h-screen overflow-hidden transition-all duration-300 ease-in-out",
+          isSidebarCollapsed ? "lg:ml-0" : "lg:ml-64",
+        )}
+      >
         <div className="h-full overflow-y-auto">
           {currentView === "overview" && (
             <HostOverview
