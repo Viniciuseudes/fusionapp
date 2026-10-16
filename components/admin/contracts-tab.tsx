@@ -22,6 +22,7 @@ import {
   FileCheck2,
   Wallet,
   CalendarClock,
+  Layers,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -45,11 +46,21 @@ import {
 } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
+export interface ContractPricingTier {
+  id: string;
+  label?: string;
+  start_date: string;
+  end_date: string;
+  contract_value: number;
+  session_value?: number;
+}
+
 interface ContractScheduleConfig {
   daysOfWeek: number[]; // 0=Dom, 1=Seg, ..., 6=Sab
   shifts: ("morning" | "afternoon" | "night" | "fullday")[];
   startHour: number;
   endHour: number;
+  pricingTiers?: ContractPricingTier[];
 }
 
 interface RoomContract {
@@ -141,8 +152,20 @@ export function AdminContractsTab({
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [specSearch, setSpecSearch] = useState("");
 
+  // Faixas escalonadas de valor por período
+  const [pricingTiers, setPricingTiers] = useState<
+    {
+      id: string;
+      start_date: string;
+      end_date: string;
+      contract_value: string;
+      session_value: string;
+    }[]
+  >([]);
+
   const currentCompetence = format(new Date(), "yyyy-MM");
   const currentMonthLabel = format(new Date(), "MMM/yyyy", { locale: ptBR });
+  const todayIsoDate = format(new Date(), "yyyy-MM-dd");
 
   const [form, setForm] = useState({
     room_id: preselectedRoomId || "",
@@ -266,6 +289,7 @@ export function AdminContractsTab({
               shifts: ["fullday"],
               startHour: 8,
               endHour: 20,
+              pricingTiers: [],
             },
           };
         },
@@ -282,6 +306,51 @@ export function AdminContractsTab({
     } finally {
       setLoading(false);
     }
+  };
+
+  // Retorna o valor vigente do contrato na data de hoje (considerando faixas escalonadas se houver)
+  const getEffectiveContractPricing = (
+    c: RoomContract,
+    targetDateStr: string = todayIsoDate,
+  ): {
+    contractValue: number;
+    sessionValue: number;
+    activeTierLabel: string | null;
+    totalTiers: number;
+  } => {
+    const tiers = c.schedule_config?.pricingTiers || [];
+    if (tiers.length === 0) {
+      return {
+        contractValue: Number(c.contract_value || 0),
+        sessionValue: Number(c.session_value || 0),
+        activeTierLabel: null,
+        totalTiers: 0,
+      };
+    }
+
+    const matchedIdx = tiers.findIndex(
+      (t) => targetDateStr >= t.start_date && targetDateStr <= t.end_date,
+    );
+    const chosenTier = matchedIdx >= 0 ? tiers[matchedIdx] : tiers[0];
+    const occurrencesPerMonth = Math.max(
+      1,
+      (c.schedule_config?.daysOfWeek?.length || 1) * 4,
+    );
+    const cVal = Number(chosenTier.contract_value || c.contract_value || 0);
+    const sVal =
+      Number(chosenTier.session_value) > 0
+        ? Number(chosenTier.session_value)
+        : cVal / occurrencesPerMonth;
+
+    return {
+      contractValue: cVal,
+      sessionValue: sVal,
+      activeTierLabel:
+        matchedIdx >= 0
+          ? `${matchedIdx + 1}º Período (${format(parseISO(chosenTier.start_date), "dd/MM/yy")} a ${format(parseISO(chosenTier.end_date), "dd/MM/yy")})`
+          : `1º Período (${format(parseISO(chosenTier.start_date), "dd/MM/yy")} a ${format(parseISO(chosenTier.end_date), "dd/MM/yy")})`,
+      totalTiers: tiers.length,
+    };
   };
 
   const calculateContractOccurrenceDates = (
@@ -310,21 +379,121 @@ export function AdminContractsTab({
     form.daysOfWeek,
   );
 
-  const getComputedSessionValue = () => {
-    const manualSession = Number(form.session_value);
-    if (manualSession > 0) return manualSession;
-
-    const totalContractVal = Number(form.contract_value) || 0;
-    if (totalContractVal <= 0) return 0;
+  const getComputedSessionValueForAmount = (
+    contractValNum: number,
+    manualSessionNum?: number,
+  ) => {
+    if (manualSessionNum && manualSessionNum > 0) return manualSessionNum;
+    if (contractValNum <= 0) return 0;
 
     if (form.billing_cycle === "upfront") {
       return previewDates.length > 0
-        ? totalContractVal / previewDates.length
-        : totalContractVal;
+        ? contractValNum / previewDates.length
+        : contractValNum;
     }
 
     const occurrencesPerMonth = Math.max(1, form.daysOfWeek.length * 4);
-    return totalContractVal / occurrencesPerMonth;
+    return contractValNum / occurrencesPerMonth;
+  };
+
+  const getComputedSessionValue = () => {
+    return getComputedSessionValueForAmount(
+      Number(form.contract_value) || 0,
+      Number(form.session_value) || 0,
+    );
+  };
+
+  // Gerenciamento das Faixas de Preço por Período no Modal
+  const handleAddPricingTier = () => {
+    const lastTier = pricingTiers[pricingTiers.length - 1];
+    let defaultStart = form.start_date;
+    const defaultEnd = form.end_date;
+
+    if (lastTier && lastTier.end_date) {
+      try {
+        const nextDay = new Date(parseISO(lastTier.end_date));
+        nextDay.setDate(nextDay.getDate() + 1);
+        defaultStart = format(nextDay, "yyyy-MM-dd");
+      } catch {}
+    }
+
+    // Se for a 1ª faixa adicionada, cria já o Período 1 e o Período 2 para facilitar o preenchimento
+    if (pricingTiers.length === 0) {
+      let midDateStr = form.start_date;
+      let nextAfterMidStr = form.end_date;
+      try {
+        const s = parseISO(form.start_date);
+        const e = parseISO(form.end_date);
+        const halfDays = Math.max(1, Math.floor(differenceInDays(e, s) / 2));
+        const mid = new Date(s);
+        mid.setDate(mid.getDate() + halfDays);
+        midDateStr = format(mid, "yyyy-MM-dd");
+
+        const nextD = new Date(mid);
+        nextD.setDate(nextD.getDate() + 1);
+        nextAfterMidStr = format(nextD, "yyyy-MM-dd");
+      } catch {}
+
+      setPricingTiers([
+        {
+          id: `tier_${Date.now()}_1`,
+          start_date: form.start_date,
+          end_date: midDateStr,
+          contract_value: form.contract_value || "",
+          session_value: form.session_value || "",
+        },
+        {
+          id: `tier_${Date.now()}_2`,
+          start_date: nextAfterMidStr,
+          end_date: form.end_date,
+          contract_value: "",
+          session_value: "",
+        },
+      ]);
+      return;
+    }
+
+    setPricingTiers([
+      ...pricingTiers,
+      {
+        id: `tier_${Date.now()}`,
+        start_date: defaultStart,
+        end_date: defaultEnd,
+        contract_value: "",
+        session_value: "",
+      },
+    ]);
+  };
+
+  const handleUpdatePricingTier = (
+    id: string,
+    field: "start_date" | "end_date" | "contract_value" | "session_value",
+    value: string,
+  ) => {
+    setPricingTiers((prev) => {
+      const updated = prev.map((t) =>
+        t.id === id ? { ...t, [field]: value } : t,
+      );
+      // Sincroniza o valor principal do formulário com a faixa vigente ou 1ª faixa
+      if (updated.length > 0 && field === "contract_value") {
+        const activeOrFirst =
+          updated.find(
+            (t) => todayIsoDate >= t.start_date && todayIsoDate <= t.end_date,
+          ) || updated[0];
+        if (activeOrFirst && activeOrFirst.contract_value) {
+          setForm((f) => ({
+            ...f,
+            contract_value: activeOrFirst.contract_value,
+            session_value: activeOrFirst.session_value || f.session_value,
+          }));
+        }
+      }
+      return updated;
+    });
+  };
+
+  const handleRemovePricingTier = (id: string) => {
+    setPricingTiers((prev) => prev.filter((t) => t.id !== id));
   };
 
   // Sincronização automática das porcentagens Fusion (%) <-> Anfitrião (%)
@@ -348,17 +517,20 @@ export function AdminContractsTab({
     });
   };
 
-  // --- ENGINE DE MATERIALIZAÇÃO NA AGENDA (TABELA BOOKINGS) ---
+  // --- ENGINE DE MATERIALIZAÇÃO NA AGENDA COM SUPORTE A FAIXAS DE VALOR POR PERÍODO ---
   const syncContractBookings = async (
     contract: RoomContract,
     fallbackUserId: string | null,
   ) => {
-    const nowIso = new Date().toISOString();
+    // Remove agendamentos deste contrato a partir da data de início do contrato para atualizar valores de todos os períodos
+    const deleteFromIso = new Date(
+      `${contract.start_date}T00:00:00`,
+    ).toISOString();
     await supabase
       .from("bookings")
       .delete()
       .eq("contract_id", contract.id)
-      .gte("start_time", nowIso);
+      .gte("start_time", deleteFromIso);
 
     if (contract.status === "cancelled" || contract.status === "expired") {
       return 0;
@@ -369,6 +541,7 @@ export function AdminContractsTab({
       shifts: ["fullday"],
       startHour: 8,
       endHour: 20,
+      pricingTiers: [],
     };
 
     if (!cfg.daysOfWeek || cfg.daysOfWeek.length === 0) return 0;
@@ -385,7 +558,6 @@ export function AdminContractsTab({
     const endH = Number(cfg.endHour ?? 20);
     const durationHours = Math.max(1, endH - startH);
 
-    // Resolve um user_id válido para vincular na tabela bookings (Especialista -> Host da Sala -> Sessão -> 1º Perfil)
     const targetUserId =
       contract.specialist_id ||
       contract.host_id ||
@@ -394,11 +566,44 @@ export function AdminContractsTab({
 
     if (!targetUserId) return 0;
 
-    const sessionVal =
+    const defaultOccurrencesPerMonth = Math.max(1, cfg.daysOfWeek.length * 4);
+    const baseSessionVal =
       Number(contract.session_value) > 0
         ? Number(contract.session_value)
-        : Number(contract.contract_value) /
-          Math.max(1, cfg.daysOfWeek.length * 4);
+        : Number(contract.contract_value) / defaultOccurrencesPerMonth;
+
+    const tiers = cfg.pricingTiers || [];
+
+    const resolveSessionValueForDate = (dateObj: Date): number => {
+      if (tiers.length === 0) return baseSessionVal;
+
+      const dateStr = format(dateObj, "yyyy-MM-dd");
+      const matchingTier = tiers.find(
+        (t) => dateStr >= t.start_date && dateStr <= t.end_date,
+      );
+
+      if (!matchingTier) return baseSessionVal;
+
+      if (Number(matchingTier.session_value) > 0) {
+        return Number(matchingTier.session_value);
+      }
+
+      const tierContractVal = Number(matchingTier.contract_value || 0);
+      if (tierContractVal <= 0) return baseSessionVal;
+
+      if (contract.billing_cycle === "upfront") {
+        const tierOccurrences = calculateContractOccurrenceDates(
+          matchingTier.start_date,
+          matchingTier.end_date,
+          cfg.daysOfWeek,
+        );
+        return tierOccurrences.length > 0
+          ? tierContractVal / tierOccurrences.length
+          : tierContractVal;
+      }
+
+      return tierContractVal / defaultOccurrencesPerMonth;
+    };
 
     const bookingStatus =
       contract.status === "pending_signature" ? "pending_payment" : "confirmed";
@@ -410,6 +615,8 @@ export function AdminContractsTab({
       const endTime = new Date(dateObj);
       endTime.setHours(endH, 0, 0, 0);
 
+      const dateSpecificVal = resolveSessionValueForDate(dateObj);
+
       return {
         user_id: targetUserId,
         room_id: contract.room_id,
@@ -419,7 +626,7 @@ export function AdminContractsTab({
         total_cost: durationHours,
         contract_id: contract.id,
         booking_origin: `contract_${contract.contract_type}`,
-        agreed_value_brl: Number(sessionVal.toFixed(2)),
+        agreed_value_brl: Number(dateSpecificVal.toFixed(2)),
       };
     });
 
@@ -544,6 +751,7 @@ export function AdminContractsTab({
     setEditingContract(null);
     setPdfFile(null);
     setSpecSearch("");
+    setPricingTiers([]);
     setForm({
       room_id: preselectedRoomId || rooms[0]?.id || "",
       specialist_id: "",
@@ -588,6 +796,17 @@ export function AdminContractsTab({
         ? Number(c.host_split_pct)
         : Math.max(0, 100 - fusionPct);
 
+    const savedTiers = (c.schedule_config?.pricingTiers || []).map(
+      (t, idx) => ({
+        id: t.id || `tier_${idx}`,
+        start_date: t.start_date || c.start_date,
+        end_date: t.end_date || c.end_date,
+        contract_value: String(t.contract_value || ""),
+        session_value: t.session_value ? String(t.session_value) : "",
+      }),
+    );
+    setPricingTiers(savedTiers);
+
     setForm({
       room_id: c.room_id,
       specialist_id: c.specialist_id || "",
@@ -617,13 +836,52 @@ export function AdminContractsTab({
   };
 
   const handleSaveContract = async () => {
-    if (!form.room_id || !form.specialist_name || !form.contract_value) {
+    const validTiers: ContractPricingTier[] = pricingTiers
+      .filter((t) => t.start_date && t.end_date && Number(t.contract_value) > 0)
+      .map((t) => {
+        const cVal = Number(t.contract_value) || 0;
+        const sVal = getComputedSessionValueForAmount(
+          cVal,
+          Number(t.session_value) || 0,
+        );
+        return {
+          id: t.id,
+          start_date: t.start_date,
+          end_date: t.end_date,
+          contract_value: cVal,
+          session_value: Number(sVal.toFixed(2)),
+        };
+      });
+
+    // Se o utilizador preencheu faixas de período, o valor principal do contrato assume a faixa vigente (ou a 1ª faixa)
+    const activeOrFirstTier =
+      validTiers.find(
+        (t) => todayIsoDate >= t.start_date && todayIsoDate <= t.end_date,
+      ) || validTiers[0];
+
+    const finalContractValue = activeOrFirstTier
+      ? activeOrFirstTier.contract_value
+      : Number(form.contract_value) || 0;
+
+    if (!form.room_id || !form.specialist_name || finalContractValue <= 0) {
       return toast({
         variant: "destructive",
         title: "Campos obrigatórios",
         description:
-          "Selecione a sala, o especialista locatário e informe o valor do contrato.",
+          "Selecione a sala, o especialista locatário e informe o valor do contrato (ou das faixas de período).",
       });
+    }
+
+    // Se houver faixas escalonadas, garante que start_date e end_date englobem todas as faixas
+    let effectiveStartDate = form.start_date;
+    let effectiveEndDate = form.end_date;
+    if (validTiers.length > 0) {
+      const sortedStarts = validTiers.map((t) => t.start_date).sort();
+      const sortedEnds = validTiers.map((t) => t.end_date).sort();
+      if (sortedStarts[0] < effectiveStartDate)
+        effectiveStartDate = sortedStarts[0];
+      if (sortedEnds[sortedEnds.length - 1] > effectiveEndDate)
+        effectiveEndDate = sortedEnds[sortedEnds.length - 1];
     }
 
     const parsedDueDay = Math.min(31, Math.max(1, Number(form.due_day) || 8));
@@ -638,14 +896,12 @@ export function AdminContractsTab({
 
     setSaving(true);
     try {
-      // Obtém o utilizador da sessão se existir, mas NÃO bloqueia o Admin caso seja null!
       const { data: authData } = await supabase.auth.getUser();
       const currentUser = authData?.user || null;
 
       const selectedRoom = rooms.find((r) => r.id === form.room_id);
       const resolvedHostId = selectedRoom?.host_id || currentUser?.id || null;
 
-      // Se o utilizador digitou o nome de um especialista existente mas não clicou na lista, tenta vincular pelo nome
       let resolvedSpecialistId = form.specialist_id || null;
       if (!resolvedSpecialistId && form.specialist_name.trim()) {
         const matchedSpec = specialists.find(
@@ -656,7 +912,12 @@ export function AdminContractsTab({
         if (matchedSpec) resolvedSpecialistId = matchedSpec.id;
       }
 
-      const computedSessionVal = getComputedSessionValue();
+      const computedSessionVal = activeOrFirstTier?.session_value
+        ? activeOrFirstTier.session_value
+        : getComputedSessionValueForAmount(
+            finalContractValue,
+            Number(form.session_value) || 0,
+          );
 
       let pdfUrl = editingContract?.pdf_url || null;
       let pdfFilename = editingContract?.pdf_filename || null;
@@ -682,6 +943,7 @@ export function AdminContractsTab({
         shifts: [form.selectedShift],
         startHour: Number(form.startHour),
         endHour: Number(form.endHour),
+        pricingTiers: validTiers,
       };
 
       const payload: Record<string, any> = {
@@ -694,11 +956,11 @@ export function AdminContractsTab({
         specialist_phone: form.specialist_phone || null,
         contract_type: form.contract_type,
         status: form.status,
-        start_date: form.start_date,
-        end_date: form.end_date,
+        start_date: effectiveStartDate,
+        end_date: effectiveEndDate,
         billing_cycle: form.billing_cycle,
         due_day: parsedDueDay,
-        contract_value: Number(form.contract_value) || 0,
+        contract_value: finalContractValue,
         session_value: Number(computedSessionVal.toFixed(2)),
         platform_fee_pct: parsedFusionPct,
         host_split_pct: parsedHostPct,
@@ -747,7 +1009,10 @@ export function AdminContractsTab({
         title: editingContract
           ? "Contrato atualizado com sucesso!"
           : "Contrato registrado e ativado!",
-        description: `Split configurado (${parsedFusionPct}% Fusion / ${parsedHostPct}% Anfitrião) e ${generatedCount} reserva(s) lançada(s) na agenda.`,
+        description:
+          validTiers.length > 0
+            ? `${validTiers.length} períodos de preço configurados e ${generatedCount} reserva(s) lançada(s) com os valores de cada período.`
+            : `Split configurado (${parsedFusionPct}% Fusion / ${parsedHostPct}% Anfitrião) e ${generatedCount} reserva(s) lançada(s) na agenda.`,
       });
 
       setIsModalOpen(false);
@@ -880,16 +1145,16 @@ export function AdminContractsTab({
     return matchesType && matchesStatus && matchesSearch;
   });
 
-  // KPIs Executivos de Contratos
+  // KPIs Executivos de Contratos (considerando o valor do período vigente de cada contrato)
   const activeContracts = contracts.filter((c) => c.status === "active");
   const totalContractRevenue = activeContracts.reduce(
-    (acc, curr) => acc + Number(curr.contract_value || 0),
+    (acc, curr) => acc + getEffectiveContractPricing(curr).contractValue,
     0,
   );
   const totalFusionContractTake = activeContracts.reduce(
     (acc, curr) =>
       acc +
-      Number(curr.contract_value || 0) *
+      getEffectiveContractPricing(curr).contractValue *
         (Number(curr.platform_fee_pct ?? 15) / 100),
     0,
   );
@@ -990,7 +1255,10 @@ export function AdminContractsTab({
         })
       : [];
 
-  const previewContractVal = Number(form.contract_value) || 0;
+  const previewContractVal =
+    pricingTiers.length > 0 && Number(pricingTiers[0].contract_value) > 0
+      ? Number(pricingTiers[0].contract_value)
+      : Number(form.contract_value) || 0;
   const previewFusionPct = Number(form.platform_fee_pct) || 0;
   const previewHostPct = Number(form.host_split_pct) || 0;
 
@@ -1004,8 +1272,8 @@ export function AdminContractsTab({
             Gestão de Contratos, Turnos Fixos & Co-Anfitriões
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-1">
-            Controle de salas fixas mensais, porcentagens personalizadas (Fusion
-            vs Anfitrião), datas limites e cofre de PDFs.
+            Controle de salas fixas mensais, valores escalonados por período,
+            porcentagens personalizadas (Fusion vs Anfitrião) e PDFs.
           </p>
         </div>
         <Button
@@ -1021,7 +1289,7 @@ export function AdminContractsTab({
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold text-slate-400 uppercase">
-              Volume Contratual Ativo
+              Volume Contratual Vigente
             </span>
             <Wallet className="w-5 h-5 text-emerald-600" />
           </div>
@@ -1170,11 +1438,14 @@ export function AdminContractsTab({
               <tbody className="divide-y divide-slate-100">
                 {filteredContracts.map((c) => {
                   const paymentInfo = getMonthlyPaymentState(c);
+                  const effectivePricing = getEffectiveContractPricing(c);
                   const fusionAmount =
-                    Number(c.contract_value) *
+                    effectivePricing.contractValue *
                     (Number(c.platform_fee_pct) / 100);
                   const hostAmount =
-                    Number(c.contract_value) * (Number(c.host_split_pct) / 100);
+                    effectivePricing.contractValue *
+                    (Number(c.host_split_pct) / 100);
+                  const tiersList = c.schedule_config?.pricingTiers || [];
 
                   return (
                     <tr
@@ -1287,12 +1558,40 @@ export function AdminContractsTab({
                       </td>
 
                       <td className="px-6 py-4 text-right">
-                        <p className="font-black text-slate-900">
-                          R${" "}
-                          {Number(c.contract_value).toLocaleString("pt-BR", {
-                            minimumFractionDigits: 2,
-                          })}
-                        </p>
+                        <div className="flex items-center justify-end gap-1.5">
+                          {tiersList.length > 0 && (
+                            <Badge className="bg-indigo-100 text-indigo-800 border-0 text-[9px] font-black">
+                              <Layers className="w-3 h-3 mr-1" />
+                              Escalonado ({tiersList.length} períodos)
+                            </Badge>
+                          )}
+                          <p className="font-black text-slate-900">
+                            R${" "}
+                            {effectivePricing.contractValue.toLocaleString(
+                              "pt-BR",
+                              {
+                                minimumFractionDigits: 2,
+                              },
+                            )}
+                          </p>
+                        </div>
+
+                        {tiersList.length > 0 && (
+                          <div className="mt-1 space-y-0.5 text-[10px] text-indigo-700 font-bold">
+                            {tiersList.map((t, i) => (
+                              <p key={t.id || i}>
+                                {i + 1}º:{" "}
+                                {format(parseISO(t.start_date), "dd/MM/yy")} a{" "}
+                                {format(parseISO(t.end_date), "dd/MM/yy")} → R${" "}
+                                {Number(t.contract_value).toLocaleString(
+                                  "pt-BR",
+                                  { minimumFractionDigits: 2 },
+                                )}
+                              </p>
+                            ))}
+                          </div>
+                        )}
+
                         <div className="flex items-center justify-end gap-2 mt-0.5">
                           <span className="text-[10px] font-bold text-[#BF4B24]">
                             Fusion ({c.platform_fee_pct}%): R${" "}
@@ -1328,7 +1627,7 @@ export function AdminContractsTab({
                             >
                               <FileCheck2 className="w-3.5 h-3.5" />
                               Abrir PDF
-                              <ExternalLink className="w-3 h-3" />
+                              <ExternalLink className="w-3.5 h-3.5" />
                             </a>
                             <label
                               title="Substituir PDF assinado"
@@ -1409,9 +1708,9 @@ export function AdminContractsTab({
                 : "Novo Contrato de Sala & Alocação na Agenda"}
             </DialogTitle>
             <DialogDescription>
-              Configure a modalidade contratual, a porcentagem da Fusion e do
-              Anfitrião neste contrato, a data limite de pagamento mensal e o
-              PDF assinado.
+              Configure a modalidade contratual, faixas de valor por período (se
+              houver reajuste ou desconto inicial), porcentagens da Fusion e do
+              Anfitrião e o PDF assinado.
             </DialogDescription>
           </DialogHeader>
 
@@ -1639,7 +1938,7 @@ export function AdminContractsTab({
             <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-4">
               <Label className="text-xs font-black uppercase text-slate-600 flex items-center gap-1.5">
                 <CalendarDays className="w-4 h-4 text-[#BF4B24]" />
-                Vigência e Alocação Automática na Agenda
+                Vigência Geral e Alocação Automática na Agenda
               </Label>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -1785,21 +2084,27 @@ export function AdminContractsTab({
               </div>
             </div>
 
-            {/* 5. VALORES FINANCEIROS, DIA LIMITE E PORCENTAGENS (FUSION vs ANFITRIÃO) */}
+            {/* 5. VALORES FINANCEIROS, ESCALONAMENTO POR PERÍODO E SPLIT */}
             <div className="p-4 rounded-2xl bg-slate-900 text-white space-y-4">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <Label className="text-xs font-black uppercase tracking-wider text-orange-400 flex items-center gap-1.5">
                   <Wallet className="w-4 h-4" />
-                  Configuração Financeira & Split do Contrato
+                  Configuração Financeira & Valores por Período
                 </Label>
-                <span className="text-[11px] text-slate-400 font-bold">
-                  Soma Total:{" "}
-                  {Number(form.platform_fee_pct || 0) +
-                    Number(form.host_split_pct || 0)}
-                  %
-                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={handleAddPricingTier}
+                  className="h-8 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-lg"
+                >
+                  <Layers className="w-3.5 h-3.5 mr-1.5" />
+                  {pricingTiers.length === 0
+                    ? "Configurar Valores Diferentes por Período (+)"
+                    : "Adicionar Outro Período de Valor (+)"}
+                </Button>
               </div>
 
+              {/* CAMPOS PADRÃO (VALOR ÚNICO OU CICLO + DIA LIMITE) */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <div>
                   <Label className="text-xs font-bold text-slate-300">
@@ -1842,7 +2147,9 @@ export function AdminContractsTab({
 
                 <div>
                   <Label className="text-xs font-bold text-slate-300">
-                    Valor do Contrato (R$) *
+                    {pricingTiers.length > 0
+                      ? "Valor Base Referência (R$)"
+                      : "Valor do Contrato (R$) *"}
                   </Label>
                   <Input
                     type="number"
@@ -1872,6 +2179,129 @@ export function AdminContractsTab({
                   />
                 </div>
               </div>
+
+              {/* TABELA DE FAIXAS DE PREÇO POR PERÍODO (QUANDO ATIVADA) */}
+              {pricingTiers.length > 0 && (
+                <div className="p-3.5 rounded-xl bg-indigo-950/60 border border-indigo-500/40 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-black text-indigo-300 flex items-center gap-1.5">
+                      <Layers className="w-4 h-4" />
+                      Escalonamento de Valores por Período (Cada reserva na
+                      agenda usará o valor da sua respectiva data)
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setPricingTiers([])}
+                      className="text-[11px] font-bold text-slate-400 hover:text-red-400 underline"
+                    >
+                      Remover escalonamento
+                    </button>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    {pricingTiers.map((tier, idx) => {
+                      const autoSession = getComputedSessionValueForAmount(
+                        Number(tier.contract_value) || 0,
+                        Number(tier.session_value) || 0,
+                      );
+                      return (
+                        <div
+                          key={tier.id}
+                          className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end bg-slate-900/90 p-3 rounded-xl border border-slate-800"
+                        >
+                          <div className="md:col-span-3">
+                            <Label className="text-[10px] font-bold text-indigo-300 uppercase">
+                              {idx + 1}º Período: Início
+                            </Label>
+                            <Input
+                              type="date"
+                              value={tier.start_date}
+                              onChange={(e) =>
+                                handleUpdatePricingTier(
+                                  tier.id,
+                                  "start_date",
+                                  e.target.value,
+                                )
+                              }
+                              className="mt-1 h-9 bg-slate-800 border-slate-700 text-white text-xs font-bold"
+                            />
+                          </div>
+
+                          <div className="md:col-span-3">
+                            <Label className="text-[10px] font-bold text-indigo-300 uppercase">
+                              Até a Data
+                            </Label>
+                            <Input
+                              type="date"
+                              value={tier.end_date}
+                              onChange={(e) =>
+                                handleUpdatePricingTier(
+                                  tier.id,
+                                  "end_date",
+                                  e.target.value,
+                                )
+                              }
+                              className="mt-1 h-9 bg-slate-800 border-slate-700 text-white text-xs font-bold"
+                            />
+                          </div>
+
+                          <div className="md:col-span-3">
+                            <Label className="text-[10px] font-bold text-white uppercase">
+                              Valor neste Período (R$) *
+                            </Label>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              placeholder="Ex: 1000.00"
+                              value={tier.contract_value}
+                              onChange={(e) =>
+                                handleUpdatePricingTier(
+                                  tier.id,
+                                  "contract_value",
+                                  e.target.value,
+                                )
+                              }
+                              className="mt-1 h-9 bg-slate-800 border-indigo-500/50 text-white text-xs font-black"
+                            />
+                          </div>
+
+                          <div className="md:col-span-2">
+                            <Label className="text-[10px] font-bold text-emerald-400 uppercase">
+                              Valor/Diária (R$)
+                            </Label>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              placeholder={`Auto: ${autoSession.toFixed(2)}`}
+                              value={tier.session_value}
+                              onChange={(e) =>
+                                handleUpdatePricingTier(
+                                  tier.id,
+                                  "session_value",
+                                  e.target.value,
+                                )
+                              }
+                              className="mt-1 h-9 bg-slate-800 border-slate-700 text-emerald-300 text-xs font-bold"
+                            />
+                          </div>
+
+                          <div className="md:col-span-1 flex justify-end">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleRemovePricingTier(tier.id)}
+                              className="h-9 w-9 text-slate-400 hover:text-red-400 hover:bg-red-500/10"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* CAMPOS DE PORCENTAGEM DA FUSION E DO ANFITRIÃO */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-slate-800">
@@ -1970,7 +2400,7 @@ export function AdminContractsTab({
               {saving ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Sincronizando Contrato e Agenda...
+                  Sincronizando Contrato e Períodos...
                 </>
               ) : (
                 <>
