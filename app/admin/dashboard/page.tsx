@@ -25,6 +25,7 @@ import {
   Eye,
   Trash2,
   Loader2,
+  Clock,
   LogOut,
   MapPin,
   User,
@@ -70,7 +71,7 @@ import {
 import { ptBR } from "date-fns/locale";
 
 // ==========================================
-// COMPONENTE PRINCIPAL (TORRE DE CONTROLE ADMIN — DESKTOP & MOBILE)
+// COMPONENTE PRINCIPAL (TORRE DE CONTROLE ADMIN)
 // ==========================================
 export default function AdminDashboardPage() {
   const [activeTab, setActiveTab] = useState("dashboard");
@@ -139,12 +140,21 @@ export default function AdminDashboardPage() {
     setIsMobileMenuOpen(false);
   };
 
+  // ==========================================
+  // MOTOR DE LOGOUT BLINDADO
+  // ==========================================
   const handleLogout = async () => {
     try {
       const supabase = createClient();
+
+      // 1. Destrói a sessão real no banco de dados (Supabase)
       await supabase.auth.signOut();
+
+      // 2. Limpa qualquer lixo de sessão do navegador
       sessionStorage.clear();
       localStorage.clear();
+
+      // 3. HARD RELOAD: Força a página a recarregar limpando o cache
       window.location.replace("/admin/login");
     } catch (error) {
       console.error("Erro ao sair:", error);
@@ -156,11 +166,9 @@ export default function AdminDashboardPage() {
 
   return (
     <div className="flex h-svh bg-slate-50 overflow-hidden font-sans">
-      {/* ==================================================================== */}
-      {/* SIDEBAR DESKTOP (RECOLHÍVEL PARA TELA CHEIA) */}
-      {/* ==================================================================== */}
+      {/* SIDEBAR LIGHT MODE (Padrão Médico) COM SUPORTE A TELA CHEIA */}
       <aside
-        className={`hidden lg:flex bg-white border-r border-slate-200 flex-col shrink-0 z-20 transition-all duration-300 ease-in-out overflow-hidden ${
+        className={`hidden lg:flex bg-white border-r border-slate-200 flex-col shrink-0 z-25 transition-all duration-300 ease-in-out overflow-hidden ${
           isSidebarCollapsed ? "w-0 border-r-0" : "w-64"
         }`}
       >
@@ -169,7 +177,7 @@ export default function AdminDashboardPage() {
             <img
               src="/logo-fusion-orange.png"
               alt="Fusion Clinic"
-              className="h-9 w-auto object-contain"
+              className="h-10 w-auto object-contain"
             />
             <div>
               <h1 className="font-black text-slate-900 text-lg leading-tight tracking-tight">
@@ -191,7 +199,7 @@ export default function AdminDashboardPage() {
           </button>
         </div>
 
-        <nav className="flex-1 px-4 py-6 space-y-1.5 overflow-y-auto min-w-[16rem]">
+        <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto min-w-[16rem]">
           {menuItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
@@ -199,7 +207,7 @@ export default function AdminDashboardPage() {
               <button
                 key={item.id}
                 onClick={() => handleSelectTab(item.id)}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${
                   isActive
                     ? "bg-[#BF4B24]/10 text-[#BF4B24]"
                     : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
@@ -217,16 +225,14 @@ export default function AdminDashboardPage() {
         <div className="p-4 border-t border-slate-100 min-w-[16rem]">
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm text-slate-500 hover:bg-red-50 hover:text-red-600 transition-all"
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-slate-500 hover:bg-red-50 hover:text-red-600 transition-all"
           >
             <LogOut className="w-5 h-5" /> Sair do Painel
           </button>
         </div>
       </aside>
 
-      {/* ==================================================================== */}
-      {/* DRAWER MENU MOBILE (DESLIZA AO TOCAR NO BOTÃO DE MENU NO CELULAR) */}
-      {/* ==================================================================== */}
+      {/* DRAWER MENU MOBILE */}
       {isMobileMenuOpen && (
         <div className="fixed inset-0 z-50 lg:hidden flex">
           <div
@@ -269,7 +275,7 @@ export default function AdminDashboardPage() {
                     onClick={() => handleSelectTab(item.id)}
                     className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${
                       isActive
-                        ? "bg-[#BF4B24] text-white shadow-sm"
+                        ? "bg-[#BF4B24] text-white shadow-xs"
                         : "text-slate-600 hover:bg-slate-50"
                     }`}
                   >
@@ -294,13 +300,9 @@ export default function AdminDashboardPage() {
         </div>
       )}
 
-      {/* ==================================================================== */}
-      {/* ÁREA PRINCIPAL DE CONTEÚDO */}
-      {/* ==================================================================== */}
       <main className="flex-1 flex flex-col h-svh overflow-hidden relative">
         <header className="h-16 lg:h-20 bg-white border-b border-slate-200 flex items-center justify-between px-4 lg:px-8 shrink-0 shadow-2xs z-10">
-          <div className="flex items-center gap-2.5 min-w-0">
-            {/* Botão Hamburger no Mobile */}
+          <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
               onClick={() => setIsMobileMenuOpen(true)}
@@ -309,7 +311,6 @@ export default function AdminDashboardPage() {
               <Menu className="w-5 h-5" />
             </button>
 
-            {/* Botão Recolher/Expandir no Desktop */}
             <button
               type="button"
               onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
@@ -332,7 +333,7 @@ export default function AdminDashboardPage() {
             </h2>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-4">
             <div className="text-right hidden md:block">
               <p className="text-sm font-bold text-slate-900">Administrador</p>
               <p className="text-xs text-slate-500 font-medium">
@@ -346,6 +347,7 @@ export default function AdminDashboardPage() {
         </header>
 
         <div className="flex-1 overflow-y-auto relative bg-slate-50 pb-20 lg:pb-0">
+          {/* Renderização Condicional das Abas */}
           {activeTab === "dashboard" && <AdminOverviewTab />}
           {activeTab === "especialistas" && <AdminSpecialistsTab />}
           {activeTab === "parceiros" && <AdminPartnersTab />}
@@ -371,15 +373,28 @@ export default function AdminDashboardPage() {
           )}
           {activeTab === "cupons" && <AdminCouponsTab />}
           {activeTab === "campanhas" && (
-            <div className="p-4 lg:p-8 flex justify-center items-start">
+            <div className="p-4 lg:p-8 flex justify-center items-start animate-in fade-in slide-in-from-bottom-4">
               <PushCampaignManager />
             </div>
           )}
+          {/* Fallback caso a aba não exista ou esteja em construção */}
+          {activeTab !== "salas" &&
+            activeTab !== "contratos" &&
+            activeTab !== "pacotes" &&
+            activeTab !== "dashboard" &&
+            activeTab !== "especialistas" &&
+            activeTab !== "parceiros" &&
+            activeTab !== "agendamentos" &&
+            activeTab !== "campanhas" &&
+            activeTab !== "cupons" && (
+              <div className="h-full flex flex-col items-center justify-center text-slate-400">
+                <Loader2 className="w-10 h-10 animate-spin mb-4 text-slate-300" />
+                <p className="font-bold">Módulo em construção...</p>
+              </div>
+            )}
         </div>
 
-        {/* ================================================================== */}
-        {/* BARRA INFERIOR MOBILE (BOTTOM NAV ESTILO APP NATIVO) */}
-        {/* ================================================================== */}
+        {/* BOTTOM NAV MOBILE */}
         <nav className="fixed inset-x-0 bottom-0 z-40 flex lg:hidden items-stretch justify-around border-t border-slate-200 bg-white/95 backdrop-blur-md pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_20px_rgba(0,0,0,0.06)]">
           {menuItems.slice(0, 4).map((item) => {
             const Icon = item.icon;
@@ -414,7 +429,7 @@ export default function AdminDashboardPage() {
 }
 
 // ==========================================
-// MÓDULO: GESTÃO DE SALAS E RESERVA MANUAL (RESPONSIVO DESKTOP + MOBILE)
+// MÓDULO: GESTÃO DE SALAS E RESERVA MANUAL (100% PRESERVADO)
 // ==========================================
 function AdminRoomsTab() {
   const supabase = createClient();
@@ -444,10 +459,15 @@ function AdminRoomsTab() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [blockedDates, setBlockedDates] = useState<string[]>([]);
 
+  // ==========================================
+  // ESTADOS PARA RESERVA MANUAL (MULTI-SLOT CARRINHO)
+  // ==========================================
   const [manualDate, setManualDate] = useState<Date>(new Date());
+
   const [selectedSlots, setSelectedSlots] = useState<
     { date: Date; slot: string }[]
   >([]);
+
   const [takenSlots, setTakenSlots] = useState<string[]>([]);
   const [professionals, setProfessionals] = useState<any[]>([]);
   const [profSearch, setProfSearch] = useState("");
@@ -527,6 +547,32 @@ function AdminRoomsTab() {
     if (exception) {
       if (exception.type === "block") {
         if (exception.isFullDay) return [];
+
+        if (
+          checkIsHoliday(date) ||
+          !weekConfig.find((c: any) => c.day === dayOfWeek)?.enabled
+        ) {
+          baseSlots = [];
+        } else {
+          const dayConfig = weekConfig.find((c: any) => c.day === dayOfWeek);
+          if (dayConfig?.rentalType === "hourly")
+            baseSlots = dayConfig.availableHours || [];
+          else if (dayConfig?.rentalType === "shift") {
+            const shifts = dayConfig.selectedShifts || [];
+            if (shifts.includes("morning"))
+              baseSlots.push("08h-09h", "09h-10h", "10h-11h", "11h-12h");
+            if (shifts.includes("afternoon"))
+              baseSlots.push(
+                "13h-14h",
+                "14h-15h",
+                "15h-16h",
+                "16h-17h",
+                "17h-18h",
+              );
+            if (shifts.includes("night"))
+              baseSlots.push("18h-19h", "19h-20h", "20h-21h", "21h-22h");
+          }
+        }
         baseSlots = baseSlots.filter(
           (slot: string) => !(exception.hours || []).includes(slot),
         );
@@ -611,6 +657,7 @@ function AdminRoomsTab() {
     }
   };
 
+  // Expande reservas de 1h, turnos ou diárias contratuais para bloquear todas as horas ocupadas
   const loadTakenSlots = async (date: Date) => {
     if (!evaluatingRoom) return;
     const startOfDayDate = new Date(date);
@@ -718,6 +765,7 @@ function AdminRoomsTab() {
       setSelectedSlots([]);
       loadTakenSlots(manualDate);
     } catch (error: any) {
+      console.error("Erro na reserva manual múltipla:", error);
       toast({
         variant: "destructive",
         title: "Falha na Reserva",
@@ -895,11 +943,11 @@ function AdminRoomsTab() {
     const weekDays = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 
     const weekDaysRow = (
-      <div className="grid grid-cols-7 mb-2 gap-1.5" key="weekdays">
+      <div className="grid grid-cols-7 mb-2 gap-2" key="weekdays">
         {weekDays.map((wd) => (
           <div
             key={wd}
-            className="text-center font-black text-[10px] text-slate-400 uppercase"
+            className="text-center font-black text-xs text-slate-400 uppercase tracking-widest"
           >
             {wd}
           </div>
@@ -920,9 +968,9 @@ function AdminRoomsTab() {
             key={day.toString()}
             onClick={() => !isPast && toggleBlockDate(cloneDay)}
             className={`
-              h-11 sm:h-14 border flex items-center justify-center text-xs sm:text-sm font-bold transition-all rounded-xl cursor-pointer relative overflow-hidden
-              ${!isCurrentMonth ? "text-slate-300 bg-slate-50 border-slate-100" : "bg-white border-slate-200 hover:border-[#BF4B24]"}
-              ${isPast ? "opacity-40 cursor-not-allowed" : ""}
+              h-14 border flex items-center justify-center text-sm font-bold transition-all rounded-xl cursor-pointer relative overflow-hidden
+              ${!isCurrentMonth ? "text-slate-300 bg-slate-50 border-slate-100" : "bg-white border-slate-200 hover:border-[#BF4B24] hover:shadow-md"}
+              ${isPast ? "opacity-40 cursor-not-allowed hover:border-slate-200 hover:shadow-none" : ""}
               ${isBlocked && !isPast ? "bg-red-50 border-red-200 text-red-700" : "text-slate-700"}
             `}
           >
@@ -935,7 +983,7 @@ function AdminRoomsTab() {
         day = addDays(day, 1);
       }
       rows.push(
-        <div className="grid grid-cols-7 gap-1.5 mb-1.5" key={day.toString()}>
+        <div className="grid grid-cols-7 gap-2 mb-2" key={day.toString()}>
           {days}
         </div>,
       );
@@ -1002,47 +1050,50 @@ function AdminRoomsTab() {
 
     const roomSubTabs = [
       { id: "auditoria", label: "Auditoria & Selos", icon: ShieldCheck },
-      { id: "editar", label: "Editar Dados", icon: FileText },
+      { id: "editar", label: "Editar Informações", icon: FileText },
       { id: "agenda", label: "Gerenciar Agenda", icon: CalendarIcon },
-      { id: "contratos", label: "Contratos da Sala", icon: FileText },
+      { id: "contratos", label: "Contratos & Fixos da Sala", icon: FileText },
       { id: "reservar", label: "Reserva Manual", icon: CalendarPlus },
     ];
 
     return (
-      <div className="flex flex-col min-h-full bg-slate-50 pb-24">
-        <div className="bg-white border-b border-slate-200 px-4 lg:px-8 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3 min-w-0">
+      <div className="absolute inset-0 bg-slate-50 z-20 flex flex-col animate-in fade-in zoom-in-95 duration-200">
+        <div className="bg-white border-b border-slate-200 px-8 py-5 flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-6">
             <button
               onClick={closeAuditPanel}
-              className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-500 shrink-0"
+              className="p-2 hover:bg-slate-100 rounded-full transition-colors flex items-center justify-center text-slate-500"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h2 className="text-lg lg:text-2xl font-black text-slate-900 truncate">
+            <div>
+              <div className="flex items-center gap-3">
+                <h2 className="text-2xl font-black text-slate-900 leading-none">
                   {evaluatingRoom.name}
                 </h2>
                 {evaluatingRoom.is_active ? (
-                  <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold text-[10px]">
+                  <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold uppercase tracking-wider text-[10px]">
                     Ativa
                   </Badge>
                 ) : (
-                  <Badge className="bg-amber-100 text-amber-800 border-0 font-bold text-[10px]">
+                  <Badge className="bg-amber-100 text-amber-800 border-0 font-bold uppercase tracking-wider text-[10px]">
                     Pendente
                   </Badge>
                 )}
               </div>
-              <p className="text-xs font-medium text-slate-500 truncate">
-                Anfitrião: {evaluatingRoom.profiles?.full_name}
+              <p className="text-sm font-medium text-slate-500 mt-1 flex items-center gap-1">
+                <User className="w-4 h-4" /> Anfitrião:{" "}
+                {evaluatingRoom.profiles?.full_name}
               </p>
             </div>
           </div>
         </div>
 
-        {/* Barra de Abas da Sala no Mobile + Sidebar no Desktop */}
-        <div className="flex flex-col lg:flex-row flex-1">
-          <div className="flex lg:flex-col lg:w-64 bg-white border-b lg:border-b-0 lg:border-r border-slate-200 p-2 lg:p-5 gap-1.5 overflow-x-auto shrink-0">
+        <div className="flex-1 flex overflow-hidden">
+          <div className="w-72 bg-white border-r border-slate-200 p-6 flex flex-col gap-2 shrink-0 overflow-y-auto">
+            <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2 pl-2">
+              Menu da Sala
+            </p>
             {roomSubTabs.map((t) => {
               const Icon = t.icon;
               const active = auditTab === t.id;
@@ -1050,63 +1101,69 @@ function AdminRoomsTab() {
                 <button
                   key={t.id}
                   onClick={() => setAuditTab(t.id as any)}
-                  className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl font-bold text-xs lg:text-sm whitespace-nowrap transition-all ${
+                  className={`flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${
                     active
-                      ? "bg-[#BF4B24] lg:bg-[#BF4B24]/10 text-white lg:text-[#BF4B24]"
+                      ? "bg-[#BF4B24]/10 text-[#BF4B24]"
                       : "text-slate-500 hover:bg-slate-50"
                   }`}
                 >
-                  <Icon className="w-4 h-4 shrink-0" />
-                  {t.label}
+                  <Icon className="w-5 h-5" /> {t.label}
                 </button>
               );
             })}
           </div>
 
-          <div className="flex-1 p-4 lg:p-8">
+          <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
             {auditTab === "contratos" ? (
-              <AdminContractsTab
-                mode="admin"
-                preselectedRoomId={evaluatingRoom.id}
-              />
+              <div className="w-full">
+                <AdminContractsTab
+                  mode="admin"
+                  preselectedRoomId={evaluatingRoom.id}
+                />
+              </div>
             ) : (
-              <div className="max-w-4xl mx-auto">
+              <div className="max-w-4xl">
                 {auditTab === "auditoria" && (
-                  <div className="space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="bg-white border border-slate-200 p-5 rounded-2xl">
-                        <p className="text-[10px] font-black text-slate-400 uppercase mb-3">
+                  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="grid grid-cols-2 gap-6">
+                      <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">
                           Mídia da Sala
                         </p>
-                        <div className="w-full h-44 rounded-xl overflow-hidden bg-slate-100 relative">
+                        <div className="w-full h-48 rounded-xl overflow-hidden bg-slate-100 border border-slate-100 relative">
                           <img
                             src={mainImage}
                             className="w-full h-full object-cover"
                             alt="Principal"
                           />
+                          {evalImages.length > 1 && (
+                            <div className="absolute bottom-2 right-2 bg-slate-900/80 text-white text-[10px] font-bold px-2 py-1 rounded backdrop-blur-md">
+                              +{evalImages.length - 1} fotos
+                            </div>
+                          )}
                         </div>
                       </div>
-                      <div className="space-y-4">
-                        <div className="bg-white border border-slate-200 p-5 rounded-2xl">
-                          <p className="text-[10px] font-black text-slate-400 uppercase mb-1">
-                            Localização
+                      <div className="space-y-6">
+                        <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
+                            <MapPin className="w-3 h-3" /> Localização
                           </p>
                           <p className="font-bold text-slate-900">
                             {evalAddress.street || "Endereço Pendente"}
                           </p>
-                          <p className="text-sm text-slate-500">
+                          <p className="text-sm font-medium text-slate-500">
                             {evalAddress.city} - {evalAddress.state}
                           </p>
                         </div>
-                        <div className="bg-white border border-slate-200 p-5 rounded-2xl">
-                          <p className="text-[10px] font-black text-slate-400 uppercase mb-1">
-                            Anfitrião / Valor
+                        <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
+                            <User className="w-3 h-3" /> Anfitrião / Cadastro
                           </p>
                           <p className="font-bold text-slate-900">
                             {evaluatingRoom.profiles?.full_name}
                           </p>
-                          <p className="text-sm text-slate-500">
-                            Valor Base:{" "}
+                          <p className="text-sm font-medium text-slate-500">
+                            Valor Base (Hora):{" "}
                             <strong className="text-[#BF4B24]">
                               R$ {evalPricing.hourly || "0"}
                             </strong>
@@ -1115,272 +1172,565 @@ function AdminRoomsTab() {
                       </div>
                     </div>
 
-                    <div className="bg-white border border-slate-200 p-5 lg:p-8 rounded-2xl">
-                      <h3 className="text-lg font-black text-slate-900 mb-4">
+                    <div className="bg-white border border-slate-200 p-8 rounded-2xl shadow-sm">
+                      <h3 className="text-lg font-black text-slate-900 mb-6">
                         Definir Categoria
                       </h3>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
-                        {(["start", "vip", "master"] as const).map(
-                          (tierKey) => (
-                            <button
-                              key={tierKey}
-                              type="button"
-                              onClick={() => setSelectedTier(tierKey)}
-                              className={`p-4 rounded-xl border-2 text-left transition-all ${
-                                selectedTier === tierKey
-                                  ? "border-[#BF4B24] bg-orange-50/40"
-                                  : "border-slate-100 bg-white"
-                              }`}
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                        <label
+                          className={`flex flex-col gap-3 p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedTier === "start" ? "border-slate-800 bg-slate-50" : "border-slate-100 hover:border-slate-200 bg-white"}`}
+                        >
+                          <input
+                            type="radio"
+                            value="start"
+                            checked={selectedTier === "start"}
+                            onChange={() => setSelectedTier("start")}
+                            className="sr-only"
+                          />
+                          <div
+                            className={`w-10 h-10 rounded-full flex items-center justify-center ${selectedTier === "start" ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-400"}`}
+                          >
+                            <Shield className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4
+                              className={`font-bold ${selectedTier === "start" ? "text-slate-900" : "text-slate-700"}`}
                             >
-                              <h4 className="font-black uppercase text-slate-900">
-                                {tierKey}
-                              </h4>
-                            </button>
-                          ),
-                        )}
+                              START
+                            </h4>
+                            <p className="text-xs text-slate-500 font-medium mt-1">
+                              Salas padrão. Custo-benefício.
+                            </p>
+                          </div>
+                        </label>
+
+                        <label
+                          className={`flex flex-col gap-3 p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedTier === "vip" ? "border-purple-500 bg-purple-50/50" : "border-slate-100 hover:border-slate-200 bg-white"}`}
+                        >
+                          <input
+                            type="radio"
+                            value="vip"
+                            checked={selectedTier === "vip"}
+                            onChange={() => setSelectedTier("vip")}
+                            className="sr-only"
+                          />
+                          <div
+                            className={`w-10 h-10 rounded-full flex items-center justify-center ${selectedTier === "vip" ? "bg-purple-500 text-white" : "bg-slate-100 text-slate-400"}`}
+                          >
+                            <Star className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4
+                              className={`font-bold ${selectedTier === "vip" ? "text-purple-900" : "text-slate-700"}`}
+                            >
+                              VIP
+                            </h4>
+                            <p className="text-xs text-slate-500 font-medium mt-1">
+                              Ambientes diferenciados.
+                            </p>
+                          </div>
+                        </label>
+
+                        <label
+                          className={`flex flex-col gap-3 p-5 rounded-xl border-2 cursor-pointer transition-all ${selectedTier === "master" ? "border-amber-500 bg-amber-50/50" : "border-slate-100 hover:border-slate-200 bg-white"}`}
+                        >
+                          <input
+                            type="radio"
+                            value="master"
+                            checked={selectedTier === "master"}
+                            onChange={() => setSelectedTier("master")}
+                            className="sr-only"
+                          />
+                          <div
+                            className={`w-10 h-10 rounded-full flex items-center justify-center ${selectedTier === "master" ? "bg-amber-500 text-white" : "bg-slate-100 text-slate-400"}`}
+                          >
+                            <Crown className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4
+                              className={`font-bold ${selectedTier === "master" ? "text-amber-900" : "text-slate-700"}`}
+                            >
+                              MASTER
+                            </h4>
+                            <p className="text-xs text-slate-500 font-medium mt-1">
+                              Alto padrão e premium.
+                            </p>
+                          </div>
+                        </label>
                       </div>
 
-                      <div className="p-4 border border-orange-200 bg-orange-50/50 rounded-2xl mb-6 flex items-center justify-between gap-4">
-                        <div>
-                          <h4 className="font-black text-slate-900 text-sm">
-                            Selo Fusion Partner
-                          </h4>
-                          <p className="text-xs text-slate-600">
-                            Habilitar locação por hora avulsa.
-                          </p>
+                      <div className="p-6 border border-orange-200 bg-orange-50/50 rounded-2xl mb-8 flex flex-col md:flex-row md:items-center justify-between gap-6">
+                        <div className="flex items-start gap-4">
+                          <div className="p-3 bg-white rounded-xl shadow-sm text-[#BF4B24] shrink-0">
+                            <Sparkles className="w-6 h-6" />
+                          </div>
+                          <div>
+                            <h4 className="font-black text-slate-900 text-lg">
+                              Selo Fusion Partner
+                            </h4>
+                            <p className="text-sm font-medium text-slate-600 mb-2">
+                              Destacar esta sala como parceira oficial da
+                              plataforma.
+                            </p>
+                            {isPartner ? (
+                              <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold">
+                                <CheckCircle2 className="w-3.5 h-3.5 mr-1" />{" "}
+                                Locação "Por Hora" Liberada
+                              </Badge>
+                            ) : (
+                              <Badge className="bg-amber-100 text-amber-800 border-0 font-bold">
+                                <AlertTriangle className="w-3.5 h-3.5 mr-1" />{" "}
+                                Apenas Turnos/Fixos
+                              </Badge>
+                            )}
+                          </div>
                         </div>
-                        <input
-                          type="checkbox"
-                          checked={isPartner}
-                          onChange={(e) => setIsPartner(e.target.checked)}
-                          className="h-5 w-5 accent-[#BF4B24]"
-                        />
+                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={isPartner}
+                            onChange={(e) => setIsPartner(e.target.checked)}
+                            className="sr-only peer"
+                          />
+                          <div className="w-14 h-7 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-[#BF4B24]"></div>
+                        </label>
                       </div>
 
-                      <Button
-                        onClick={handleSaveAudit}
-                        disabled={actionLoading}
-                        className="w-full h-12 bg-slate-900 hover:bg-slate-800 text-white font-bold"
-                      >
-                        {actionLoading ? "Salvando..." : "Salvar Configurações"}
-                      </Button>
+                      <div className="flex gap-4">
+                        {!evaluatingRoom.is_active && (
+                          <Button
+                            onClick={() => {
+                              handleStatusChange(evaluatingRoom.id, false);
+                              closeAuditPanel();
+                            }}
+                            disabled={actionLoading}
+                            variant="outline"
+                            className="h-14 px-8 text-red-600 hover:bg-red-50 border-red-200 font-bold text-base"
+                          >
+                            Reprovar Sala
+                          </Button>
+                        )}
+                        <Button
+                          onClick={handleSaveAudit}
+                          disabled={actionLoading}
+                          className="flex-1 h-14 bg-slate-900 hover:bg-slate-800 text-white font-bold text-base shadow-lg"
+                        >
+                          {actionLoading
+                            ? "Salvando..."
+                            : "Salvar Configurações de Auditoria"}
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 )}
 
                 {auditTab === "editar" && (
-                  <div className="bg-white border border-slate-200 p-5 lg:p-8 rounded-2xl space-y-5">
-                    <div>
-                      <label className="text-sm font-bold text-slate-700 mb-1.5 block">
-                        Nome da Sala
-                      </label>
-                      <Input
-                        value={editForm.name}
-                        onChange={(e) =>
-                          setEditForm({ ...editForm, name: e.target.value })
-                        }
-                        className="h-12 font-bold"
-                      />
+                  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="bg-orange-50 border border-orange-200 p-5 rounded-xl flex gap-4">
+                      <AlertTriangle className="w-6 h-6 text-orange-600 shrink-0 mt-0.5" />
+                      <div>
+                        <h4 className="text-base font-black text-orange-900">
+                          Modo de Edição Avançada
+                        </h4>
+                        <p className="text-sm font-medium text-orange-700 mt-1">
+                          Você está alterando os dados originais do anfitrião
+                          direto no banco de dados.
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <label className="text-sm font-bold text-slate-700 mb-1.5 block">
-                        Descrição
-                      </label>
-                      <textarea
-                        value={editForm.description}
-                        onChange={(e) =>
-                          setEditForm({
-                            ...editForm,
-                            description: e.target.value,
-                          })
-                        }
-                        className="w-full border border-slate-200 rounded-xl p-3 min-h-[130px]"
-                      />
+                    <div className="bg-white border border-slate-200 p-8 rounded-2xl shadow-sm space-y-6">
+                      <div>
+                        <label className="text-sm font-bold text-slate-700 mb-2 block">
+                          Nome de Exibição da Sala
+                        </label>
+                        <Input
+                          value={editForm.name}
+                          onChange={(e) =>
+                            setEditForm({ ...editForm, name: e.target.value })
+                          }
+                          className="bg-slate-50 border-slate-200 h-14 font-bold text-lg"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-bold text-slate-700 mb-2 block">
+                          Descrição (Marketing)
+                        </label>
+                        <textarea
+                          value={editForm.description}
+                          onChange={(e) =>
+                            setEditForm({
+                              ...editForm,
+                              description: e.target.value,
+                            })
+                          }
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 font-medium text-base min-h-[160px]"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-bold text-slate-700 mb-2 block">
+                          Valor Base por Hora (R$)
+                        </label>
+                        <Input
+                          type="number"
+                          value={editForm.price}
+                          onChange={(e) =>
+                            setEditForm({ ...editForm, price: e.target.value })
+                          }
+                          className="bg-slate-50 border-slate-200 h-14 font-black text-lg max-w-xs"
+                        />
+                      </div>
+                      <div className="pt-6 border-t border-slate-100 mt-8">
+                        <Button
+                          onClick={handleSaveInfoEdit}
+                          disabled={actionLoading}
+                          className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black text-base shadow-lg"
+                        >
+                          {actionLoading ? (
+                            "Salvando..."
+                          ) : (
+                            <>
+                              <Save className="w-5 h-5 mr-2" /> Salvar Edições
+                              Permanentemente
+                            </>
+                          )}
+                        </Button>
+                      </div>
                     </div>
-                    <div>
-                      <label className="text-sm font-bold text-slate-700 mb-1.5 block">
-                        Valor Base Hora (R$)
-                      </label>
-                      <Input
-                        type="number"
-                        value={editForm.price}
-                        onChange={(e) =>
-                          setEditForm({ ...editForm, price: e.target.value })
-                        }
-                        className="h-12 font-black max-w-xs"
-                      />
-                    </div>
-                    <Button
-                      onClick={handleSaveInfoEdit}
-                      disabled={actionLoading}
-                      className="w-full h-12 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black"
-                    >
-                      Salvar Edições
-                    </Button>
                   </div>
                 )}
 
                 {auditTab === "agenda" && (
-                  <div className="bg-white border border-slate-200 p-5 lg:p-8 rounded-2xl space-y-6">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-lg font-black text-slate-900 capitalize">
-                        {format(currentMonth, "MMMM yyyy", { locale: ptBR })}
-                      </h3>
-                      <div className="flex gap-2">
+                  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="flex items-start justify-between bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
+                      <div>
+                        <h3 className="text-xl font-black text-slate-900 mb-2 flex items-center gap-2">
+                          <CalendarIcon className="w-6 h-6 text-[#BF4B24]" />{" "}
+                          Central de Reservas e Bloqueios
+                        </h3>
+                        <p className="text-sm font-medium text-slate-500 max-w-lg">
+                          Clique nos dias no calendário para bloquear o uso
+                          integral da sala. Dias vermelhos impedem qualquer
+                          reserva médica.
+                        </p>
+                      </div>
+                      <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-center min-w-[140px]">
+                        <p className="text-3xl font-black text-slate-900">
+                          {blockedDates.length}
+                        </p>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                          Dias Bloqueados
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 p-8 rounded-2xl shadow-sm">
+                      <div className="flex items-center justify-between mb-8">
+                        <h3 className="text-2xl font-black text-slate-900 capitalize">
+                          {format(currentMonth, "MMMM yyyy", { locale: ptBR })}
+                        </h3>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            onClick={() =>
+                              setCurrentMonth(subMonths(currentMonth, 1))
+                            }
+                            className="h-10 w-10 rounded-xl border-slate-200 hover:bg-slate-50"
+                          >
+                            <ChevronLeft className="w-5 h-5" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            onClick={() =>
+                              setCurrentMonth(addMonths(currentMonth, 1))
+                            }
+                            className="h-10 w-10 rounded-xl border-slate-200 hover:bg-slate-50"
+                          >
+                            <ChevronRight className="w-5 h-5" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      {renderCalendar()}
+
+                      <div className="mt-8 pt-6 border-t border-slate-100 flex justify-end">
                         <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() =>
-                            setCurrentMonth(subMonths(currentMonth, 1))
-                          }
+                          onClick={handleSaveBlocks}
+                          disabled={actionLoading}
+                          className="bg-slate-900 hover:bg-slate-800 text-white font-bold h-14 px-8 text-base shadow-lg"
                         >
-                          <ChevronLeft className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() =>
-                            setCurrentMonth(addMonths(currentMonth, 1))
-                          }
-                        >
-                          <ChevronRight className="w-4 h-4" />
+                          {actionLoading ? "Salvando..." : "Salvar Calendário"}
                         </Button>
                       </div>
                     </div>
-                    {renderCalendar()}
-                    <Button
-                      onClick={handleSaveBlocks}
-                      disabled={actionLoading}
-                      className="w-full h-12 bg-slate-900 text-white font-bold"
-                    >
-                      Salvar Calendário
-                    </Button>
                   </div>
                 )}
 
                 {auditTab === "reservar" && (
-                  <div className="bg-white border border-slate-200 p-5 lg:p-8 rounded-2xl space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="space-y-4">
-                        <div>
-                          <label className="text-sm font-bold text-slate-700 mb-1.5 block">
-                            1. Data da Sessão
-                          </label>
-                          <Input
-                            type="date"
-                            value={format(manualDate, "yyyy-MM-dd")}
-                            onChange={(e) =>
-                              setManualDate(
-                                new Date(`${e.target.value}T12:00:00`),
-                              )
-                            }
-                            className="h-11 font-bold"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="text-sm font-bold text-slate-700 mb-1.5 block">
-                            2. Horários Disponíveis
-                          </label>
-                          <div className="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-100 max-h-[260px] overflow-y-auto">
-                            {availableSlots.map((slot) => {
-                              const isTaken = takenSlots.includes(slot);
-                              const currentDateStr = format(
-                                manualDate,
-                                "yyyy-MM-dd",
-                              );
-                              const isSelected = selectedSlots.some(
-                                (s) =>
-                                  format(s.date, "yyyy-MM-dd") ===
-                                    currentDateStr && s.slot === slot,
-                              );
-                              return (
-                                <button
-                                  key={slot}
-                                  type="button"
-                                  disabled={isTaken && !isSelected}
-                                  onClick={() => toggleSlot(manualDate, slot)}
-                                  className={`py-2 text-xs font-bold rounded-lg border ${
-                                    isTaken && !isSelected
-                                      ? "bg-slate-200 text-slate-400 opacity-50"
-                                      : isSelected
-                                        ? "bg-[#BF4B24] text-white border-[#BF4B24]"
-                                        : "bg-white text-slate-700"
-                                  }`}
-                                >
-                                  {slot}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
+                  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="bg-white border border-slate-200 p-8 rounded-3xl shadow-sm">
+                      <div className="mb-6 border-b border-slate-100 pb-6">
+                        <h3 className="text-xl font-black text-slate-900 flex items-center gap-2">
+                          <CalendarPlus className="w-6 h-6 text-[#BF4B24]" />{" "}
+                          Nova Reserva Avulsa
+                        </h3>
+                        <p className="text-sm font-medium text-slate-500 mt-1 max-w-2xl">
+                          Abaixo você visualiza os horários originais da sala.
+                          Navegue pelos dias e selecione quantos horários
+                          desejar para adicionar ao carrinho do profissional.
+                        </p>
                       </div>
 
-                      <div className="space-y-4">
-                        <div>
-                          <label className="text-sm font-bold text-slate-700 mb-1.5 block">
-                            3. Selecionar Especialista
-                          </label>
-                          {!selectedProf ? (
-                            <div className="relative">
-                              <Input
-                                placeholder="Buscar profissional..."
-                                value={profSearch}
-                                onChange={(e) => setProfSearch(e.target.value)}
-                                className="h-11"
-                              />
-                              {profSearch.length > 0 && (
-                                <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-52 overflow-y-auto">
-                                  {filteredProfessionals.map((p) => (
-                                    <div
-                                      key={p.id}
-                                      onClick={() => setSelectedProf(p)}
-                                      className="p-3 hover:bg-slate-50 cursor-pointer border-b border-slate-100 flex justify-between items-center"
-                                    >
-                                      <span className="text-xs font-bold">
-                                        {p.full_name}
-                                      </span>
-                                      <Badge className="bg-slate-100 text-slate-700 border-0">
-                                        {p.wallet_balance || 0} CR
-                                      </Badge>
-                                    </div>
-                                  ))}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div className="space-y-6">
+                          <div>
+                            <label className="text-sm font-bold text-slate-700 mb-2 block">
+                              1. Data da Sessão
+                            </label>
+                            <Input
+                              type="date"
+                              value={format(manualDate, "yyyy-MM-dd")}
+                              onChange={(e) => {
+                                const d = new Date(
+                                  `${e.target.value}T12:00:00`,
+                                );
+                                setManualDate(d);
+                              }}
+                              className="h-12 bg-slate-50 border-slate-200 rounded-xl font-bold"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-sm font-bold text-slate-700 mb-2 flex items-center justify-between">
+                              <span>2. Escolha os Horários</span>
+                              <span className="text-[10px] text-[#BF4B24] font-medium bg-[#BF4B24]/10 border border-[#BF4B24]/20 px-2 py-1 rounded-md">
+                                Multi-Seleção Ativa
+                              </span>
+                            </label>
+
+                            <div className="grid grid-cols-3 gap-2 bg-slate-50 p-4 rounded-2xl border border-slate-100 max-h-[300px] overflow-y-auto shadow-inner">
+                              {availableSlots.length === 0 ? (
+                                <div className="col-span-3 text-center py-6">
+                                  <AlertTriangle className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                                  <p className="text-slate-500 font-medium text-sm">
+                                    Nenhum horário disponível para esta data.
+                                  </p>
                                 </div>
+                              ) : (
+                                availableSlots.map((slot) => {
+                                  const isTaken = takenSlots.includes(slot);
+                                  const currentDateStr = format(
+                                    manualDate,
+                                    "yyyy-MM-dd",
+                                  );
+                                  const isSelected = selectedSlots.some(
+                                    (s) =>
+                                      format(s.date, "yyyy-MM-dd") ===
+                                        currentDateStr && s.slot === slot,
+                                  );
+
+                                  return (
+                                    <button
+                                      key={slot}
+                                      type="button"
+                                      disabled={isTaken && !isSelected}
+                                      onClick={() =>
+                                        toggleSlot(manualDate, slot)
+                                      }
+                                      className={`py-2 text-xs font-bold rounded-lg transition-all border ${
+                                        isTaken && !isSelected
+                                          ? "bg-slate-200 text-slate-400 border-slate-200 cursor-not-allowed opacity-50"
+                                          : isSelected
+                                            ? "bg-[#BF4B24] text-white border-[#BF4B24] shadow-md transform scale-105"
+                                            : "bg-white text-slate-700 hover:border-[#BF4B24]/40 border-slate-200 shadow-sm"
+                                      }`}
+                                    >
+                                      {slot}
+                                    </button>
+                                  );
+                                })
                               )}
                             </div>
-                          ) : (
-                            <div className="flex items-center justify-between bg-orange-50 border border-orange-200 p-3 rounded-xl">
-                              <div>
-                                <p className="font-bold text-sm">
-                                  {selectedProf.full_name}
-                                </p>
-                                <p className="text-xs text-[#BF4B24] font-bold">
-                                  Saldo: {selectedProf.wallet_balance || 0} CR
-                                </p>
+                          </div>
+
+                          {selectedSlots.length > 0 && (
+                            <div className="p-4 bg-orange-50 border border-orange-200 rounded-2xl">
+                              <p className="text-xs font-black text-orange-900 uppercase tracking-widest mb-3">
+                                Carrinho: {selectedSlots.length} Sessão(ões)
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                {selectedSlots.map((s, idx) => (
+                                  <Badge
+                                    key={idx}
+                                    className="bg-[#BF4B24] text-white border-0 py-1 px-2"
+                                  >
+                                    {format(s.date, "dd/MM")} • {s.slot}
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleSlot(s.date, s.slot)}
+                                      className="ml-2 hover:text-red-300 transition-colors"
+                                    >
+                                      <XCircle className="w-3 h-3" />
+                                    </button>
+                                  </Badge>
+                                ))}
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => setSelectedProf(null)}
-                                className="text-xs font-bold text-[#BF4B24] underline"
-                              >
-                                Trocar
-                              </button>
                             </div>
                           )}
                         </div>
 
-                        <Button
-                          type="button"
-                          onClick={handleManualBookingSubmit}
-                          disabled={
-                            !selectedProf ||
-                            selectedSlots.length === 0 ||
-                            actionLoading
-                          }
-                          className="w-full h-12 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black"
-                        >
-                          Confirmar {selectedSlots.length} Reserva(s)
-                        </Button>
+                        <div className="space-y-6">
+                          <div>
+                            <label className="text-sm font-bold text-slate-700 mb-2 block">
+                              3. Selecionar Especialista
+                            </label>
+
+                            {!selectedProf ? (
+                              <div className="relative">
+                                <Search className="absolute left-3 top-3.5 w-4 h-4 text-slate-400" />
+                                <Input
+                                  placeholder="Digite o nome do profissional..."
+                                  value={profSearch}
+                                  onChange={(e) =>
+                                    setProfSearch(e.target.value)
+                                  }
+                                  className="h-12 pl-10 bg-slate-50 border-slate-200 rounded-xl z-10 relative"
+                                />
+
+                                {profSearch.length > 0 && (
+                                  <div className="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-60 overflow-y-auto">
+                                    {filteredProfessionals.length === 0 ? (
+                                      <div className="p-4 text-center text-sm text-slate-500 font-medium">
+                                        Nenhum profissional encontrado.
+                                      </div>
+                                    ) : (
+                                      filteredProfessionals.map((p) => (
+                                        <div
+                                          key={p.id}
+                                          onClick={() => setSelectedProf(p)}
+                                          className="p-3 hover:bg-slate-50 cursor-pointer border-b border-slate-100 last:border-0 flex justify-between items-center transition-colors"
+                                        >
+                                          <div>
+                                            <p className="text-sm font-bold text-slate-900">
+                                              {p.full_name ||
+                                                "Sem Nome Cadastrado"}
+                                            </p>
+                                            <p className="text-[10px] text-slate-500">
+                                              CPF: {p.cpf || "Não informado"}
+                                            </p>
+                                          </div>
+                                          <Badge className="bg-slate-100 text-slate-600 border-0">
+                                            {p.wallet_balance || 0} CR
+                                          </Badge>
+                                        </div>
+                                      ))
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="flex items-center justify-between bg-orange-50 border border-orange-200 p-3 rounded-xl">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center border border-orange-200">
+                                    <UserCheck className="w-5 h-5 text-[#BF4B24]" />
+                                  </div>
+                                  <div>
+                                    <p className="font-bold text-orange-900 text-sm">
+                                      {selectedProf.full_name}
+                                    </p>
+                                    <p className="text-xs font-medium text-[#BF4B24]">
+                                      Saldo atual:{" "}
+                                      {selectedProf.wallet_balance || 0} CR
+                                    </p>
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedProf(null);
+                                    setProfSearch("");
+                                  }}
+                                  className="text-xs font-bold text-[#BF4B24] hover:text-[#9A3C1D] hover:underline"
+                                >
+                                  Trocar
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          <div
+                            className={`transition-opacity duration-300 ${!selectedProf || selectedSlots.length === 0 ? "opacity-30 pointer-events-none" : "opacity-100"}`}
+                          >
+                            <label className="text-sm font-bold text-slate-700 mb-2 block">
+                              4. Forma de Pagamento
+                            </label>
+                            <div className="grid grid-cols-2 gap-3">
+                              <button
+                                type="button"
+                                onClick={() => setManualPaymentMethod("wallet")}
+                                className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "wallet" ? "border-[#BF4B24] bg-[#BF4B24]/10 text-[#BF4B24]" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                              >
+                                <Wallet className="w-5 h-5" />
+                                <span className="text-xs font-bold text-center">
+                                  Abater da Carteira (-
+                                  {selectedSlots.length || 1} CR)
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setManualPaymentMethod("pix")}
+                                className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "pix" ? "border-emerald-600 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                              >
+                                <QrCode className="w-5 h-5" />
+                                <span className="text-xs font-bold text-center">
+                                  Pix Recebido Externo
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setManualPaymentMethod("card")}
+                                className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "card" ? "border-blue-600 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                              >
+                                <CreditCard className="w-5 h-5" />
+                                <span className="text-xs font-bold text-center">
+                                  Maquininha (Cartão)
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setManualPaymentMethod("cash")}
+                                className={`flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all ${manualPaymentMethod === "cash" ? "border-amber-600 bg-amber-50 text-amber-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                              >
+                                <Banknote className="w-5 h-5" />
+                                <span className="text-xs font-bold text-center">
+                                  Dinheiro em Espécie
+                                </span>
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="pt-4 border-t border-slate-100">
+                            <Button
+                              type="button"
+                              onClick={handleManualBookingSubmit}
+                              disabled={
+                                !selectedProf ||
+                                selectedSlots.length === 0 ||
+                                actionLoading
+                              }
+                              className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black text-base shadow-lg"
+                            >
+                              {actionLoading ? (
+                                <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                              ) : (
+                                <CheckCircle2 className="w-5 h-5 mr-2" />
+                              )}
+                              Confirmar {selectedSlots.length} Reserva(s)
+                            </Button>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
