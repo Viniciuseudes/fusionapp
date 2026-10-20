@@ -5,6 +5,10 @@ import { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
+import {
+  sendBookingNotificationEmails,
+  sendPaymentNotificationEmails,
+} from "@/app/actions/send-email";
 import { ptBR } from "date-fns/locale";
 import {
   format,
@@ -849,6 +853,13 @@ export function RoomDetail(props: RoomDetailProps) {
           });
         }
 
+        // Dispara e-mail de confirmação da reserva para o Profissional, Anfitrião e Admin
+        if (lockIds && lockIds[0]) {
+          sendBookingNotificationEmails(lockIds[0]).catch((e) =>
+            console.error("Erro ao enviar e-mail de reserva:", e),
+          );
+        }
+
         toast({
           title: "Reserva Confirmada! 🎉",
           description: "A sala foi agendada e os créditos consumidos.",
@@ -942,6 +953,20 @@ export function RoomDetail(props: RoomDetailProps) {
           setActiveBookingId(lockIds[0]);
           setActionLoading(false);
           return;
+        }
+
+        // Quando aprovado imediatamente no Cartão de Crédito, dispara os e-mails de Reserva + Pagamento
+        if (lockIds && lockIds[0]) {
+          await Promise.allSettled([
+            sendBookingNotificationEmails(lockIds[0]),
+            sendPaymentNotificationEmails({
+              userId: user.id,
+              amountBrl: finalHourlyCost,
+              paymentMethod: "Cartão de Crédito",
+              description: `Reserva Avulsa: ${roomData.name}`,
+              hostId: roomData.host_id,
+            }),
+          ]);
         }
 
         toast({

@@ -1,6 +1,10 @@
 // app/api/webhook/asaas/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import {
+  sendBookingNotificationEmails,
+  sendPaymentNotificationEmails,
+} from "@/app/actions/send-email";
 
 // Instanciação do Supabase com Service Role Key para ignorar RLS em chamadas do Gateway
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -13,21 +17,30 @@ export async function POST(request: Request) {
   try {
     // 1. Validação de Segurança do Token do Webhook do Asaas
     const asaasToken = request.headers.get("asaas-access-token");
-    const configuredSecret = process.env.ASAAS_WEBHOOK_SECRET || process.env.ASAAS_WEBHOOK_TOKEN;
+    const configuredSecret =
+      process.env.ASAAS_WEBHOOK_SECRET || process.env.ASAAS_WEBHOOK_TOKEN;
 
     if (configuredSecret && asaasToken !== configuredSecret) {
       console.error("[Asaas Webhook] Token de webhook inválido ou ausente.");
-      return NextResponse.json({ error: "Acesso não autorizado." }, { status: 401 });
+      return NextResponse.json(
+        { error: "Acesso não autorizado." },
+        { status: 401 },
+      );
     }
 
     const payload = await request.json();
     const { event, payment } = payload;
 
     if (!payment || !payment.id) {
-      return NextResponse.json({ error: "Payload inválido: objeto payment ausente." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Payload inválido: objeto payment ausente." },
+        { status: 400 },
+      );
     }
 
-    console.log(`[Asaas Webhook] Evento recebido: ${event} para o pagamento: ${payment.id}`);
+    console.log(
+      `[Asaas Webhook] Evento recebido: ${event} para o pagamento: ${payment.id}`,
+    );
 
     // 2. Processamento de Pagamento Confirmado / Recebido
     if (event === "PAYMENT_RECEIVED" || event === "PAYMENT_CONFIRMED") {
@@ -59,11 +72,22 @@ export async function POST(request: Request) {
           .single();
 
         if (updateError) {
-          console.error("[Asaas Webhook] Erro ao confirmar reserva no banco:", updateError);
+          console.error(
+            "[Asaas Webhook] Erro ao confirmar reserva no banco:",
+            updateError,
+          );
           throw updateError;
         }
 
-        console.log(`[Asaas Webhook] Reserva ${bookingId} confirmada com sucesso.`);
+        // Caso a mesma cobrança PIX/Cartão esteja vinculada a múltiplos slots horários
+        await supabaseAdmin
+          .from("bookings")
+          .update({ status: "confirmed" })
+          .eq("asaas_payment_id", payment.id);
+
+        console.log(
+          `[Asaas Webhook] Reserva ${bookingId} confirmada com sucesso.`,
+        );
 
         // Gera notificação interna para o usuário no app
         if (updatedBooking?.user_id) {
@@ -71,13 +95,46 @@ export async function POST(request: Request) {
             user_id: updatedBooking.user_id,
             type: "booking_confirmed",
             title: "Reserva Confirmada!",
-            content: "Seu pagamento via PIX foi confirmado. Seu horário já está garantido.",
+            content:
+              "Seu pagamento foi confirmado. Seu horário já está garantido.",
             link: "/dashboard",
             is_read: false,
           });
         }
 
-        return NextResponse.json({ success: true, message: "Reserva confirmada com sucesso." });
+        // Busca o host_id e nome da sala para incluir na notificação de pagamento ao anfitrião
+        let hostId: string | undefined = undefined;
+        let roomName = "Consultório Fusion";
+        if (updatedBooking?.room_id) {
+          const { data: roomInfo } = await supabaseAdmin
+            .from("rooms")
+            .select("name, host_id")
+            .eq("id", updatedBooking.room_id)
+            .maybeSingle();
+          if (roomInfo) {
+            hostId = roomInfo.host_id;
+            roomName = roomInfo.name || roomName;
+          }
+        }
+
+        // Dispara os e-mails de Reserva Confirmada + Pagamento Confirmado (Profissional, Anfitrião e Admin)
+        await Promise.allSettled([
+          sendBookingNotificationEmails(bookingId),
+          updatedBooking?.user_id
+            ? sendPaymentNotificationEmails({
+                userId: updatedBooking.user_id,
+                amountBrl: Number(payment.value || 0),
+                paymentMethod: payment.billingType || "PIX / Cartão",
+                description: `Reserva de Sala: ${roomName}`,
+                hostId,
+              })
+            : Promise.resolve(),
+        ]);
+
+        return NextResponse.json({
+          success: true,
+          message: "Reserva confirmada e e-mails enviados com sucesso.",
+        });
       }
 
       // Verificação secundária: Se for assinatura de pacote de horas
@@ -103,28 +160,52 @@ export async function POST(request: Request) {
             .update({ status: "ACTIVE" })
             .eq("id", subscription.id);
 
-          return NextResponse.json({ success: true, message: "Assinatura processada com sucesso." });
+          // Dispara o e-mail de confirmação de pagamento da assinatura (Profissional + Admin)
+          await sendPaymentNotificationEmails({
+            userId: subscription.user_id,
+            amountBrl: Number(payment.value || 0),
+            creditsAdded: Number(subscription.hours || 0),
+            tier: subscription.tier || "start",
+            paymentMethod: payment.billingType || "Assinatura Asaas",
+            description: `Assinatura Fusion Pass (${subscription.hours}h - ${String(subscription.tier || "START").toUpperCase()})`,
+          });
+
+          return NextResponse.json({
+            success: true,
+            message: "Assinatura processada e e-mails enviados com sucesso.",
+          });
         }
       }
     }
 
     // 3. Processamento de Pagamento Cancelado / Vencido / Deletado
-    if (event === "PAYMENT_OVERDUE" || event === "PAYMENT_DELETED" || event === "PAYMENT_REFUNDED") {
+    if (
+      event === "PAYMENT_OVERDUE" ||
+      event === "PAYMENT_DELETED" ||
+      event === "PAYMENT_REFUNDED"
+    ) {
       const bookingIdentifier = payment.externalReference;
-      
-      const query = supabaseAdmin.from("bookings").update({ status: "cancelled" });
+
+      const query = supabaseAdmin
+        .from("bookings")
+        .update({ status: "cancelled" });
       if (bookingIdentifier) {
         await query.eq("id", bookingIdentifier);
       } else {
         await query.eq("asaas_payment_id", payment.id);
       }
 
-      console.log(`[Asaas Webhook] Pagamento ${payment.id} cancelado/estornado. Reserva atualizada.`);
+      console.log(
+        `[Asaas Webhook] Pagamento ${payment.id} cancelado/estornado. Reserva atualizada.`,
+      );
     }
 
     return NextResponse.json({ received: true });
   } catch (error: any) {
     console.error("[Asaas Webhook] Erro crítico no processamento:", error);
-    return NextResponse.json({ error: error.message || "Erro interno no servidor." }, { status: 500 });
+    return NextResponse.json(
+      { error: error.message || "Erro interno no servidor." },
+      { status: 500 },
+    );
   }
 }
