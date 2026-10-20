@@ -14,6 +14,7 @@ import {
   differenceInDays,
   getDay,
   getHours,
+  getDaysInMonth,
 } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -37,8 +38,8 @@ function normalizeTier(tier?: string | null): "start" | "vip" | "master" {
 function calculateSlotUnits(startIso: string, endIso: string): number {
   const diffMinutes =
     (new Date(endIso).getTime() - new Date(startIso).getTime()) / (1000 * 60);
-  if (diffMinutes <= 0) return 1;
-  if (diffMinutes >= 45 && diffMinutes <= 65) return 1;
+  if (0 >= diffMinutes) return 1;
+  if (diffMinutes >= 45 && 65 >= diffMinutes) return 1;
   return Math.max(1, Math.round(diffMinutes / 55));
 }
 
@@ -59,7 +60,7 @@ function extractRoomModalitiesHourlyRate(
       ];
       for (const c of candidates) {
         const val = Number(c);
-        if (!isNaN(val) && val > 0 && val <= 250) return val;
+        if (!isNaN(val) && val > 0 && 250 >= val) return val;
       }
     }
     if (addressDetails) {
@@ -68,7 +69,7 @@ function extractRoomModalitiesHourlyRate(
           ? JSON.parse(addressDetails)
           : addressDetails;
       const addrPrice = Number(addr?.pricing?.hourly);
-      if (!isNaN(addrPrice) && addrPrice > 0 && addrPrice <= 250) {
+      if (!isNaN(addrPrice) && addrPrice > 0 && 250 >= addrPrice) {
         return addrPrice;
       }
     }
@@ -80,7 +81,7 @@ function extractRoomModalitiesHourlyRate(
 
 function getRoomAvailableHoursForSingleDate(room: any, d: Date): number {
   try {
-    const blockedSet = new Set<string>(
+    const blockedSet = new Set(
       Array.isArray(room?.blocked_dates) ? room.blocked_dates : [],
     );
     const dateIso = format(d, "yyyy-MM-dd");
@@ -133,14 +134,94 @@ function getRoomAvailableHoursForSingleDate(room: any, d: Date): number {
       }
       return daySlotsCount;
     } else {
-      if (dayOfWeek >= 1 && dayOfWeek <= 5) return 10;
+      if (dayOfWeek >= 1 && 5 >= dayOfWeek) return 10;
       if (dayOfWeek === 6) return 4;
       return 0;
     }
   } catch {
     const dow = d.getDay();
-    return dow >= 1 && dow <= 5 ? 8 : 0;
+    return dow >= 1 && 5 >= dow ? 8 : 0;
   }
+}
+
+function extractContractPaidEvents(contract: any): {
+  competence: string;
+  paidDateIso: string;
+  grossBrl: number;
+  fusionFeeBrl: number;
+  hostPayoutBrl: number;
+}[] {
+  const events: {
+    competence: string;
+    paidDateIso: string;
+    grossBrl: number;
+    fusionFeeBrl: number;
+    hostPayoutBrl: number;
+  }[] = [];
+
+  const contractVal =
+    Number(contract?.contract_value) > 0
+      ? Number(contract.contract_value)
+      : Number(contract?.session_value || 0);
+
+  if (0 >= contractVal) return events;
+
+  const feePct = Number(contract?.platform_fee_pct ?? 15) / 100;
+  const fusionFee = contractVal * feePct;
+  const hostPayout = Math.max(0, contractVal - fusionFee);
+
+  const dueDayRaw = Math.max(1, Math.min(31, Number(contract?.due_day) || 8));
+  const sched =
+    typeof contract?.schedule_config === "string"
+      ? (() => {
+          try {
+            return JSON.parse(contract.schedule_config);
+          } catch {
+            return {};
+          }
+        })()
+      : contract?.schedule_config || {};
+
+  const paidCompetencesMap = new Map();
+
+  if (sched?.paid_dates && typeof sched.paid_dates === "object") {
+    Object.entries(sched.paid_dates).forEach(([comp, dateStr]) => {
+      if (comp && typeof dateStr === "string") {
+        paidCompetencesMap.set(comp, dateStr.slice(0, 10));
+      }
+    });
+  }
+
+  const lastPaidComp = String(contract?.last_paid_competence || "").trim();
+  if (lastPaidComp && /^\d{4}-\d{2}$/.test(lastPaidComp)) {
+    if (!paidCompetencesMap.has(lastPaidComp)) {
+      if (
+        typeof sched?.last_paid_date === "string" &&
+        sched.last_paid_date.startsWith(lastPaidComp)
+      ) {
+        paidCompetencesMap.set(lastPaidComp, sched.last_paid_date.slice(0, 10));
+      } else {
+        const [yearStr, monthStr] = lastPaidComp.split("-");
+        const yearNum = Number(yearStr);
+        const monthNum = Number(monthStr);
+        const maxDays = getDaysInMonth(new Date(yearNum, monthNum - 1, 1));
+        const safeDay = String(Math.min(dueDayRaw, maxDays)).padStart(2, "0");
+        paidCompetencesMap.set(lastPaidComp, `${lastPaidComp}-${safeDay}`);
+      }
+    }
+  }
+
+  paidCompetencesMap.forEach((paidDateIso, competence) => {
+    events.push({
+      competence,
+      paidDateIso,
+      grossBrl: contractVal,
+      fusionFeeBrl: fusionFee,
+      hostPayoutBrl: hostPayout,
+    });
+  });
+
+  return events;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -214,8 +295,9 @@ export async function POST(req: Request) {
     const future30End = endOfDay(addDays(now, 30));
 
     const earliestFetchDate =
-      periodStart < sixMonthsAgo ? periodStart : sixMonthsAgo;
-    const latestFetchDate = periodEnd > future30End ? periodEnd : future30End;
+      sixMonthsAgo > periodStart ? periodStart : sixMonthsAgo;
+    const latestFetchDate =
+      periodEnd > future30End ? periodEnd : future30End;
 
     const [
       roomsRes,
@@ -294,36 +376,26 @@ export async function POST(req: Request) {
     const maintenancesData = maintenancesRes.data || [];
     const expensesData = expensesRes.data || [];
 
-    const profilesMap = new Map<string, any>(
-      profilesData.map((p: any) => [p.id, p]),
-    );
-    const roomsMap = new Map<string, any>(roomsData.map((r: any) => [r.id, r]));
-    const categoriesMap = new Map<string, any>(
-      categoriesData.map((c: any) => [c.id, c]),
-    );
-    const contractsById = new Map<string, any>(
-      contractsData.map((c: any) => [c.id, c]),
-    );
+    const profilesMap = new Map(profilesData.map((p: any) => [p.id, p]));
+    const roomsMap = new Map(roomsData.map((r: any) => [r.id, r]));
+    const categoriesMap = new Map(categoriesData.map((c: any) => [c.id, c]));
 
-    const packageRateMap: Record<
-      "start" | "vip" | "master",
-      Map<number, number>
-    > = {
-      start: new Map<number, number>(),
-      vip: new Map<number, number>(),
-      master: new Map<number, number>(),
+    const packageRateMap: Record<"start" | "vip" | "master", Map<number, number>> = {
+      start: new Map(),
+      vip: new Map(),
+      master: new Map(),
     };
 
     packagesData.forEach((pkg: any) => {
       const t = normalizeTier(pkg.tier);
       const h = Math.max(1, Number(pkg.hours) || 1);
       const rawPrice = Number(pkg.price) || 0;
-      if (rawPrice <= 0) return;
+      if (0 >= rawPrice) return;
       const hourlyRate = h > 1 && rawPrice > 120 ? rawPrice / h : rawPrice;
       packageRateMap[t].set(h, hourlyRate);
     });
 
-    const couponDiscountMap = new Map<string, number>();
+    const couponDiscountMap = new Map();
     couponUsesData.forEach((cu: any) => {
       if (cu.booking_id) {
         couponDiscountMap.set(
@@ -334,7 +406,7 @@ export async function POST(req: Request) {
       }
     });
 
-    const userWalletMap = new Map<string, any[]>();
+    const userWalletMap = new Map();
     walletData.forEach((tx: any) => {
       const list = userWalletMap.get(tx.user_id) || [];
       list.push(tx);
@@ -355,12 +427,12 @@ export async function POST(req: Request) {
         let minDiff = Infinity;
         for (const [h] of tierPackages.entries()) {
           const diff = Math.abs(h - targetHours);
-          if (diff < minDiff) {
+          if (minDiff > diff) {
             minDiff = diff;
             closestHours = h;
           }
         }
-        if (closestHours !== null && minDiff <= 4) {
+        if (closestHours !== null && 4 >= minDiff) {
           return tierPackages.get(closestHours)!;
         }
       }
@@ -386,6 +458,7 @@ export async function POST(req: Request) {
       return defaultTierRates[roomTier];
     };
 
+    // Reservas de contrato contam apenas horas ocupadas (R$ 0 por sessão)
     const resolveBookingMetrics = (b: any) => {
       const room = roomsMap.get(b.room_id);
       const roomTier = normalizeTier(room?.tier);
@@ -394,24 +467,16 @@ export async function POST(req: Request) {
           ? calculateSlotUnits(b.start_time, b.end_time)
           : 1;
 
-      const linkedContract = b.contract_id
-        ? contractsById.get(b.contract_id)
-        : null;
       const isContract = Boolean(
         b.contract_id ||
           (b.booking_origin && String(b.booking_origin).startsWith("contract")),
       );
 
       if (isContract) {
-        const val =
-          Number(b.agreed_value_brl) > 0
-            ? Number(b.agreed_value_brl)
-            : Number(linkedContract?.session_value || 0);
-        const feePct = Number(linkedContract?.platform_fee_pct ?? 15) / 100;
         return {
-          grossBrl: val,
-          fusionFeeBrl: val * feePct,
-          hostPayoutBrl: Math.max(0, val - val * feePct),
+          grossBrl: 0,
+          fusionFeeBrl: 0,
+          hostPayoutBrl: 0,
           hours: slotUnits,
           isContract: true,
         };
@@ -437,7 +502,7 @@ export async function POST(req: Request) {
       }
 
       const creditsForThisSlot =
-        rawTotalCost > 0 && rawTotalCost <= slotUnits * 2
+        rawTotalCost > 0 && slotUnits * 2 >= rawTotalCost
           ? rawTotalCost
           : slotUnits;
 
@@ -450,7 +515,7 @@ export async function POST(req: Request) {
       const matchingDebit = userTxs.find((tx: any) => {
         if (Number(tx.amount) >= 0) return false;
         const txTime = new Date(tx.created_at).getTime();
-        return Math.abs(txTime - bookingTime) <= 10 * 60 * 1000;
+        return 10 * 60 * 1000 >= Math.abs(txTime - bookingTime);
       });
       if (matchingDebit?.tier) {
         creditTierUsed = normalizeTier(matchingDebit.tier);
@@ -467,7 +532,7 @@ export async function POST(req: Request) {
       let detectedPackageHours: number | null = null;
       if (sourceCreditTx) {
         const txAmt = Math.round(Number(sourceCreditTx.amount));
-        if (txAmt > 0 && txAmt <= 60) detectedPackageHours = txAmt;
+        if (txAmt > 0 && 60 >= txAmt) detectedPackageHours = txAmt;
       }
 
       let resolvedHourlyRate =
@@ -525,7 +590,7 @@ export async function POST(req: Request) {
 
     const periodBookings = allBookings.filter((b: any) => {
       const stMs = new Date(b.start_time).getTime();
-      return stMs >= periodStartMs && stMs <= periodEndMs;
+      return stMs >= periodStartMs && periodEndMs >= stMs;
     });
 
     let globalGmv = 0;
@@ -537,15 +602,29 @@ export async function POST(req: Request) {
     let globalUpgradeFeeBrl = 0;
     let globalPenaltyBrl = 0;
 
-    const doctorStatsMap = new Map<string, any>();
-    const specialtyStatsMap = new Map<string, any>();
+    const doctorStatsMap = new Map();
+    const specialtyStatsMap = new Map();
+
+    // Pré-processa todos os eventos de baixa integral de contratos por sala
+    const contractEventsByRoom = new Map<string, any[]>();
+    contractsData.forEach((c: any) => {
+      const evs = extractContractPaidEvents(c).map((ev) => ({
+        ...ev,
+        specialist_name: c.specialist_name,
+        specialist_id: c.specialist_id,
+        contract_type: c.contract_type,
+      }));
+      const list = contractEventsByRoom.get(c.room_id) || [];
+      list.push(...evs);
+      contractEventsByRoom.set(c.room_id, list);
+    });
 
     const roomsDetailedDossier = roomsData.map((room: any) => {
       const hostProfile = profilesMap.get(room.host_id);
       const hourlyRate = resolveRoomPotentialHourlyRate(room);
 
       const weekdayBreakdown: Record<number, any> = {};
-      for (let d = 0; d <= 6; d++) {
+      for (let d = 0; 6 >= d; d++) {
         weekdayBreakdown[d] = {
           dia_semana: WEEKDAY_NAMES[d],
           qtd_dias_no_periodo: 0,
@@ -577,28 +656,16 @@ export async function POST(req: Request) {
         noite_20_23: { locacoes: 0, horas_ocupadas: 0, gmv_brl: 0 },
       };
 
-      const roomDoctorsMap = new Map<
-        string,
-        {
-          nome: string;
-          especialidade: string;
-          qtd_reservas_nesta_sala: number;
-          horas_avulsas_nesta_sala: number;
-          horas_contrato_nesta_sala: number;
-          horas_totais_nesta_sala: number;
-          gmv_gerado_nesta_sala_brl: number;
-          datas_utilizadas: string[];
-        }
-      >();
+      const roomDoctorsMap = new Map();
 
       const roomPeriodBookings = periodBookings.filter(
         (b: any) => b.room_id === room.id,
       );
 
-      let roomGmv = 0;
-      let roomFusionFee = 0;
       let roomAvulsoGmv = 0;
+      let roomAvulsoFee = 0;
       let roomContractGmv = 0;
+      let roomContractFee = 0;
       let roomOccupiedHours = 0;
       let roomAvulsoHours = 0;
       let roomContractHours = 0;
@@ -612,8 +679,6 @@ export async function POST(req: Request) {
         const startH = getHours(dt);
         const dateFormatted = format(dt, "dd/MM/yyyy HH:mm");
 
-        roomGmv += m.grossBrl;
-        roomFusionFee += m.fusionFeeBrl;
         roomOccupiedHours += m.hours;
         globalUpgradeFeeBrl += Number(b.upgrade_fee_amount || 0);
 
@@ -624,27 +689,27 @@ export async function POST(req: Request) {
         }
 
         if (m.isContract) {
-          roomContractGmv += m.grossBrl;
           roomContractHours += m.hours;
           weekdayBreakdown[dow].horas_contrato += m.hours;
         } else {
           roomAvulsoGmv += m.grossBrl;
+          roomAvulsoFee += m.fusionFeeBrl;
           roomAvulsoHours += m.hours;
           weekdayBreakdown[dow].horas_avulsas += m.hours;
+          weekdayBreakdown[dow].faturamento_real_brl += m.grossBrl;
         }
 
         weekdayBreakdown[dow].horas_ocupadas += m.hours;
-        weekdayBreakdown[dow].faturamento_real_brl += m.grossBrl;
 
-        if (startH < 12) {
+        if (12 > startH) {
           shiftsBreakdown.manha_08_12.locacoes += 1;
           shiftsBreakdown.manha_08_12.horas_ocupadas += m.hours;
           shiftsBreakdown.manha_08_12.gmv_brl += m.grossBrl;
-        } else if (startH < 16) {
+        } else if (16 > startH) {
           shiftsBreakdown.tarde_12_16.locacoes += 1;
           shiftsBreakdown.tarde_12_16.horas_ocupadas += m.hours;
           shiftsBreakdown.tarde_12_16.gmv_brl += m.grossBrl;
-        } else if (startH < 20) {
+        } else if (20 > startH) {
           shiftsBreakdown.fim_tarde_16_20.locacoes += 1;
           shiftsBreakdown.fim_tarde_16_20.horas_ocupadas += m.hours;
           shiftsBreakdown.fim_tarde_16_20.gmv_brl += m.grossBrl;
@@ -702,7 +767,7 @@ export async function POST(req: Request) {
           prevRoomDoc.gmv_gerado_nesta_sala_brl = Number(
             (prevRoomDoc.gmv_gerado_nesta_sala_brl + m.grossBrl).toFixed(2),
           );
-          if (prevRoomDoc.datas_utilizadas.length < 15) {
+          if (15 > prevRoomDoc.datas_utilizadas.length) {
             prevRoomDoc.datas_utilizadas.push(dateFormatted);
           }
           roomDoctorsMap.set(b.user_id, prevRoomDoc);
@@ -718,6 +783,32 @@ export async function POST(req: Request) {
         prevSpec.gmv_brl += m.grossBrl;
         specialtyStatsMap.set(specName, prevSpec);
       });
+
+      // Soma as Baixas Integrais de Contratos desta sala no período
+      const roomContractEvents = contractEventsByRoom.get(room.id) || [];
+      const baixasRealizadasNoPeriodo: any[] = [];
+
+      roomContractEvents.forEach((ev) => {
+        const evDt = startOfDay(parseISO(ev.paidDateIso));
+        const evMs = evDt.getTime();
+        if (evMs >= periodStartMs && periodEndMs >= evMs) {
+          roomContractGmv += ev.grossBrl;
+          roomContractFee += ev.fusionFeeBrl;
+          const dow = getDay(evDt);
+          weekdayBreakdown[dow].faturamento_real_brl += ev.grossBrl;
+
+          baixasRealizadasNoPeriodo.push({
+            locatario: ev.specialist_name,
+            competencia: ev.competence,
+            data_baixa: format(evDt, "dd/MM/yyyy"),
+            valor_integral_brl: Number(ev.grossBrl.toFixed(2)),
+            receita_fusion_brl: Number(ev.fusionFeeBrl.toFixed(2)),
+          });
+        }
+      });
+
+      const roomGmv = roomAvulsoGmv + roomContractGmv;
+      const roomFusionFee = roomAvulsoFee + roomContractFee;
 
       Object.values(weekdayBreakdown).forEach((wb) => {
         const effAvail = Math.max(wb.horas_disponiveis, wb.horas_ocupadas);
@@ -757,27 +848,38 @@ export async function POST(req: Request) {
           if (monthlyHistory[mKey]) {
             const bm = resolveBookingMetrics(b);
             monthlyHistory[mKey].horas_ocupadas += bm.hours;
-            monthlyHistory[mKey].gmv_total_brl = Number(
-              (monthlyHistory[mKey].gmv_total_brl + bm.grossBrl).toFixed(2),
-            );
-            monthlyHistory[mKey].receita_fusion_brl = Number(
-              (
-                monthlyHistory[mKey].receita_fusion_brl + bm.fusionFeeBrl
-              ).toFixed(2),
-            );
-            if (bm.isContract) {
-              monthlyHistory[mKey].gmv_contrato_brl = Number(
-                (monthlyHistory[mKey].gmv_contrato_brl + bm.grossBrl).toFixed(
-                  2,
-                ),
-              );
-            } else {
+            if (!bm.isContract) {
               monthlyHistory[mKey].gmv_avulso_brl = Number(
                 (monthlyHistory[mKey].gmv_avulso_brl + bm.grossBrl).toFixed(2),
+              );
+              monthlyHistory[mKey].gmv_total_brl = Number(
+                (monthlyHistory[mKey].gmv_total_brl + bm.grossBrl).toFixed(2),
+              );
+              monthlyHistory[mKey].receita_fusion_brl = Number(
+                (
+                  monthlyHistory[mKey].receita_fusion_brl + bm.fusionFeeBrl
+                ).toFixed(2),
               );
             }
           }
         });
+
+      roomContractEvents.forEach((ev) => {
+        const mKey = ev.paidDateIso.slice(0, 7);
+        if (monthlyHistory[mKey]) {
+          monthlyHistory[mKey].gmv_contrato_brl = Number(
+            (monthlyHistory[mKey].gmv_contrato_brl + ev.grossBrl).toFixed(2),
+          );
+          monthlyHistory[mKey].gmv_total_brl = Number(
+            (monthlyHistory[mKey].gmv_total_brl + ev.grossBrl).toFixed(2),
+          );
+          monthlyHistory[mKey].receita_fusion_brl = Number(
+            (
+              monthlyHistory[mKey].receita_fusion_brl + ev.fusionFeeBrl
+            ).toFixed(2),
+          );
+        }
+      });
 
       let availNext20d = 0;
       future20DaysList.forEach((d) => {
@@ -793,7 +895,7 @@ export async function POST(req: Request) {
         return (
           b.room_id === room.id &&
           ms >= tomorrowStart.getTime() &&
-          ms <= future20End.getTime()
+          future20End.getTime() >= ms
         );
       });
 
@@ -826,7 +928,7 @@ export async function POST(req: Request) {
         .filter(
           (inv: any) =>
             inv.room_id === room.id &&
-            Number(inv.current_quantity) <= Number(inv.min_quantity),
+            Number(inv.min_quantity) >= Number(inv.current_quantity),
         )
         .map((inv: any) => ({
           item: inv.name,
@@ -852,7 +954,7 @@ export async function POST(req: Request) {
           : 0;
       const roomIdlePct = Number((100 - roomOccPct).toFixed(1));
       const roomPotentialRev = Math.max(roomGmv, effAvailPeriod * hourlyRate);
-      const roomUncapturedRev = Math.max(0, roomPotentialRev - roomGmv);
+      const roomUncapturedRev = Math.max(0, roomFreeHours * hourlyRate);
 
       globalGmv += roomGmv;
       globalFusionFee += roomFusionFee;
@@ -879,7 +981,10 @@ export async function POST(req: Request) {
           taxa_ociosidade_pct: roomIdlePct,
           faturamento_realizado_gmv_brl: Number(roomGmv.toFixed(2)),
           faturamento_avulso_brl: Number(roomAvulsoGmv.toFixed(2)),
-          faturamento_contratos_brl: Number(roomContractGmv.toFixed(2)),
+          faturamento_contratos_baixa_integral_brl: Number(
+            roomContractGmv.toFixed(2),
+          ),
+          baixas_de_contratos_no_periodo: baixasRealizadasNoPeriodo,
           receita_liquida_fusion_brl: Number(roomFusionFee.toFixed(2)),
           repasse_clinica_brl: Number((roomGmv - roomFusionFee).toFixed(2)),
           potencial_maximo_100pct_brl: Number(roomPotentialRev.toFixed(2)),
@@ -900,7 +1005,8 @@ export async function POST(req: Request) {
         profissionais_que_utilizaram_esta_sala: Array.from(
           roomDoctorsMap.values(),
         ).sort(
-          (a, b) => b.gmv_gerado_nesta_sala_brl - a.gmv_gerado_nesta_sala_brl,
+          (a: any, b: any) =>
+            b.gmv_gerado_nesta_sala_brl - a.gmv_gerado_nesta_sala_brl,
         ),
         ociosidade_e_ocupacao_por_dia_da_semana: [
           weekdayBreakdown[1],
@@ -931,27 +1037,21 @@ export async function POST(req: Request) {
     let activeMasterCredits = 0;
     let creditsExpiring15d = 0;
 
-    const doctorsWithIdleBalance: {
-      nome: string;
-      especialidade: string;
-      saldo_creditos: number;
-      tier_predominante: string;
-      ja_reservou_no_periodo: boolean;
-    }[] = [];
+    const doctorsWithIdleBalance: any[] = [];
 
     userWalletMap.forEach((txs, userId) => {
       let userBal = 0;
       let lastTier = "start";
       txs.forEach((tx: any) => {
         const amt = Number(tx.amount || 0);
-        if (amt > 0 && tx.expires_at && new Date(tx.expires_at) < now) return;
+        if (amt > 0 && tx.expires_at && now > new Date(tx.expires_at)) return;
         userBal += amt;
         if (tx.tier) lastTier = normalizeTier(tx.tier);
         if (
           amt > 0 &&
           tx.expires_at &&
           new Date(tx.expires_at) >= now &&
-          new Date(tx.expires_at) <= future15End
+          future15End >= new Date(tx.expires_at)
         ) {
           creditsExpiring15d += amt;
         }
@@ -1005,6 +1105,8 @@ export async function POST(req: Request) {
         periodo_analisado_fim: format(periodEnd, "dd/MM/yyyy"),
         quantidade_dias_no_periodo:
           differenceInDays(periodEnd, periodStart) + 1,
+        regra_contabil_contratos:
+          "O valor cheio do contrato (contract_value) é contabilizado integralmente no dia exato da baixa (last_paid_competence / due_day), sem diluir pelos dias de uso.",
       },
       resumo_executivo_global_no_periodo: {
         gmv_total_brl: Number(globalGmv.toFixed(2)),
@@ -1022,8 +1124,8 @@ export async function POST(req: Request) {
               ? Number(((globalAvulsoGmv / globalGmv) * 100).toFixed(1))
               : 0,
         },
-        operacao_contratos_fixos: {
-          gmv_contratos_brl: Number(globalContractGmv.toFixed(2)),
+        operacao_contratos_fixos_baixa_integral: {
+          gmv_contratos_com_baixa_brl: Number(globalContractGmv.toFixed(2)),
           receita_fusion_contratos_brl: Number(
             (globalFusionFee - globalAvulsoGmv * 0.2).toFixed(2),
           ),
@@ -1061,15 +1163,16 @@ export async function POST(req: Request) {
           status: c.status,
           inicio: c.start_date,
           fim: c.end_date,
-          dia_vencimento: c.due_day,
-          pago_no_mes_atual: isPaidThisMonth,
+          dia_vencimento_e_baixa: c.due_day,
+          ultima_competencia_paga: c.last_paid_competence,
+          baixa_dada_no_mes_atual: isPaidThisMonth,
           em_atraso_no_mes_atual: isOverdue,
-          valor_contrato_brl: Number(c.contract_value || 0),
-          valor_sessao_diaria_brl: Number(c.session_value || 0),
+          valor_integral_contrato_brl: Number(
+            c.contract_value || c.session_value || 0,
+          ),
           split_fusion_pct: Number(c.platform_fee_pct ?? 15),
           split_anfitriao_pct: Number(c.host_split_pct ?? 85),
           co_anfitriao_sublocacao: Boolean(c.allow_sublease),
-          faixas_escalonadas: c.schedule_config?.pricingTiers || [],
         };
       }),
       inteligencia_comercial_e_carteira: {
@@ -1122,47 +1225,38 @@ Sempre que a gestora mencionar o nome de uma sala ou profissional (ex: "sala 3",
      [[PERGUNTAR: Sua pergunta original substituindo pelo nome_oficial_exato]]
 
 ================================================================================
-REGRA #2 — MOTOR CIENTÍFICO DE GRÁFICOS INTERATIVOS (QUANDO PEDIR GRÁFICO OU COMPARATIVO)
+REGRA #2 — REGIME DE CAIXA INTEGRAL PARA CONTRATOS FIXOS
 ================================================================================
-Sempre que a gestora pedir um gráfico, visualização, evolução, comparativo entre salas/dias/turnos ou análise de BI, você DEVE incluir na resposta um bloco de código \`\`\`chart contendo um JSON válido e rigoroso (sem comentários dentro do JSON).
-O frontend vai transformar esse bloco \`\`\`chart em um Gráfico Interativo Recharts!
+- O valor de um contrato fixo (valor_integral_contrato_brl) NÃO é dividido pelos dias de utilização da sala.
+- As sessões de contrato contam normalmente como horas ocupadas da sala, mas o faturamento do contrato entra 100% de uma única vez apenas quando é dada a baixa (no dia da baixa / vencimento).
 
-ESCOLHA O TIPO DE GRÁFICO ("type") COMO UM CIENTISTA DE DADOS:
-- "bar": Para comparar salas (Faturamento Real vs Potencial, Ocupação vs Ociosidade), dias da semana (Seg a Dom) ou turnos.
-- "area" ou "line": Para séries temporais e evolução mensal (últimos 3 a 6 meses).
-- "pie": Para distribuição percentual / Share (Avulso vs Contrato, Demanda por Especialidade, Créditos por Tier).
-
-FORMATO EXATO E OBRIGATÓRIO DO BLOCO \`\`\`chart:
+================================================================================
+REGRA #3 — MOTOR CIENTÍFICO DE GRÁFICOS INTERATIVOS
+================================================================================
+Sempre que a gestora pedir um gráfico, visualização, evolução ou comparativo, inclua um bloco \`\`\`chart contendo um JSON válido:
 \`\`\`chart
 {
   "type": "bar",
   "title": "Título Executivo do Gráfico",
-  "subtitle": "Subtítulo explicativo com o período auditado",
+  "subtitle": "Subtítulo com o período auditado",
   "xKey": "nome",
   "valuePrefix": "R$ ",
   "valueSuffix": "",
   "series": [
-    { "key": "faturamento", "label": "Faturamento Realizado", "color": "#BF4B24" },
-    { "key": "potencial", "label": "Potencial Máximo (100%)", "color": "#0f172a" }
+    { "key": "faturamento", "label": "Faturamento Realizado", "color": "#BF4B24" }
   ],
   "data": [
-    { "nome": "Sala Fusion 01", "faturamento": 1250.5, "potencial": 4500.0 },
-    { "nome": "Sala Fusion 03", "faturamento": 980.0, "potencial": 3800.0 }
+    { "nome": "Sala Fusion 01", "faturamento": 1250.5 }
   ]
 }
 \`\`\`
-Regras do JSON do gráfico:
-- Os valores numéricos dentro de "data" DEVEM ser números puros (ex: 1250.50 e NÃO "R$ 1.250,50"), pois o gráfico precisa de números para desenhar as barras/linhas.
-- Use "valuePrefix": "R$ " quando os números forem dinheiro, ou "valueSuffix": "%" quando forem porcentagens, ou "valueSuffix": "h" quando forem horas.
-- Para gráficos "pie", use apenas 1 item dentro de "series" (ex: \`{ "key": "valor", "label": "Participação", "color": "#BF4B24" }\`).
 
 ================================================================================
-REGRA #3 — TABELAS EXECUTIVAS + FIDELIDADE CONTÁBIL (ZERO ALUCINAÇÃO)
+REGRA #4 — TABELAS EXECUTIVAS + FIDELIDADE CONTÁBIL (ZERO ALUCINAÇÃO)
 ================================================================================
 1. NUNCA invente números. Use EXCLUSIVAMENTE os dados de "dossieAuditadoSupabase".
-2. Sempre acompanhe análises e gráficos com uma TABELA EM FORMATO MARKDOWN PADRÃO (usando | Coluna 1 | Coluna 2 |) contendo os indicadores completos para auditoria e exportação em Excel/CSV.
-3. Formate valores no texto e nas tabelas Markdown no padrão brasileiro (R$ 1.234,56) e porcentagens com 1 casa decimal (82,5%).
-4. Ao final, traga um bloco "💡 Diagnóstico do Cientista de Dados & Plano de Ação" com insights acionáveis.
+2. Sempre acompanhe análises e gráficos com uma TABELA EM FORMATO MARKDOWN PADRÃO (usando | Coluna 1 | Coluna 2 |).
+3. Formate valores no padrão brasileiro (R$ 1.234,56) e porcentagens com 1 casa decimal (82,5%).
 
 DOSSIÊ AUDITADO DO SUPABASE EM TEMPO REAL:
 ${JSON.stringify(dossieAuditadoSupabase)}`;
@@ -1182,7 +1276,7 @@ ${JSON.stringify(dossieAuditadoSupabase)}`;
     let aiAnswer = "";
     let lastApiError = "";
 
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; 3 >= attempt; attempt++) {
       try {
         const response = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${primaryModel}:generateContent?key=${apiKey}`,
@@ -1212,7 +1306,7 @@ ${JSON.stringify(dossieAuditadoSupabase)}`;
 
         if (
           (response.status === 429 || response.status === 503) &&
-          attempt < 3
+          3 > attempt
         ) {
           await sleep(2500 * attempt);
           continue;
@@ -1224,7 +1318,7 @@ ${JSON.stringify(dossieAuditadoSupabase)}`;
         break;
       } catch (err: any) {
         lastApiError = err.message;
-        if (attempt < 3) {
+        if (3 > attempt) {
           await sleep(2000);
         }
       }

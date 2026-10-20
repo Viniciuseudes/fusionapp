@@ -57,6 +57,7 @@ import {
   getHours,
   differenceInDays,
   eachDayOfInterval,
+  getDaysInMonth,
 } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useToast } from "@/hooks/use-toast";
@@ -81,7 +82,7 @@ const PIE_COLORS = [
 interface LedgerEntry {
   id: string;
   booking_id: string;
-  transaction_date: string; // created_at (quando agendou/pagou)
+  transaction_date: string; // created_at (quando agendou/pagou) ou data da baixa do contrato
   created_at: string;
   start_time: string;
   end_time: string;
@@ -267,6 +268,97 @@ function computeRoomAvailableHoursInInterval(
   }
 }
 
+// Extrai os eventos de Baixa Integral de um contrato (valor cheio no dia da baixa)
+function extractContractBaixaEvents(contract: any): {
+  competence: string;
+  paidDateIso: string; // YYYY-MM-DDTHH:mm:ss
+  grossBrl: number;
+  fusionFeeBrl: number;
+  fusionFeePct: number;
+  hostPayoutBrl: number;
+}[] {
+  const events: {
+    competence: string;
+    paidDateIso: string;
+    grossBrl: number;
+    fusionFeeBrl: number;
+    fusionFeePct: number;
+    hostPayoutBrl: number;
+  }[] = [];
+
+  const contractVal =
+    Number(contract?.contract_value) > 0
+      ? Number(contract.contract_value)
+      : Number(contract?.session_value || 0);
+
+  if (contractVal <= 0) return events;
+
+  const feePct = Number(contract?.platform_fee_pct ?? 15);
+  const fusionFee = contractVal * (feePct / 100);
+  const hostPayout = Math.max(0, contractVal - fusionFee);
+
+  const dueDayRaw = Math.max(1, Math.min(31, Number(contract?.due_day) || 8));
+  const sched =
+    typeof contract?.schedule_config === "string"
+      ? (() => {
+          try {
+            return JSON.parse(contract.schedule_config);
+          } catch {
+            return {};
+          }
+        })()
+      : contract?.schedule_config || {};
+
+  const paidCompetencesMap = new Map<string, string>();
+
+  // 1. Se houver histórico de baixas salvo em schedule_config.paid_dates
+  if (sched?.paid_dates && typeof sched.paid_dates === "object") {
+    Object.entries(sched.paid_dates).forEach(([comp, dateStr]) => {
+      if (comp && typeof dateStr === "string") {
+        const cleanDate = dateStr.slice(0, 10);
+        paidCompetencesMap.set(comp, `${cleanDate}T12:00:00`);
+      }
+    });
+  }
+
+  // 2. Competência marcada como paga em last_paid_competence (quando o gestor dá baixa)
+  const lastPaidComp = String(contract?.last_paid_competence || "").trim();
+  if (lastPaidComp && /^\d{4}-\d{2}$/.test(lastPaidComp)) {
+    if (!paidCompetencesMap.has(lastPaidComp)) {
+      if (
+        typeof sched?.last_paid_date === "string" &&
+        sched.last_paid_date.startsWith(lastPaidComp)
+      ) {
+        const cleanDate = sched.last_paid_date.slice(0, 10);
+        paidCompetencesMap.set(lastPaidComp, `${cleanDate}T12:00:00`);
+      } else {
+        const [yearStr, monthStr] = lastPaidComp.split("-");
+        const yearNum = Number(yearStr);
+        const monthNum = Number(monthStr);
+        const maxDays = getDaysInMonth(new Date(yearNum, monthNum - 1, 1));
+        const safeDay = String(Math.min(dueDayRaw, maxDays)).padStart(2, "0");
+        paidCompetencesMap.set(
+          lastPaidComp,
+          `${lastPaidComp}-${safeDay}T12:00:00`,
+        );
+      }
+    }
+  }
+
+  paidCompetencesMap.forEach((paidDateIso, competence) => {
+    events.push({
+      competence,
+      paidDateIso,
+      grossBrl: contractVal,
+      fusionFeeBrl: fusionFee,
+      fusionFeePct: feePct,
+      hostPayoutBrl: hostPayout,
+    });
+  });
+
+  return events;
+}
+
 const formatBRL = (val: number) =>
   val.toLocaleString("pt-BR", {
     minimumFractionDigits: 2,
@@ -441,10 +533,17 @@ export function AdminOverviewTab() {
             allFetchedBookings.map((b: any) => b.user_id).filter(Boolean),
           ),
         ];
+        const contractSpecialistIds = [
+          ...new Set(
+            contractsData.map((c: any) => c.specialist_id).filter(Boolean),
+          ),
+        ];
         const hostIds = [
           ...new Set(roomsData.map((r: any) => r.host_id).filter(Boolean)),
         ];
-        const allProfileIds = [...new Set([...userIds, ...hostIds])];
+        const allProfileIds = [
+          ...new Set([...userIds, ...contractSpecialistIds, ...hostIds]),
+        ];
 
         const [profilesRes, walletRes, subsRes, couponsRes] = await Promise.all(
           [
@@ -641,16 +740,11 @@ export function AdminOverviewTab() {
               String(b.booking_origin).startsWith("contract")),
           );
 
-          // 1. Reserva de CONTRATO
+          // 1. Reserva de CONTRATO:
+          // Conta apenas as HORAS OCUPADAS (duration_hours), mas tem valor R$ 0 na sessão diária,
+          // pois o valor cheio do contrato entra integralmente apenas no dia da BAIXA!
           if (isContractBooking) {
-            const val =
-              Number(b.agreed_value_brl) > 0
-                ? Number(b.agreed_value_brl)
-                : Number(linkedContract?.session_value || 0);
             const feePct = Number(linkedContract?.platform_fee_pct ?? 15);
-            const fusionFee = val * (feePct / 100);
-            const hostPayout = Math.max(0, val - fusionFee);
-
             const cType =
               linkedContract?.contract_type || b.booking_origin || "";
             let modalityLabel = "Contrato • Alocação Fixa";
@@ -664,7 +758,6 @@ export function AdminOverviewTab() {
             return {
               id: b.id,
               booking_id: b.id,
-              // Para contrato fixo gerado em lote, usa a data de competência ou criação
               transaction_date: b.start_time || b.created_at,
               created_at: b.created_at || b.start_time,
               start_time: b.start_time,
@@ -681,12 +774,12 @@ export function AdminOverviewTab() {
               is_contract: true,
               modality_label: modalityLabel,
               duration_hours: slotUnits,
-              gross_brl: val,
-              fusion_fee_brl: fusionFee,
+              gross_brl: 0,
+              fusion_fee_brl: 0,
               fusion_fee_pct: feePct,
               cohost_name: null,
               cohost_payout_brl: 0,
-              host_payout_brl: hostPayout,
+              host_payout_brl: 0,
             };
           }
 
@@ -725,7 +818,6 @@ export function AdminOverviewTab() {
             return {
               id: b.id,
               booking_id: b.id,
-              // DATA EM QUE O PROFISSIONAL AGENDOU / PAGOU:
               transaction_date: b.created_at || b.start_time,
               created_at: b.created_at || b.start_time,
               start_time: b.start_time,
@@ -887,7 +979,6 @@ export function AdminOverviewTab() {
           return {
             id: b.id,
             booking_id: b.id,
-            // DATA EM QUE O PROFISSIONAL AGENDOU / PAGOU:
             transaction_date: b.created_at || b.start_time,
             created_at: b.created_at || b.start_time,
             start_time: b.start_time,
@@ -923,9 +1014,6 @@ export function AdminOverviewTab() {
           resolveBookingLedgerEntry,
         );
 
-        // Para o período histórico/extrato:
-        // - Reservas avulsas entram se foram AGENDADAS/PAGAS (`created_at`) no período OU realizadas no período
-        // - Reservas de contrato entram se a sessão (`start_time`) pertence ao período
         const periodEntries = allResolvedEntries.filter((entry) => {
           const startTimeMs = new Date(entry.start_time).getTime();
           const createdTimeMs = new Date(entry.created_at).getTime();
@@ -939,7 +1027,6 @@ export function AdminOverviewTab() {
           );
         });
 
-        // Para o estoque futuro (próximos 15, 20 ou 30 dias):
         const futureEntries = allResolvedEntries.filter((entry) => {
           const startTimeMs = new Date(entry.start_time).getTime();
           return startTimeMs >= tomorrowStartMs;
@@ -1016,23 +1103,11 @@ export function AdminOverviewTab() {
           };
         });
 
+        const useMonthlyGrouping =
+          timeFilter === "ytd" || (timeFilter === "custom" && daysCount > 62);
+
+        // 1. Processa reservas (Avulsas somam R$ e horas; Contratos somam APENAS horas ocupadas e mapa de calor)
         periodEntries.forEach((entry) => {
-          totalGmv += entry.gross_brl;
-          totalTakeRate += entry.fusion_fee_brl;
-          totalHostNet += entry.host_payout_brl + entry.cohost_payout_brl;
-
-          if (entry.is_contract) {
-            sumContractGmv += entry.gross_brl;
-            sumContractTake += entry.fusion_fee_brl;
-            countContractBookings += 1;
-            sumContractHours += entry.duration_hours;
-          } else {
-            sumAvulsoGmv += entry.gross_brl;
-            sumAvulsoTake += entry.fusion_fee_brl;
-            countAvulsoBookings += 1;
-            sumAvulsoHours += entry.duration_hours;
-          }
-
           if (entry.user_id) {
             doctorBookingCounts.set(
               entry.user_id,
@@ -1040,49 +1115,12 @@ export function AdminOverviewTab() {
             );
           }
 
-          // Usa a data da transação (created_at para avulso) no gráfico e extrato
-          const refDateObj = parseISO(entry.transaction_date);
           const startDateBookingObj = parseISO(entry.start_time);
           const endDateObjBooking = entry.end_time
             ? parseISO(entry.end_time)
             : null;
 
-          const useMonthlyGrouping =
-            timeFilter === "ytd" || (timeFilter === "custom" && daysCount > 62);
-
-          const dateKey = useMonthlyGrouping
-            ? format(refDateObj, "MMM/yy", { locale: ptBR })
-            : format(refDateObj, "dd/MM", { locale: ptBR });
-
-          if (!revMap[dateKey]) {
-            revMap[dateKey] = {
-              name: dateKey,
-              totalGmv: 0,
-              platformFee: 0,
-              avulsoGmv: 0,
-              avulsoFee: 0,
-              contractGmv: 0,
-              contractFee: 0,
-              order: refDateObj.getTime(),
-            };
-          }
-
-          revMap[dateKey].totalGmv += entry.gross_brl;
-          revMap[dateKey].platformFee += entry.fusion_fee_brl;
-          if (entry.is_contract) {
-            revMap[dateKey].contractGmv += entry.gross_brl;
-            revMap[dateKey].contractFee += entry.fusion_fee_brl;
-          } else {
-            revMap[dateKey].avulsoGmv += entry.gross_brl;
-            revMap[dateKey].avulsoFee += entry.fusion_fee_brl;
-          }
-
-          if (!specMap[entry.specialty]) {
-            specMap[entry.specialty] = { count: 0, revenue: 0 };
-          }
-          specMap[entry.specialty].count += 1;
-          specMap[entry.specialty].revenue += entry.gross_brl;
-
+          // Mapa de calor conta todas as sessões físicas (avulso + contrato)
           const dayOfWeek = getDay(startDateBookingObj);
           const startH = getHours(startDateBookingObj);
           const endH =
@@ -1103,21 +1141,181 @@ export function AdminOverviewTab() {
             }
           });
 
+          if (entry.is_contract) {
+            // Sessão de contrato: contabiliza apenas horas ocupadas e demanda da especialidade (sem diluir valor no gráfico!)
+            sumContractHours += entry.duration_hours;
+
+            if (!specMap[entry.specialty]) {
+              specMap[entry.specialty] = { count: 0, revenue: 0 };
+            }
+            specMap[entry.specialty].count += 1;
+
+            if (roomStats[entry.room_id]) {
+              roomStats[entry.room_id].bookings += 1;
+              roomStats[entry.room_id].occupiedHours += entry.duration_hours;
+              roomStats[entry.room_id].contractHours += entry.duration_hours;
+            }
+            return;
+          }
+
+          // Sessão Avulsa: contabiliza faturamento, taxas, gráfico e horas
+          totalGmv += entry.gross_brl;
+          totalTakeRate += entry.fusion_fee_brl;
+          totalHostNet += entry.host_payout_brl + entry.cohost_payout_brl;
+
+          sumAvulsoGmv += entry.gross_brl;
+          sumAvulsoTake += entry.fusion_fee_brl;
+          countAvulsoBookings += 1;
+          sumAvulsoHours += entry.duration_hours;
+
+          const refDateObj = parseISO(entry.transaction_date);
+          const dateKey = useMonthlyGrouping
+            ? format(refDateObj, "MMM/yy", { locale: ptBR })
+            : format(refDateObj, "dd/MM", { locale: ptBR });
+
+          if (!revMap[dateKey]) {
+            revMap[dateKey] = {
+              name: dateKey,
+              totalGmv: 0,
+              platformFee: 0,
+              avulsoGmv: 0,
+              avulsoFee: 0,
+              contractGmv: 0,
+              contractFee: 0,
+              order: startOfDay(refDateObj).getTime(),
+            };
+          }
+
+          revMap[dateKey].totalGmv += entry.gross_brl;
+          revMap[dateKey].platformFee += entry.fusion_fee_brl;
+          revMap[dateKey].avulsoGmv += entry.gross_brl;
+          revMap[dateKey].avulsoFee += entry.fusion_fee_brl;
+
+          if (!specMap[entry.specialty]) {
+            specMap[entry.specialty] = { count: 0, revenue: 0 };
+          }
+          specMap[entry.specialty].count += 1;
+          specMap[entry.specialty].revenue += entry.gross_brl;
+
           if (roomStats[entry.room_id]) {
             roomStats[entry.room_id].revenue += entry.gross_brl;
+            roomStats[entry.room_id].avulsoRevenue += entry.gross_brl;
             roomStats[entry.room_id].platformFee += entry.fusion_fee_brl;
             roomStats[entry.room_id].hostNet +=
               entry.host_payout_brl + entry.cohost_payout_brl;
             roomStats[entry.room_id].bookings += 1;
             roomStats[entry.room_id].occupiedHours += entry.duration_hours;
-            if (entry.is_contract) {
-              roomStats[entry.room_id].contractRevenue += entry.gross_brl;
-              roomStats[entry.room_id].contractHours += entry.duration_hours;
-            } else {
-              roomStats[entry.room_id].avulsoRevenue += entry.gross_brl;
-              roomStats[entry.room_id].avulsoHours += entry.duration_hours;
-            }
+            roomStats[entry.room_id].avulsoHours += entry.duration_hours;
           }
+        });
+
+        // =========================================================================
+        // 2. PROCESSA AS BAIXAS INTEGRAIS DE CONTRATOS (VALOR TOTAL NO DIA DA BAIXA)
+        // =========================================================================
+        const contractBaixaLedgerEntries: LedgerEntry[] = [];
+
+        contractsData.forEach((c: any) => {
+          const room = roomsMap.get(c.room_id);
+          const hostProfile = room?.host_id
+            ? profilesMap.get(room.host_id)
+            : null;
+          const clinicName = hostProfile?.full_name || "Fusion Clinic";
+          const docProfile = c.specialist_id
+            ? profilesMap.get(c.specialist_id)
+            : null;
+          const specialty = docProfile?.specialty || "Clínico / Saúde";
+
+          const cType = String(c.contract_type || "");
+          let modalityLabel = "Contrato • Alocação Fixa";
+          if (cType.includes("monthly_exclusive"))
+            modalityLabel = "Contrato • Sala Exclusiva";
+          else if (cType.includes("fixed_shift"))
+            modalityLabel = "Contrato • Turno Fixo";
+          else if (cType.includes("fixed_daily"))
+            modalityLabel = "Contrato • Diária Fixa";
+
+          const roomContractHoursInPeriod =
+            roomStats[c.room_id]?.contractHours || 0;
+
+          const baixaEvents = extractContractBaixaEvents(c);
+
+          baixaEvents.forEach((ev) => {
+            const paidDateObj = parseISO(ev.paidDateIso);
+            const paidMs = paidDateObj.getTime();
+
+            if (paidMs >= startMs && paidMs <= endMs) {
+              // Soma o valor cheio do contrato no faturamento do período!
+              totalGmv += ev.grossBrl;
+              totalTakeRate += ev.fusionFeeBrl;
+              totalHostNet += ev.hostPayoutBrl;
+
+              sumContractGmv += ev.grossBrl;
+              sumContractTake += ev.fusionFeeBrl;
+              countContractBookings += 1;
+
+              // Injeta o valor cheio do contrato APENAS no dia exato da baixa no gráfico!
+              const dateKey = useMonthlyGrouping
+                ? format(paidDateObj, "MMM/yy", { locale: ptBR })
+                : format(paidDateObj, "dd/MM", { locale: ptBR });
+
+              if (!revMap[dateKey]) {
+                revMap[dateKey] = {
+                  name: dateKey,
+                  totalGmv: 0,
+                  platformFee: 0,
+                  avulsoGmv: 0,
+                  avulsoFee: 0,
+                  contractGmv: 0,
+                  contractFee: 0,
+                  order: startOfDay(paidDateObj).getTime(),
+                };
+              }
+
+              revMap[dateKey].totalGmv += ev.grossBrl;
+              revMap[dateKey].platformFee += ev.fusionFeeBrl;
+              revMap[dateKey].contractGmv += ev.grossBrl;
+              revMap[dateKey].contractFee += ev.fusionFeeBrl;
+
+              if (!specMap[specialty]) {
+                specMap[specialty] = { count: 1, revenue: 0 };
+              }
+              specMap[specialty].revenue += ev.grossBrl;
+
+              if (roomStats[c.room_id]) {
+                roomStats[c.room_id].revenue += ev.grossBrl;
+                roomStats[c.room_id].contractRevenue += ev.grossBrl;
+                roomStats[c.room_id].platformFee += ev.fusionFeeBrl;
+                roomStats[c.room_id].hostNet += ev.hostPayoutBrl;
+              }
+
+              // Adiciona o lançamento único da baixa integral no Extrato Bancário
+              contractBaixaLedgerEntries.push({
+                id: `baixa_${c.id}_${ev.competence}`,
+                booking_id: c.id,
+                transaction_date: ev.paidDateIso,
+                created_at: ev.paidDateIso,
+                start_time: ev.paidDateIso,
+                end_time: ev.paidDateIso,
+                status: "completed",
+                room_id: c.room_id,
+                room_name: room?.name || "Sala",
+                clinic_id: room?.host_id || "fusion",
+                clinic_name: clinicName,
+                user_id: c.specialist_id || "",
+                specialist_name: c.specialist_name || "Locatário Contrato",
+                specialty,
+                is_contract: true,
+                modality_label: `${modalityLabel} (Baixa ${ev.competence})`,
+                duration_hours: roomContractHoursInPeriod,
+                gross_brl: ev.grossBrl,
+                fusion_fee_brl: ev.fusionFeeBrl,
+                fusion_fee_pct: ev.fusionFeePct,
+                cohost_name: null,
+                cohost_payout_brl: 0,
+                host_payout_brl: ev.hostPayoutBrl,
+              });
+            }
+          });
         });
 
         const activeContractsList = contractsData.filter(
@@ -1129,7 +1327,12 @@ export function AdminOverviewTab() {
           if (cnt >= 2) recurringDocs += 1;
         });
 
-        setLedgerEntries(periodEntries);
+        // No Extrato Bancário entram as reservas avulsas + os lançamentos integrais de baixa de contrato
+        const avulsoLedgerEntries = periodEntries.filter((e) => !e.is_contract);
+        setLedgerEntries([
+          ...avulsoLedgerEntries,
+          ...contractBaixaLedgerEntries,
+        ]);
         setFutureResolvedEntries(futureEntries);
 
         setGmv(totalGmv);
@@ -1347,7 +1550,7 @@ export function AdminOverviewTab() {
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
   }, [ledgerEntries]);
 
-  // Extrato ordenado pela data em que a reserva foi AGENDADA/PAGA (`transaction_date` = `created_at`)
+  // Extrato ordenado pela data em que a reserva foi AGENDADA/PAGA ou da BAIXA DO CONTRATO (`transaction_date`)
   const processedLedger = useMemo(() => {
     const q = ledgerSearch.toLowerCase().trim();
     const filtered = ledgerEntries.filter((e) => {
@@ -1439,15 +1642,17 @@ export function AdminOverviewTab() {
       return toast({ title: "Sem lançamentos para exportar." });
     }
     let csv =
-      "Data do Agendamento (Pgto);Data da Sessao Reservada;Codigo Transacao;Clinica;Sala;Profissional;Especialidade;Natureza;Modalidade;Horas;Entrada Bruta GMV (R$);Repasse Clinica/CoHost (R$);Taxa Fusion (%);Credito Liquido Fusion (R$);Saldo Acumulado Fusion (R$)\n";
+      "Data do Agendamento / Baixa;Data da Sessao / Competencia;Codigo Transacao;Clinica;Sala;Profissional;Especialidade;Natureza;Modalidade;Horas;Entrada Bruta GMV (R$);Repasse Clinica/CoHost (R$);Taxa Fusion (%);Credito Liquido Fusion (R$);Saldo Acumulado Fusion (R$)\n";
 
     [...processedLedger].reverse().forEach((row) => {
       const createdDt = format(
         parseISO(row.transaction_date),
         "dd/MM/yyyy HH:mm",
       );
-      const sessionDt = `${format(parseISO(row.start_time), "dd/MM/yyyy HH:mm")}-${format(parseISO(row.end_time), "HH:mm")}`;
-      const nat = row.is_contract ? "CONTRATO FIXO" : "HORA AVULSA";
+      const sessionDt = row.is_contract
+        ? `Baixa Integral (${format(parseISO(row.start_time), "dd/MM/yyyy")})`
+        : `${format(parseISO(row.start_time), "dd/MM/yyyy HH:mm")}-${format(parseISO(row.end_time), "HH:mm")}`;
+      const nat = row.is_contract ? "CONTRATO FIXO (BAIXA)" : "HORA AVULSA";
       const hostTotal = row.host_payout_brl + row.cohost_payout_brl;
 
       csv += `${createdDt};${sessionDt};#${row.booking_id.slice(0, 8)};"${row.clinic_name}";"${row.room_name}";"${row.specialist_name}";"${row.specialty}";${nat};"${row.modality_label}";${row.duration_hours};${row.gross_brl.toFixed(2).replace(".", ",")};-${hostTotal.toFixed(2).replace(".", ",")};${row.fusion_fee_pct}%;${row.fusion_fee_brl.toFixed(2).replace(".", ",")};${row.running_fusion_balance.toFixed(2).replace(".", ",")}\n`;
@@ -1523,8 +1728,8 @@ export function AdminOverviewTab() {
             Centro de Comando Fusion
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-0.5">
-            Análise executiva de faturamento (Avulso vs. Contratos), auditoria
-            de extrato e inteligência de estoque de horas das salas.
+            Análise executiva de faturamento (Avulso vs. Contratos na Baixa),
+            auditoria de extrato e inteligência de estoque de horas das salas.
           </p>
         </div>
 
@@ -1617,7 +1822,7 @@ export function AdminOverviewTab() {
             {formatBRL(gmv)}
           </h3>
           <p className="text-[11px] font-semibold text-slate-500 mt-2 tabular-nums">
-            {totalBookingsCount} locações • Ticket médio: R${" "}
+            {totalBookingsCount} lançamentos • Ticket médio: R${" "}
             {formatBRL(avgTicketPerBooking)}
           </p>
         </div>
@@ -1698,7 +1903,7 @@ export function AdminOverviewTab() {
           </h3>
           <p className="text-[11px] font-semibold text-slate-500 mt-2 tabular-nums">
             Ticket/Hora: R$ {formatBRL(revPerOccupiedHour)} (
-            {totalHoursOccupied}h vendidas)
+            {totalHoursOccupied}h utilizadas)
           </p>
         </div>
       </div>
@@ -1785,7 +1990,7 @@ export function AdminOverviewTab() {
                   2. Operação de Contratos & Turnos Fixos
                 </h2>
                 <p className="text-xs font-medium text-slate-500">
-                  Salas exclusivas, turnos e diárias fixas (
+                  Valor cheio contabilizado no dia da baixa (
                   {activeContractsCount} contrato(s) ativo(s))
                 </p>
               </div>
@@ -1798,13 +2003,13 @@ export function AdminOverviewTab() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 tabular-nums">
             <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
               <p className="text-[10px] font-black text-slate-400 uppercase">
-                GMV de Contratos
+                GMV de Contratos (Baixa)
               </p>
               <p className="text-xl font-black text-slate-900 mt-1">
                 R$ {formatBRL(contractGmv)}
               </p>
               <p className="text-[11px] font-bold text-slate-400 mt-1">
-                {contractBookingsCount} períodos ({contractHoursCount}h)
+                {contractBookingsCount} baixa(s) ({contractHoursCount}h usadas)
               </p>
             </div>
 
@@ -1850,8 +2055,8 @@ export function AdminOverviewTab() {
                 Evolução do Faturamento (Avulso + Contratos + Total)
               </h2>
               <p className="text-xs font-medium text-slate-500">
-                Diferenciação entre Horas Avulsas, Contratos Fixos, Linha Total
-                e Receita Líquida Fusion.
+                Horas Avulsas diárias + Valor Total do Contrato lançado no dia
+                exato da baixa.
               </p>
             </div>
 
@@ -1887,7 +2092,7 @@ export function AdminOverviewTab() {
             {(chartView === "both" || chartView === "contract") && (
               <div className="flex items-center gap-1.5">
                 <span className="w-3 h-3 rounded-xs bg-[#7C3AED]" />
-                <span>Contratos Fixos</span>
+                <span>Contratos Fixos (Dia da Baixa)</span>
               </div>
             )}
             {chartView === "both" && (
@@ -1955,7 +2160,7 @@ export function AdminOverviewTab() {
                           <div className="flex justify-between text-slate-300">
                             <span className="flex items-center gap-1.5">
                               <span className="w-2.5 h-2.5 rounded-xs bg-[#7C3AED]" />
-                              Contratos Fixos:
+                              Contratos Fixos (Baixa):
                             </span>
                             <span className="font-bold text-white">
                               R$ {formatBRL(row.contractGmv)}
@@ -2078,7 +2283,6 @@ export function AdminOverviewTab() {
       {/* LINHA 4: ESTOQUE DE HORAS & POTENCIAL POR SALA (PALETA LEVE FUSION) */}
       {/* ==================================================================== */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs mb-8 overflow-hidden print:break-inside-avoid">
-        {/* Header Leve e Elegante na Paleta da Marca (Sem Azul/Índigo Pesado) */}
         <div className="p-6 border-b border-orange-200/60 bg-[#FAF7F5] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
@@ -2146,7 +2350,7 @@ export function AdminOverviewTab() {
           </div>
         </div>
 
-        {/* 4 Cartões de Resumo do Estoque (Paleta Leve e Limpa) */}
+        {/* 4 Cartões de Resumo do Estoque */}
         {inventoryMode === "past" ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 p-6 bg-slate-50/50 border-b border-slate-100 tabular-nums">
             <div className="bg-white p-4 rounded-xl border border-slate-200">
@@ -2237,7 +2441,7 @@ export function AdminOverviewTab() {
                 </span>
               </p>
               <p className="text-[11px] font-bold text-slate-500 mt-1">
-                Receita futura já garantida na agenda
+                Receita futura avulsa já garantida
               </p>
             </div>
 
@@ -2515,7 +2719,7 @@ export function AdminOverviewTab() {
             </h2>
             <p className="text-xs font-medium text-slate-500">
               Abertura contábil de cada espaço mostrando o que veio de horas
-              avulsas, contratos fixos e margem retida pela Fusion.
+              avulsas, baixas de contratos fixos e margem retida pela Fusion.
             </p>
           </div>
         </div>
@@ -2531,7 +2735,7 @@ export function AdminOverviewTab() {
                   GMV Horas Avulsas
                 </th>
                 <th className="px-6 py-4 text-right text-purple-700">
-                  GMV Contratos
+                  GMV Contratos (Baixa)
                 </th>
                 <th className="px-6 py-4 text-right">Volume Total (R$)</th>
                 <th className="px-6 py-4 text-right">Receita Fusion</th>
@@ -2637,7 +2841,7 @@ export function AdminOverviewTab() {
       </div>
 
       {/* ==================================================================== */}
-      {/* MODAL DE EXTRATO BANCÁRIO (ORDENADO PELA DATA EM QUE FOI AGENDADO) */}
+      {/* MODAL DE EXTRATO BANCÁRIO (ORDENADO PELA DATA DE AGENDAMENTO / BAIXA) */}
       {/* ==================================================================== */}
       <Dialog open={isLedgerOpen} onOpenChange={setIsLedgerOpen}>
         <DialogContent className="max-w-[95vw] sm:max-w-6xl h-[88vh] p-0 gap-0 overflow-hidden flex flex-col bg-white border-slate-200 shadow-2xl rounded-2xl">
@@ -2653,12 +2857,12 @@ export function AdminOverviewTab() {
                   </span>
                 </div>
                 <DialogTitle className="text-lg font-black text-white mt-1">
-                  Demonstrativo Contábil por Data de Agendamento / Pagamento
+                  Demonstrativo Contábil por Data de Agendamento / Baixa de
+                  Contrato
                 </DialogTitle>
                 <DialogDescription className="text-xs text-slate-400">
-                  A primeira coluna exibe o momento exato em que a reserva foi
-                  efetuada/paga (`created_at`), com a data de uso da sala logo
-                  abaixo.
+                  Exibe as reservas avulsas pela data de pagamento e os
+                  contratos pelo valor integral no dia exato da baixa.
                 </DialogDescription>
               </div>
 
@@ -2697,7 +2901,7 @@ export function AdminOverviewTab() {
                 Volume de Horas Auditadas
               </p>
               <p className="text-lg font-black text-slate-900 mt-0.5">
-                {ledgerTotals.hours}h contratadas
+                {ledgerTotals.hours}h utilizadas
               </p>
             </div>
             <div className="px-6 py-3 bg-emerald-50/70">
@@ -2717,7 +2921,7 @@ export function AdminOverviewTab() {
                 {[
                   { id: "all", label: "Todos" },
                   { id: "avulso", label: "Horas Avulsas (20%)" },
-                  { id: "contract", label: "Contratos Fixos" },
+                  { id: "contract", label: "Contratos Fixos (Baixa)" },
                 ].map((tab) => (
                   <button
                     key={tab.id}
@@ -2765,7 +2969,7 @@ export function AdminOverviewTab() {
               <thead className="bg-slate-50 text-slate-500 font-bold text-[10px] uppercase tracking-wider sticky top-0 z-10 border-b border-slate-200">
                 <tr>
                   <th className="px-6 py-3">
-                    Agendada em (Pgto) / Data da Sessão
+                    Data do Pagamento / Baixa • Uso da Sala
                   </th>
                   <th className="px-6 py-3">Cód.</th>
                   <th className="px-6 py-3">Histórico / Locatário</th>
@@ -2799,16 +3003,30 @@ export function AdminOverviewTab() {
                       >
                         <td className="px-6 py-3">
                           <p className="font-black text-slate-900">
-                            {format(
-                              parseISO(item.transaction_date),
-                              "dd/MM/yyyy 'às' HH:mm",
-                            )}
+                            {item.is_contract
+                              ? `Baixa em ${format(parseISO(item.transaction_date), "dd/MM/yyyy")}`
+                              : format(
+                                  parseISO(item.transaction_date),
+                                  "dd/MM/yyyy 'às' HH:mm",
+                                )}
                           </p>
                           <p className="text-[11px] text-emerald-700 font-bold">
-                            Uso da sala:{" "}
-                            {format(parseISO(item.start_time), "dd/MM/yyyy")} (
-                            {format(parseISO(item.start_time), "HH:mm")}–
-                            {format(parseISO(item.end_time), "HH:mm")})
+                            {item.is_contract ? (
+                              <>
+                                Valor Integral do Contrato (
+                                {item.duration_hours}h no período)
+                              </>
+                            ) : (
+                              <>
+                                Uso da sala:{" "}
+                                {format(
+                                  parseISO(item.start_time),
+                                  "dd/MM/yyyy",
+                                )}{" "}
+                                ({format(parseISO(item.start_time), "HH:mm")}–
+                                {format(parseISO(item.end_time), "HH:mm")})
+                              </>
+                            )}
                           </p>
                         </td>
 
