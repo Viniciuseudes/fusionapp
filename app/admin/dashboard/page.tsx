@@ -12,6 +12,7 @@ import { AdminBookingsTab } from "@/components/admin/bookings-tab";
 import { PushCampaignManager } from "@/components/admin/PushCampaignManager";
 import { AdminCouponsTab } from "@/components/admin/coupons-tab";
 import { AdminContractsTab } from "@/components/admin/contracts-tab";
+import { AdminAiAgentTab } from "@/components/admin/ai-agent-tab";
 
 import {
   Users,
@@ -86,6 +87,12 @@ export default function AdminDashboardPage() {
       icon: LayoutDashboard,
     },
     {
+      id: "ia-agent",
+      label: "Fusion IA (BI)",
+      shortLabel: "IA BI",
+      icon: Sparkles,
+    },
+    {
       id: "agendamentos",
       label: "Agendamentos",
       shortLabel: "Agenda",
@@ -146,15 +153,9 @@ export default function AdminDashboardPage() {
   const handleLogout = async () => {
     try {
       const supabase = createClient();
-
-      // 1. Destrói a sessão real no banco de dados (Supabase)
       await supabase.auth.signOut();
-
-      // 2. Limpa qualquer lixo de sessão do navegador
       sessionStorage.clear();
       localStorage.clear();
-
-      // 3. HARD RELOAD: Força a página a recarregar limpando o cache
       window.location.replace("/admin/login");
     } catch (error) {
       console.error("Erro ao sair:", error);
@@ -166,9 +167,9 @@ export default function AdminDashboardPage() {
 
   return (
     <div className="flex h-svh bg-slate-50 overflow-hidden font-sans">
-      {/* SIDEBAR LIGHT MODE (Padrão Médico) COM SUPORTE A TELA CHEIA */}
+      {/* SIDEBAR LIGHT MODE COM SUPORTE A TELA CHEIA */}
       <aside
-        className={`hidden lg:flex bg-white border-r border-slate-200 flex-col shrink-0 z-25 transition-all duration-300 ease-in-out overflow-hidden ${
+        className={`hidden lg:flex bg-white border-r border-slate-200 flex-col shrink-0 z-20 transition-all duration-300 ease-in-out overflow-hidden ${
           isSidebarCollapsed ? "w-0 border-r-0" : "w-64"
         }`}
       >
@@ -177,7 +178,7 @@ export default function AdminDashboardPage() {
             <img
               src="/logo-fusion-orange.png"
               alt="Fusion Clinic"
-              className="h-10 w-auto object-contain"
+              className="h-9 w-auto object-contain"
             />
             <div>
               <h1 className="font-black text-slate-900 text-lg leading-tight tracking-tight">
@@ -199,7 +200,7 @@ export default function AdminDashboardPage() {
           </button>
         </div>
 
-        <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto min-w-[16rem]">
+        <nav className="flex-1 px-4 py-6 space-y-1.5 overflow-y-auto min-w-[16rem]">
           {menuItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
@@ -207,7 +208,7 @@ export default function AdminDashboardPage() {
               <button
                 key={item.id}
                 onClick={() => handleSelectTab(item.id)}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${
                   isActive
                     ? "bg-[#BF4B24]/10 text-[#BF4B24]"
                     : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
@@ -225,7 +226,7 @@ export default function AdminDashboardPage() {
         <div className="p-4 border-t border-slate-100 min-w-[16rem]">
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-slate-500 hover:bg-red-50 hover:text-red-600 transition-all"
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm text-slate-500 hover:bg-red-50 hover:text-red-600 transition-all"
           >
             <LogOut className="w-5 h-5" /> Sair do Painel
           </button>
@@ -300,6 +301,7 @@ export default function AdminDashboardPage() {
         </div>
       )}
 
+      {/* ÁREA PRINCIPAL */}
       <main className="flex-1 flex flex-col h-svh overflow-hidden relative">
         <header className="h-16 lg:h-20 bg-white border-b border-slate-200 flex items-center justify-between px-4 lg:px-8 shrink-0 shadow-2xs z-10">
           <div className="flex items-center gap-3 min-w-0">
@@ -333,7 +335,7 @@ export default function AdminDashboardPage() {
             </h2>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 shrink-0">
             <div className="text-right hidden md:block">
               <p className="text-sm font-bold text-slate-900">Administrador</p>
               <p className="text-xs text-slate-500 font-medium">
@@ -349,6 +351,7 @@ export default function AdminDashboardPage() {
         <div className="flex-1 overflow-y-auto relative bg-slate-50 pb-20 lg:pb-0">
           {/* Renderização Condicional das Abas */}
           {activeTab === "dashboard" && <AdminOverviewTab />}
+          {activeTab === "ia-agent" && <AdminAiAgentTab />}
           {activeTab === "especialistas" && <AdminSpecialistsTab />}
           {activeTab === "parceiros" && <AdminPartnersTab />}
           {activeTab === "salas" && <AdminRoomsTab />}
@@ -377,21 +380,6 @@ export default function AdminDashboardPage() {
               <PushCampaignManager />
             </div>
           )}
-          {/* Fallback caso a aba não exista ou esteja em construção */}
-          {activeTab !== "salas" &&
-            activeTab !== "contratos" &&
-            activeTab !== "pacotes" &&
-            activeTab !== "dashboard" &&
-            activeTab !== "especialistas" &&
-            activeTab !== "parceiros" &&
-            activeTab !== "agendamentos" &&
-            activeTab !== "campanhas" &&
-            activeTab !== "cupons" && (
-              <div className="h-full flex flex-col items-center justify-center text-slate-400">
-                <Loader2 className="w-10 h-10 animate-spin mb-4 text-slate-300" />
-                <p className="font-bold">Módulo em construção...</p>
-              </div>
-            )}
         </div>
 
         {/* BOTTOM NAV MOBILE */}
@@ -463,11 +451,9 @@ function AdminRoomsTab() {
   // ESTADOS PARA RESERVA MANUAL (MULTI-SLOT CARRINHO)
   // ==========================================
   const [manualDate, setManualDate] = useState<Date>(new Date());
-
   const [selectedSlots, setSelectedSlots] = useState<
     { date: Date; slot: string }[]
   >([]);
-
   const [takenSlots, setTakenSlots] = useState<string[]>([]);
   const [professionals, setProfessionals] = useState<any[]>([]);
   const [profSearch, setProfSearch] = useState("");
@@ -547,32 +533,6 @@ function AdminRoomsTab() {
     if (exception) {
       if (exception.type === "block") {
         if (exception.isFullDay) return [];
-
-        if (
-          checkIsHoliday(date) ||
-          !weekConfig.find((c: any) => c.day === dayOfWeek)?.enabled
-        ) {
-          baseSlots = [];
-        } else {
-          const dayConfig = weekConfig.find((c: any) => c.day === dayOfWeek);
-          if (dayConfig?.rentalType === "hourly")
-            baseSlots = dayConfig.availableHours || [];
-          else if (dayConfig?.rentalType === "shift") {
-            const shifts = dayConfig.selectedShifts || [];
-            if (shifts.includes("morning"))
-              baseSlots.push("08h-09h", "09h-10h", "10h-11h", "11h-12h");
-            if (shifts.includes("afternoon"))
-              baseSlots.push(
-                "13h-14h",
-                "14h-15h",
-                "15h-16h",
-                "16h-17h",
-                "17h-18h",
-              );
-            if (shifts.includes("night"))
-              baseSlots.push("18h-19h", "19h-20h", "20h-21h", "21h-22h");
-          }
-        }
         baseSlots = baseSlots.filter(
           (slot: string) => !(exception.hours || []).includes(slot),
         );
@@ -657,7 +617,6 @@ function AdminRoomsTab() {
     }
   };
 
-  // Expande reservas de 1h, turnos ou diárias contratuais para bloquear todas as horas ocupadas
   const loadTakenSlots = async (date: Date) => {
     if (!evaluatingRoom) return;
     const startOfDayDate = new Date(date);
@@ -765,7 +724,6 @@ function AdminRoomsTab() {
       setSelectedSlots([]);
       loadTakenSlots(manualDate);
     } catch (error: any) {
-      console.error("Erro na reserva manual múltipla:", error);
       toast({
         variant: "destructive",
         title: "Falha na Reserva",
@@ -1801,7 +1759,7 @@ function AdminRoomsTab() {
                 return (
                   <tr
                     key={room.id}
-                    className="hover:bg-slate-50/80 transition-colors"
+                    className="hover:bg-slate-50/80 transition-colors group"
                   >
                     <td className="px-6 py-4">
                       <p className="font-bold text-slate-900">{room.name}</p>
@@ -1815,7 +1773,7 @@ function AdminRoomsTab() {
                           Partner
                         </Badge>
                       )}
-                      <span className="text-xs font-bold text-slate-500 uppercase">
+                      <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
                         {room.tier || "Start"}
                       </span>
                     </td>
@@ -1836,34 +1794,39 @@ function AdminRoomsTab() {
                         </Badge>
                       )}
                     </td>
-                    <td className="px-6 py-4 flex items-center justify-end gap-1.5">
+                    <td className="px-6 py-4 flex items-center justify-end gap-2 opacity-50 group-hover:opacity-100 transition-opacity">
                       <Button
                         variant="ghost"
                         size="icon"
                         onClick={() => openAuditPanel(room)}
-                        className="h-8 w-8 text-slate-600 hover:bg-slate-100"
+                        className="h-8 w-8 text-slate-500 hover:text-slate-900 hover:bg-slate-100"
                       >
                         <Eye className="w-4 h-4" />
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() =>
-                          handleStatusChange(room.id, !room.is_active)
-                        }
-                        className="h-8 w-8 text-slate-500"
-                      >
-                        {room.is_active ? (
+                      {room.is_active ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleStatusChange(room.id, false)}
+                          className="h-8 w-8 text-slate-400 hover:text-amber-600 hover:bg-amber-50"
+                        >
                           <XCircle className="w-4 h-4" />
-                        ) : (
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleStatusChange(room.id, true)}
+                          className="h-8 w-8 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50"
+                        >
                           <CheckCircle2 className="w-4 h-4" />
-                        )}
-                      </Button>
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon"
                         onClick={() => handleDelete(room.id)}
-                        className="h-8 w-8 text-slate-400 hover:text-red-600"
+                        className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
                       >
                         <Trash2 className="w-4 h-4" />
                       </Button>
