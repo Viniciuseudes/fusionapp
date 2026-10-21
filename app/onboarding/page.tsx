@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
+import { sendWelcomeEmail } from "@/app/actions/send-email"; // <-- Importação do Hub de E-mails
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -75,6 +76,16 @@ export default function OnboardingPage() {
         .eq("id", user.id);
 
       if (error) throw error;
+
+      // ======================================================================
+      // DISPARA O E-MAIL DE BOAS-VINDAS (Rodando em background sem await)
+      // ======================================================================
+      if (user.email) {
+        const userName =
+          user.user_metadata?.full_name ||
+          (role === "host" ? "Anfitrião" : "Profissional");
+        sendWelcomeEmail(user.email, userName);
+      }
 
       toast({
         title: "Tudo pronto! 🎉",

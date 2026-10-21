@@ -82,6 +82,20 @@ export interface RoomDetailProps {
   onNavigateToChat?: () => void;
 }
 
+const normalizeSlotLabel = (h: string): string => {
+  if (!h || typeof h !== "string") return "";
+  const parts = h.split("-");
+  if (parts.length < 2) return h;
+
+  const rawStart = parts[0].trim().replace("h", ":");
+  const hourNumber = parseInt(rawStart.split(":")[0], 10);
+
+  if (isNaN(hourNumber)) return "";
+
+  const formattedHour = hourNumber.toString().padStart(2, "0");
+  return `${formattedHour}:00 - ${formattedHour}:50`;
+};
+
 export function RoomDetail(props: RoomDetailProps) {
   const {
     onBack,
@@ -107,6 +121,7 @@ export function RoomDetail(props: RoomDetailProps) {
   );
 
   const [roomBookings, setRoomBookings] = useState<any[]>([]);
+  const bookingConfirmedRef = useRef<boolean>(false);
 
   const [selectedShift, setSelectedShift] = useState<
     "morning" | "afternoon" | "night" | null
@@ -146,6 +161,37 @@ export function RoomDetail(props: RoomDetailProps) {
     }, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  const fetchRoomBookings = useCallback(async () => {
+    if (!roomData?.id) return;
+    try {
+      const res = await fetch(
+        `/api/bookings/calculate?roomId=${roomData.id}&_t=${Date.now()}`,
+        { cache: "no-store" },
+      );
+      if (res.ok) {
+        const json = await res.json();
+        if (Array.isArray(json.bookings)) {
+          setRoomBookings(json.bookings);
+          return;
+        }
+      }
+    } catch (e) {
+      console.error("Fallback para busca direta de reservas:", e);
+    }
+
+    const { data, error } = await supabase
+      .from("bookings")
+      .select(
+        "id, start_time, end_time, status, created_at, asaas_payment_id, user_id",
+      )
+      .eq("room_id", roomData.id)
+      .neq("status", "cancelled");
+
+    if (!error && data) {
+      setRoomBookings(data);
+    }
+  }, [roomData?.id, supabase]);
 
   useMobileBack(
     isCheckoutOpen,
@@ -230,25 +276,11 @@ export function RoomDetail(props: RoomDetailProps) {
   useEffect(() => {
     if (!roomData?.id) return;
 
-    let channel: any;
-
-    async function fetchRoomBookings() {
-      const { data, error } = await supabase
-        .from("bookings")
-        .select(
-          "id, start_time, end_time, status, created_at, asaas_payment_id",
-        )
-        .eq("room_id", roomData.id)
-        .in("status", ["confirmed", "pending_payment", "completed"]);
-
-      if (!error && data) {
-        setRoomBookings(data);
-      }
-    }
-
     fetchRoomBookings();
 
-    channel = supabase
+    const pollInterval = setInterval(fetchRoomBookings, 8000);
+
+    const channel = supabase
       .channel(`room_bookings_${roomData.id}`)
       .on(
         "postgres_changes",
@@ -265,9 +297,10 @@ export function RoomDetail(props: RoomDetailProps) {
       .subscribe();
 
     return () => {
-      if (channel) supabase.removeChannel(channel);
+      clearInterval(pollInterval);
+      supabase.removeChannel(channel);
     };
-  }, [roomData?.id, supabase]);
+  }, [roomData?.id, supabase, fetchRoomBookings]);
 
   useEffect(() => {
     async function fetchReviews() {
@@ -331,6 +364,16 @@ export function RoomDetail(props: RoomDetailProps) {
 
   const availableSlots = useMemo(() => {
     if (!roomData || activeTab !== "hora") return [];
+
+    // Verifica se a data está na lista de blocked_dates da sala
+    const selectedDateStr = format(selectedDate, "yyyy-MM-dd");
+    if (
+      Array.isArray(roomData.blocked_dates) &&
+      roomData.blocked_dates.includes(selectedDateStr)
+    ) {
+      return [];
+    }
+
     let avail = roomData.availability;
     if (typeof avail === "string") {
       try {
@@ -344,14 +387,29 @@ export function RoomDetail(props: RoomDetailProps) {
     const weekConfig = Array.isArray(avail.weekConfig) ? avail.weekConfig : [];
     const exceptions = Array.isArray(avail.exceptions) ? avail.exceptions : [];
 
+    let partialBlockedSlots: string[] = [];
+
     if (exceptions.length > 0) {
       const exception = exceptions.find(
         (e: any) => e?.date && isSameDay(new Date(e.date), selectedDate),
       );
       if (exception) {
         if (exception.type === "block" && exception.isFullDay) return [];
-        if (exception.type === "extra")
-          return Array.isArray(exception.hours) ? exception.hours : [];
+        if (exception.type === "block" && !exception.isFullDay) {
+          partialBlockedSlots = (
+            Array.isArray(exception.hours) ? exception.hours : []
+          )
+            .map(normalizeSlotLabel)
+            .filter(Boolean);
+        }
+        if (exception.type === "extra") {
+          const extraHours = (
+            Array.isArray(exception.hours) ? exception.hours : []
+          )
+            .map(normalizeSlotLabel)
+            .filter(Boolean);
+          return extraHours;
+        }
       }
     }
 
@@ -359,56 +417,47 @@ export function RoomDetail(props: RoomDetailProps) {
     const configForDay = weekConfig.find((c: any) => c?.day === dayOfWeek);
     if (!configForDay || !configForDay.enabled) return [];
 
+    let baseSlots: string[] = [];
+
     if (configForDay.rentalType === "hourly") {
       const hours = Array.isArray(configForDay.availableHours)
         ? configForDay.availableHours
         : [];
-      return hours
-        .map((h: string) => {
-          if (!h || typeof h !== "string") return "";
-          const parts = h.split("-");
-          if (parts.length < 2) return h;
+      baseSlots = hours.map(normalizeSlotLabel).filter(Boolean);
+    } else {
+      const shifts = Array.isArray(configForDay.selectedShifts)
+        ? configForDay.selectedShifts
+        : [];
 
-          const rawStart = parts[0].trim().replace("h", ":");
-          const hourNumber = parseInt(rawStart.split(":")[0], 10);
-
-          if (isNaN(hourNumber)) return "";
-
-          const formattedHour = hourNumber.toString().padStart(2, "0");
-          return `${formattedHour}:00 - ${formattedHour}:50`;
-        })
-        .filter(Boolean);
+      if (shifts.includes("morning"))
+        baseSlots.push(
+          "08:00 - 08:50",
+          "09:00 - 09:50",
+          "10:00 - 10:50",
+          "11:00 - 11:50",
+        );
+      if (shifts.includes("afternoon"))
+        baseSlots.push(
+          "13:00 - 13:50",
+          "14:00 - 14:50",
+          "15:00 - 15:50",
+          "16:00 - 16:50",
+          "17:00 - 17:50",
+        );
+      if (shifts.includes("night"))
+        baseSlots.push(
+          "18:00 - 18:50",
+          "19:00 - 19:50",
+          "20:00 - 20:50",
+          "21:00 - 21:50",
+        );
     }
 
-    let shiftHours: string[] = [];
-    const shifts = Array.isArray(configForDay.selectedShifts)
-      ? configForDay.selectedShifts
-      : [];
+    if (partialBlockedSlots.length > 0) {
+      return baseSlots.filter((s) => !partialBlockedSlots.includes(s));
+    }
 
-    if (shifts.includes("morning"))
-      shiftHours.push(
-        "08:00 - 08:50",
-        "09:00 - 09:50",
-        "10:00 - 10:50",
-        "11:00 - 11:50",
-      );
-    if (shifts.includes("afternoon"))
-      shiftHours.push(
-        "13:00 - 13:50",
-        "14:00 - 14:50",
-        "15:00 - 15:50",
-        "16:00 - 16:50",
-        "17:00 - 17:50",
-      );
-    if (shifts.includes("night"))
-      shiftHours.push(
-        "18:00 - 18:50",
-        "19:00 - 19:50",
-        "20:00 - 20:50",
-        "21:00 - 21:50",
-      );
-
-    return shiftHours;
+    return baseSlots;
   }, [roomData, selectedDate, activeTab]);
 
   const getBasePrice = () => {
@@ -517,34 +566,51 @@ export function RoomDetail(props: RoomDetailProps) {
     }
   };
 
-  const isSlotBooked = (slotKey: string) => {
-    try {
-      const [dateStr, timeStr] = slotKey.split("|");
-      const startSlotStr = timeStr.split(" - ")[0];
-      const slotStart = parseSlotDate(dateStr, startSlotStr).getTime();
+  const isSlotBooked = useCallback(
+    (slotKey: string) => {
+      try {
+        const [dateStr, timeStr] = slotKey.split("|");
+        const parts = timeStr.split(" - ");
+        const startSlotStr = parts[0];
+        const endSlotStr = parts[1] || parts[0];
 
-      return roomBookings.some((b) => {
-        if (b.status === "pending_payment" && b.created_at) {
-          const lockTime = new Date(b.created_at).getTime();
-          const now = currentTime;
+        const slotStart = parseSlotDate(dateStr, startSlotStr).getTime();
+        const rawSlotEnd = parseSlotDate(dateStr, endSlotStr).getTime();
+        const slotEnd =
+          rawSlotEnd > slotStart ? rawSlotEnd : slotStart + 50 * 60 * 1000;
 
-          if (!b.asaas_payment_id && now - lockTime > 6 * 60 * 1000) {
-            return false;
+        return roomBookings.some((b) => {
+          if (b.status === "cancelled" || b.status === "rejected") return false;
+
+          if (
+            (b.status === "pending_payment" || b.status === "pending") &&
+            b.created_at
+          ) {
+            const lockTime = new Date(b.created_at).getTime();
+            const now = currentTime;
+
+            if (!b.asaas_payment_id && now - lockTime > 6 * 60 * 1000) {
+              return false;
+            }
+
+            if (b.asaas_payment_id && now - lockTime > 30 * 60 * 1000) {
+              return false;
+            }
           }
 
-          if (b.asaas_payment_id && now - lockTime > 30 * 60 * 1000) {
-            return false;
-          }
-        }
+          const bStart = new Date(b.start_time).getTime();
+          const rawBEnd = new Date(b.end_time).getTime();
+          const bEnd = rawBEnd > bStart ? rawBEnd : bStart + 50 * 60 * 1000;
 
-        const bStart = new Date(b.start_time).getTime();
-        const bEnd = new Date(b.end_time).getTime();
-        return slotStart >= bStart && slotStart < bEnd;
-      });
-    } catch {
-      return false;
-    }
-  };
+          // Intersecção de intervalo: StartA < EndB && EndA > StartB
+          return slotStart < bEnd && slotEnd > bStart;
+        });
+      } catch {
+        return false;
+      }
+    },
+    [roomBookings, currentTime],
+  );
 
   const isSlotPast = (slotKey: string) => {
     try {
@@ -617,13 +683,16 @@ export function RoomDetail(props: RoomDetailProps) {
           throw new Error("A data base selecionada é inválida.");
         }
 
+        // Atualiza a lista de reservas do servidor antes de travar os slots
+        await fetchRoomBookings();
+
         const sortedSlots = [...selectedSlots].sort();
 
         for (const slotKey of sortedSlots) {
           if (isSlotBooked(slotKey)) {
             setSelectedSlots([]);
             throw new Error(
-              "Um dos horários selecionados acabou de ser reservado por outra pessoa. Atualize a página.",
+              "Um dos horários selecionados acabou de ser reservado por outra pessoa. Escolha outro horário.",
             );
           }
         }
@@ -646,16 +715,23 @@ export function RoomDetail(props: RoomDetailProps) {
           };
         });
 
+        bookingConfirmedRef.current = false;
+
         const { data: lockedData, error: lockError } = await supabase
           .from("bookings")
           .insert(bookingPayloads)
           .select("id");
 
-        if (lockError) {
+        if (lockError || !lockedData) {
+          await fetchRoomBookings();
+          setSelectedSlots([]);
           throw new Error(
-            "Erro ao criar reserva temporária. Horário indisponível.",
+            "Este horário acabou de ser reservado por outro profissional. Escolha outro horário.",
           );
         }
+
+        const createdLockIds = lockedData.map((d: any) => d.id);
+        await fetchRoomBookings();
 
         const firstSlot = sortedSlots[0];
         const [startDateStr, startTimeStr] = firstSlot.split("|");
@@ -673,17 +749,27 @@ export function RoomDetail(props: RoomDetailProps) {
             roomId: roomData.id,
             startTime: startDate.toISOString(),
             endTime: endDateForApi.toISOString(),
+            slots: bookingPayloads.map((b) => ({
+              startTime: b.start_time,
+              endTime: b.end_time,
+            })),
+            lockIds: createdLockIds,
           }),
         });
 
         const contentType = response.headers.get("content-type");
         if (!contentType || !contentType.includes("application/json")) {
+          await supabase.from("bookings").delete().in("id", createdLockIds);
+          await fetchRoomBookings();
           throw new Error("Erro de rota: A API de cálculo não foi encontrada.");
         }
 
         const summaryData = await response.json();
-        if (!response.ok)
+        if (!response.ok) {
+          await supabase.from("bookings").delete().in("id", createdLockIds);
+          await fetchRoomBookings();
           throw new Error(summaryData.error || "Erro ao calcular valores.");
+        }
 
         const { data: txs } = await supabase
           .from("wallet_transactions")
@@ -724,7 +810,7 @@ export function RoomDetail(props: RoomDetailProps) {
         setCheckoutSummary({
           ...summaryData,
           usedTier: calcUsedTier,
-          lockIds: lockedData.map((d: any) => d.id),
+          lockIds: createdLockIds,
         });
         setIsCheckoutOpen(true);
       } else {
@@ -790,7 +876,7 @@ export function RoomDetail(props: RoomDetailProps) {
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuário não autenticado.");
 
-      const lockIds = (checkoutSummary as any).lockIds;
+      const lockIds: string[] = (checkoutSummary as any).lockIds || [];
 
       let finalCreditsRequired = checkoutSummary.creditsRequired;
       let finalHourlyCost = totalHourlyCost;
@@ -826,7 +912,13 @@ export function RoomDetail(props: RoomDetailProps) {
           })
           .in("id", lockIds);
 
-        if (updateError) throw updateError;
+        if (updateError) {
+          throw new Error(
+            "Este horário acabou de ser reservado por outro profissional.",
+          );
+        }
+
+        bookingConfirmedRef.current = true;
 
         const { error: walletError } = await supabase
           .from("wallet_transactions")
@@ -853,12 +945,13 @@ export function RoomDetail(props: RoomDetailProps) {
           });
         }
 
-        // Dispara e-mail de confirmação da reserva para o Profissional, Anfitrião e Admin
         if (lockIds && lockIds[0]) {
           sendBookingNotificationEmails(lockIds[0]).catch((e) =>
             console.error("Erro ao enviar e-mail de reserva:", e),
           );
         }
+
+        await fetchRoomBookings();
 
         toast({
           title: "Reserva Confirmada! 🎉",
@@ -937,6 +1030,7 @@ export function RoomDetail(props: RoomDetailProps) {
             checkoutType: "booking",
             price: finalHourlyCost,
             paymentRef: paymentRef,
+            bookingIds: lockIds,
             billingType: method === "card" ? "CREDIT_CARD" : "PIX",
             creditCard: formattedCard,
             creditCardHolderInfo: holderInfo,
@@ -947,6 +1041,8 @@ export function RoomDetail(props: RoomDetailProps) {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error);
 
+        await fetchRoomBookings();
+
         if (method === "pix" && data.pixQrCode) {
           setPixQrCode(data.pixQrCode);
           setPixCopyPaste(data.pixCopyPaste);
@@ -955,7 +1051,8 @@ export function RoomDetail(props: RoomDetailProps) {
           return;
         }
 
-        // Quando aprovado imediatamente no Cartão de Crédito, dispara os e-mails de Reserva + Pagamento
+        bookingConfirmedRef.current = true;
+
         if (lockIds && lockIds[0]) {
           await Promise.allSettled([
             sendBookingNotificationEmails(lockIds[0]),
@@ -968,6 +1065,8 @@ export function RoomDetail(props: RoomDetailProps) {
             }),
           ]);
         }
+
+        await fetchRoomBookings();
 
         toast({
           title: "Pagamento Aprovado! 🎉",
@@ -985,6 +1084,7 @@ export function RoomDetail(props: RoomDetailProps) {
         title: "Erro na confirmação",
         description: err.message,
       });
+      throw err;
     } finally {
       setActionLoading(false);
     }
@@ -996,13 +1096,19 @@ export function RoomDetail(props: RoomDetailProps) {
     checkoutSummaryRef.current = checkoutSummary;
   }, [checkoutSummary]);
 
-  // CORREÇÃO: Verifica se a reserva não foi confirmada antes de apagar
   const handleCheckoutClose = useCallback(async () => {
     setIsCheckoutOpen(false);
     setSelectedSlots([]);
     setPixQrCode(null);
     setPixCopyPaste(null);
     setActiveBookingId(null);
+
+    // Se a reserva já foi confirmada (Cartão, Carteira ou PIX pago), NÃO apaga nada!
+    if (bookingConfirmedRef.current) {
+      setCheckoutSummary(null);
+      await fetchRoomBookings();
+      return;
+    }
 
     const summary = checkoutSummaryRef.current;
     if (summary && summary.lockIds) {
@@ -1028,7 +1134,8 @@ export function RoomDetail(props: RoomDetailProps) {
     }
 
     setCheckoutSummary(null);
-  }, []);
+    await fetchRoomBookings();
+  }, [fetchRoomBookings]);
 
   const handleFavoriteToggle = async () => {
     if (isFavoriteLoading || !roomData) return;
@@ -2245,8 +2352,12 @@ export function RoomDetail(props: RoomDetailProps) {
       <CheckoutModal
         isOpen={isCheckoutOpen}
         onClose={handleCheckoutClose}
-        onConfirm={(method, appliedCoupon, cardData) => {
-          handleConfirmCheckout(method, appliedCoupon, cardData);
+        onConfirm={(method, appliedCoupon, cardData) =>
+          handleConfirmCheckout(method, appliedCoupon, cardData)
+        }
+        onSuccess={() => {
+          bookingConfirmedRef.current = true;
+          fetchRoomBookings();
         }}
         loading={actionLoading}
         summary={checkoutSummary}

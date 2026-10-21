@@ -39,8 +39,9 @@ export default function HostRegisterPage() {
         options: {
           data: {
             full_name: fullName,
-            role: "host", // <-- Garante que o usuário seja um Anfitrião
+            role: "host",
           },
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
         },
       });
 

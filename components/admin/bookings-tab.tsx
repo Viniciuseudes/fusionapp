@@ -1,7 +1,12 @@
+// components/admin/bookings-tab.tsx
 "use client";
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/utils/supabase/client";
+import {
+  sendBookingNotificationEmails,
+  sendBookingCancellationEmails,
+} from "@/app/actions/send-email";
 import {
   Search,
   Calendar as CalendarIcon,
@@ -64,6 +69,7 @@ import {
   setHours,
   setMinutes,
   setSeconds,
+  isSameDay,
 } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useToast } from "@/hooks/use-toast";
@@ -190,6 +196,16 @@ function calculateSlotUnits(startIso: string, endIso: string): number {
   return Math.max(1, Math.round(diffMinutes / 55));
 }
 
+function normalizeHourSlotFormat(rawSlot: string): string {
+  if (!rawSlot || typeof rawSlot !== "string") return "";
+  const clean = rawSlot.trim();
+  const startPart = clean.split("-")[0].trim().replace(":", "h");
+  const startHour = parseInt(startPart.split("h")[0], 10);
+  if (isNaN(startHour)) return "";
+  const endHour = startHour + 1;
+  return `${startHour.toString().padStart(2, "0")}h-${endHour.toString().padStart(2, "0")}h`;
+}
+
 export function AdminBookingsTab({
   onOpenSpecialistDossier,
 }: AdminBookingsTabProps) {
@@ -239,15 +255,41 @@ export function AdminBookingsTab({
   const [selectedRescheduleRoomId, setSelectedRescheduleRoomId] =
     useState<string>("");
 
+  // Modal de Nova Reserva Manual pelo Admin
+  const [isNewBookingOpen, setIsNewBookingOpen] = useState(false);
+  const [allSpecialists, setAllSpecialists] = useState<any[]>([]);
+  const [allActiveRooms, setAllActiveRooms] = useState<any[]>([]);
+  const [newBookingSpecialistId, setNewBookingSpecialistId] =
+    useState<string>("");
+  const [newBookingRoomId, setNewBookingRoomId] = useState<string>("");
+  const [newBookingDate, setNewBookingDate] = useState<Date | undefined>(
+    new Date(),
+  );
+  const [newBookingSelectedSlots, setNewBookingSelectedSlots] = useState<
+    string[]
+  >([]);
+  const [newBookingAgreedBrl, setNewBookingAgreedBrl] = useState<string>("");
+
   useEffect(() => {
     fetchBookings();
   }, [startDate, endDate]);
 
   useEffect(() => {
     if (isRescheduleOpen && selectedRescheduleRoomId && rescheduleDate) {
-      loadRoomScheduleForDate(selectedRescheduleRoomId, rescheduleDate);
+      loadRoomScheduleForDate(
+        selectedRescheduleRoomId,
+        rescheduleDate,
+        selectedBooking?.id,
+      );
     }
   }, [isRescheduleOpen, rescheduleDate, selectedRescheduleRoomId]);
+
+  useEffect(() => {
+    if (isNewBookingOpen && newBookingRoomId && newBookingDate) {
+      setNewBookingSelectedSlots([]);
+      loadRoomScheduleForDate(newBookingRoomId, newBookingDate);
+    }
+  }, [isNewBookingOpen, newBookingRoomId, newBookingDate]);
 
   const fetchBookings = async () => {
     setLoading(true);
@@ -393,7 +435,6 @@ export function AdminBookingsTab({
       });
       setProfilesById(richProfilesMap);
 
-      // Se a gaveta de especialista estiver aberta, atualiza os saldos em tela
       if (selectedSpecialist && richProfilesMap.has(selectedSpecialist.id)) {
         setSelectedSpecialist(richProfilesMap.get(selectedSpecialist.id)!);
       }
@@ -914,7 +955,6 @@ export function AdminBookingsTab({
 
       if (txErr) throw txErr;
 
-      // Notifica o especialista se for injeção positiva
       if (hoursNum > 0) {
         try {
           await supabase.from("notifications").insert({
@@ -928,7 +968,6 @@ export function AdminBookingsTab({
         } catch {}
       }
 
-      // Atualiza imediatamente o estado visual da carteira na gaveta
       const updatedSpec: SpecialistProfile = {
         ...selectedSpecialist,
         wallet_start:
@@ -1058,7 +1097,12 @@ export function AdminBookingsTab({
     }
   };
 
-  const loadRoomScheduleForDate = async (roomId: string, date: Date) => {
+  // --- CARREGADOR PRECISO DE AGENDA DA SALA (CORRIGIDO PARA HORA CLÍNICA DE 50 MIN E BLOCKED_DATES) ---
+  const loadRoomScheduleForDate = async (
+    roomId: string,
+    date: Date,
+    excludeBookingId?: string,
+  ) => {
     setLoadingSlots(true);
     setSelectedSlot("");
     setAvailableSlots([]);
@@ -1066,41 +1110,65 @@ export function AdminBookingsTab({
     try {
       const { data: roomData } = await supabase
         .from("rooms")
-        .select("availability")
+        .select("availability, blocked_dates")
         .eq("id", roomId)
         .single();
 
-      const availability = roomData?.availability;
+      const selectedDateStr = format(date, "yyyy-MM-dd");
+      if (
+        Array.isArray(roomData?.blocked_dates) &&
+        roomData.blocked_dates.includes(selectedDateStr)
+      ) {
+        setAvailableSlots([]);
+        setLoadingSlots(false);
+        return;
+      }
+
+      let availability = roomData?.availability;
+      if (typeof availability === "string") {
+        try {
+          availability = JSON.parse(availability);
+        } catch {
+          availability = null;
+        }
+      }
+
       const startIso = startOfDay(date).toISOString();
       const endIso = endOfDay(date).toISOString();
 
-      const { data: existingBookings } = await supabase
+      let query = supabase
         .from("bookings")
-        .select("start_time, end_time")
+        .select(
+          "id, start_time, end_time, status, created_at, asaas_payment_id",
+        )
         .eq("room_id", roomId)
-        .in("status", ["confirmed", "in_progress", "pending_payment"])
-        .neq("id", selectedBooking?.id)
-        .gte("start_time", startIso)
-        .lte("start_time", endIso);
+        .neq("status", "cancelled")
+        .lt("start_time", endIso)
+        .gt("end_time", startIso);
 
-      const occupiedSet = new Set<string>();
-      (existingBookings || []).forEach((b) => {
-        const dStart = parseISO(b.start_time);
-        const dEnd = b.end_time ? parseISO(b.end_time) : null;
-        const hStart = dStart.getHours();
-        const hEnd =
-          dEnd && dEnd.getHours() > hStart ? dEnd.getHours() : hStart + 1;
+      if (excludeBookingId) {
+        query = query.neq("id", excludeBookingId);
+      }
 
-        for (let h = hStart; h < hEnd; h++) {
-          occupiedSet.add(
-            `${h.toString().padStart(2, "0")}h-${(h + 1).toString().padStart(2, "0")}h`,
-          );
+      const { data: existingBookings } = await query;
+
+      const nowMs = Date.now();
+      const activeBookings = (existingBookings || []).filter((b: any) => {
+        if (
+          ["confirmed", "in_progress", "completed"].includes(b.status || "")
+        ) {
+          return true;
         }
+        if (b.status === "pending_payment" || b.status === "pending") {
+          const lockTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+          const maxLock = b.asaas_payment_id ? 30 * 60 * 1000 : 6 * 60 * 1000;
+          return nowMs - lockTime <= maxLock;
+        }
+        return false;
       });
 
       let dailySlots: string[] = [];
       const dayOfWeek = date.getDay();
-      const dateStr = date.toDateString();
 
       const defaultFullSlots = [
         "08h-09h",
@@ -1118,7 +1186,7 @@ export function AdminBookingsTab({
         "21h-22h",
       ];
 
-      if (availability && availability.weekConfig) {
+      if (availability && Array.isArray(availability.weekConfig)) {
         const weekConfig = availability.weekConfig.find(
           (w: any) => w.day === dayOfWeek,
         );
@@ -1127,7 +1195,9 @@ export function AdminBookingsTab({
             dailySlots =
               Array.isArray(weekConfig.availableHours) &&
               weekConfig.availableHours.length > 0
-                ? [...weekConfig.availableHours]
+                ? weekConfig.availableHours
+                    .map(normalizeHourSlotFormat)
+                    .filter(Boolean)
                 : [...defaultFullSlots];
           } else if (weekConfig.rentalType === "shift") {
             if (weekConfig.selectedShifts?.includes("morning"))
@@ -1145,19 +1215,26 @@ export function AdminBookingsTab({
           }
         }
 
-        if (availability.exceptions) {
+        if (Array.isArray(availability.exceptions)) {
           const exception = availability.exceptions.find(
-            (e: any) => new Date(e.date).toDateString() === dateStr,
+            (e: any) => e?.date && isSameDay(new Date(e.date), date),
           );
           if (exception) {
             if (exception.type === "block") {
-              if (exception.isFullDay) dailySlots = [];
-              else
-                dailySlots = dailySlots.filter(
-                  (slot) => !exception.hours.includes(slot),
+              if (exception.isFullDay) {
+                dailySlots = [];
+              } else {
+                const blockedNormalized = (exception.hours || []).map(
+                  normalizeHourSlotFormat,
                 );
+                dailySlots = dailySlots.filter(
+                  (slot) => !blockedNormalized.includes(slot),
+                );
+              }
             } else if (exception.type === "extra") {
-              dailySlots = [...(exception.hours || [])];
+              dailySlots = (exception.hours || [])
+                .map(normalizeHourSlotFormat)
+                .filter(Boolean);
             }
           }
         }
@@ -1168,23 +1245,164 @@ export function AdminBookingsTab({
       }
 
       const now = new Date();
-      const isToday = date.toDateString() === now.toDateString();
+      const isToday = isSameDay(date, now);
       const currentHour = now.getHours();
 
+      // Verifica intersecção real em milissegundos (compatível com Hora Clínica 50min)
       const finalFreeSlots = dailySlots.filter((slot) => {
-        const startHour = parseInt(slot.split("h")[0]);
+        const startHour = parseInt(slot.split("h")[0], 10);
         if (isToday && startHour <= currentHour) return false;
-        return !occupiedSet.has(slot);
+
+        const slotStartMs = setSeconds(
+          setMinutes(setHours(date, startHour), 0),
+          0,
+        ).getTime();
+        const slotEndMs = setSeconds(
+          setMinutes(setHours(date, startHour), 50),
+          0,
+        ).getTime();
+
+        const isOccupied = activeBookings.some((b: any) => {
+          const bStart = new Date(b.start_time).getTime();
+          const rawBEnd = new Date(b.end_time).getTime();
+          const bEnd = rawBEnd > bStart ? rawBEnd : bStart + 50 * 60 * 1000;
+          return slotStartMs < bEnd && slotEndMs > bStart;
+        });
+
+        return !isOccupied;
       });
 
       finalFreeSlots.sort(
-        (a, b) => parseInt(a.split("h")[0]) - parseInt(b.split("h")[0]),
+        (a, b) => parseInt(a.split("h")[0], 10) - parseInt(b.split("h")[0], 10),
       );
       setAvailableSlots(finalFreeSlots);
     } catch (error) {
       console.error("Erro ao carregar agenda da sala:", error);
     } finally {
       setLoadingSlots(false);
+    }
+  };
+
+  // --- ABRIR MODAL DE NOVA RESERVA MANUAL PELO ADMIN ---
+  const handleOpenNewManualBooking = async () => {
+    setActionLoading(true);
+    try {
+      const [specsRes, roomsRes] = await Promise.all([
+        supabase
+          .from("profiles")
+          .select("id, full_name, email, specialty")
+          .order("full_name", { ascending: true }),
+        supabase
+          .from("rooms")
+          .select("id, name, tier, host_id, is_active, address_details")
+          .eq("is_active", true)
+          .order("name", { ascending: true }),
+      ]);
+
+      const specs = specsRes.data || [];
+      const activeRooms = roomsRes.data || [];
+
+      setAllSpecialists(specs);
+      setAllActiveRooms(activeRooms);
+
+      if (specs.length > 0 && !newBookingSpecialistId) {
+        setNewBookingSpecialistId(specs[0].id);
+      }
+      if (activeRooms.length > 0) {
+        const firstRoom = activeRooms[0];
+        setNewBookingRoomId(firstRoom.id);
+      }
+      setNewBookingDate(new Date());
+      setNewBookingSelectedSlots([]);
+      setNewBookingAgreedBrl("");
+      setIsNewBookingOpen(true);
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro ao carregar dados",
+        description: err.message,
+      });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleCreateManualBooking = async () => {
+    if (
+      !newBookingSpecialistId ||
+      !newBookingRoomId ||
+      !newBookingDate ||
+      newBookingSelectedSlots.length === 0
+    ) {
+      return toast({
+        variant: "destructive",
+        title: "Dados incompletos",
+        description:
+          "Selecione o especialista, a sala, a data e pelo menos um horário.",
+      });
+    }
+
+    setActionLoading(true);
+    try {
+      const sortedSlots = [...newBookingSelectedSlots].sort(
+        (a, b) => parseInt(a.split("h")[0], 10) - parseInt(b.split("h")[0], 10),
+      );
+
+      const payloads = sortedSlots.map((slot) => {
+        const startHour = parseInt(slot.split("h")[0], 10);
+        // Grava exatamente no padrão de Hora Clínica (HH:00 às HH:50) usado no RoomDetail
+        const slotStart = setSeconds(
+          setMinutes(setHours(newBookingDate, startHour), 0),
+          0,
+        );
+        const slotEnd = setSeconds(
+          setMinutes(setHours(newBookingDate, startHour), 50),
+          0,
+        );
+
+        const customBrl = Number(newBookingAgreedBrl);
+
+        return {
+          user_id: newBookingSpecialistId,
+          room_id: newBookingRoomId,
+          start_time: slotStart.toISOString(),
+          end_time: slotEnd.toISOString(),
+          status: "confirmed",
+          total_cost: 1,
+          booking_origin: "admin_manual",
+          agreed_value_brl:
+            !isNaN(customBrl) && customBrl > 0
+              ? Number((customBrl / sortedSlots.length).toFixed(2))
+              : null,
+        };
+      });
+
+      const { data: inserted, error } = await supabase
+        .from("bookings")
+        .insert(payloads)
+        .select("id");
+
+      if (error) throw error;
+
+      if (inserted && inserted[0]?.id) {
+        sendBookingNotificationEmails(inserted[0].id).catch(console.error);
+      }
+
+      toast({
+        title: "Reserva criada com sucesso! 🎉",
+        description: `${sortedSlots.length} horário(s) bloqueado(s) na agenda e notificações enviadas.`,
+      });
+
+      setIsNewBookingOpen(false);
+      fetchBookings();
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Conflito ou erro ao criar reserva",
+        description: err.message,
+      });
+    } finally {
+      setActionLoading(false);
     }
   };
 
@@ -1206,6 +1424,8 @@ export function AdminBookingsTab({
           .update({ status: "cancelled" })
           .eq("id", selectedBooking.id);
         if (error) throw error;
+
+        sendBookingCancellationEmails(selectedBooking.id).catch(console.error);
 
         toast({
           title: "Data contratual liberada!",
@@ -1255,6 +1475,9 @@ export function AdminBookingsTab({
         .eq("id", selectedBooking.id);
 
       if (updateError) throw updateError;
+
+      // Dispara os e-mails de aviso de cancelamento para o Profissional e Anfitrião
+      sendBookingCancellationEmails(selectedBooking.id).catch(console.error);
 
       let refunded = false;
       if (
@@ -1337,18 +1560,20 @@ export function AdminBookingsTab({
 
     setActionLoading(true);
     try {
-      const [startStr, endStr] = selectedSlot.split("-");
-      const startHour = parseInt(startStr.replace("h", ""));
-      const endHour = parseInt(endStr.replace("h", ""));
+      const [startStr] = selectedSlot.split("-");
+      const startHour = parseInt(startStr.replace("h", ""), 10);
+
+      // Mantém a duração original da reserva ou aplica os 50 minutos padrão da Hora Clínica
+      const origStartMs = new Date(selectedBooking.start_time).getTime();
+      const origEndMs = new Date(selectedBooking.end_time).getTime();
+      const origDurationMs =
+        origEndMs > origStartMs ? origEndMs - origStartMs : 50 * 60 * 1000;
 
       const newStartDate = setSeconds(
         setMinutes(setHours(rescheduleDate, startHour), 0),
         0,
       );
-      const newEndDate = setSeconds(
-        setMinutes(setHours(rescheduleDate, endHour), 0),
-        0,
-      );
+      const newEndDate = new Date(newStartDate.getTime() + origDurationMs);
 
       const { error } = await supabase
         .from("bookings")
@@ -1360,6 +1585,8 @@ export function AdminBookingsTab({
         .eq("id", selectedBooking.id);
 
       if (error) throw error;
+
+      sendBookingNotificationEmails(selectedBooking.id).catch(console.error);
 
       toast({ title: "Reserva reagendada com sucesso! 📅" });
       setIsRescheduleOpen(false);
@@ -1513,6 +1740,12 @@ export function AdminBookingsTab({
     return digits.startsWith("55") ? digits : `55${digits}`;
   };
 
+  const toggleNewBookingSlot = (slot: string) => {
+    setNewBookingSelectedSlots((prev) =>
+      prev.includes(slot) ? prev.filter((s) => s !== slot) : [...prev, slot],
+    );
+  };
+
   return (
     <div className="p-4 lg:p-8 animate-in fade-in duration-500 w-full pb-32 font-sans">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
@@ -1527,6 +1760,14 @@ export function AdminBookingsTab({
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <Button
+            onClick={handleOpenNewManualBooking}
+            disabled={actionLoading}
+            className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black h-10 rounded-xl shadow-sm"
+          >
+            <PlusCircle className="w-4 h-4 mr-2" />
+            Nova Reserva Manual
+          </Button>
           <Badge className="bg-slate-900 text-white font-black px-4 py-1.5 rounded-xl border-0 text-sm">
             Total de registros: {filteredBookings.length}
           </Badge>
@@ -1797,7 +2038,6 @@ export function AdminBookingsTab({
 
           {selectedSpecialist && (
             <div className="mt-6 space-y-5 pb-8">
-              {/* CABEÇALHO DO PROFISSIONAL */}
               <div className="flex items-center gap-4 p-4 rounded-2xl bg-slate-50 border border-slate-200">
                 <div className="w-16 h-16 rounded-full bg-orange-100 border-2 border-[#BF4B24]/30 overflow-hidden flex items-center justify-center shrink-0">
                   {selectedSpecialist.avatar_url ? (
@@ -1829,7 +2069,6 @@ export function AdminBookingsTab({
                 </div>
               </div>
 
-              {/* BOTÃO DE NAVEGAÇÃO DIRETA PARA O DOSSIÊ COMPLETO NA ABA ESPECIALISTAS */}
               <Button
                 type="button"
                 onClick={() => handleGoToFullDossier(selectedSpecialist)}
@@ -1840,7 +2079,6 @@ export function AdminBookingsTab({
                 <ExternalLink className="w-3.5 h-3.5 ml-1 opacity-70" />
               </Button>
 
-              {/* SALDO ATUAL NA CARTEIRA POR CATEGORIA */}
               <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
@@ -1879,7 +2117,6 @@ export function AdminBookingsTab({
                 </div>
               </div>
 
-              {/* MOTOR DE INJEÇÃO DIRETA DE CRÉDITOS NA CARTEIRA */}
               <div className="p-4 rounded-2xl border-2 border-[#BF4B24]/30 bg-orange-50/40 space-y-3">
                 <div className="flex items-center justify-between">
                   <p className="text-xs font-black uppercase tracking-wider text-[#BF4B24] flex items-center gap-1.5">
@@ -1936,7 +2173,6 @@ export function AdminBookingsTab({
                   </div>
                 </div>
 
-                {/* Atalhos rápidos de pacotes */}
                 <div className="flex flex-wrap gap-1.5">
                   {[1, 4, 8, 16, 20, -1].map((preset) => (
                     <button
@@ -1982,7 +2218,6 @@ export function AdminBookingsTab({
                 </Button>
               </div>
 
-              {/* CONTATOS E AÇÃO RÁPIDA DE WHATSAPP */}
               <div className="space-y-3 bg-white p-4 rounded-2xl border border-slate-200">
                 <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">
                   Dados de Contato & Identificação
@@ -2049,7 +2284,6 @@ export function AdminBookingsTab({
                 )}
               </div>
 
-              {/* ENDEREÇO CADASTRADO */}
               <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-1.5 text-xs">
                 <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1">
                   <MapPin className="w-3.5 h-3.5" /> Endereço Cadastrado
@@ -2081,7 +2315,6 @@ export function AdminBookingsTab({
                 )}
               </div>
 
-              {/* RESUMO NO PERÍODO FILTRADO */}
               <div className="p-4 rounded-2xl bg-orange-50/70 border border-orange-200 flex items-center justify-between">
                 <div>
                   <p className="text-[10px] font-black uppercase text-orange-900">
@@ -2159,7 +2392,6 @@ export function AdminBookingsTab({
                 </div>
               </div>
 
-              {/* DISTRIBUIÇÃO FINANCEIRA (SPLIT) */}
               <div className="bg-slate-900 text-white p-4 rounded-xl space-y-2">
                 <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">
                   Distribuição Financeira (Split)
@@ -2449,6 +2681,161 @@ export function AdminBookingsTab({
                 <Clock className="w-4 h-4 mr-2" />
               )}
               Salvar Novo Horário
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL 3: NOVA RESERVA MANUAL DIRETA PELO ADMIN */}
+      <Dialog open={isNewBookingOpen} onOpenChange={setIsNewBookingOpen}>
+        <DialogContent className="sm:max-w-3xl bg-[#F5F2F0] border-none shadow-2xl">
+          <DialogHeader className="mb-2">
+            <DialogTitle className="text-xl font-black text-slate-900">
+              Nova Reserva Manual (Admin)
+            </DialogTitle>
+            <DialogDescription className="text-slate-600 font-medium">
+              Aloque horários diretamente para um especialista bloqueando a
+              agenda da sala em tempo real.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
+              <div>
+                <Label className="text-xs font-bold text-slate-500 uppercase">
+                  Especialista
+                </Label>
+                <select
+                  value={newBookingSpecialistId}
+                  onChange={(e) => setNewBookingSpecialistId(e.target.value)}
+                  className="mt-1 w-full h-10 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-800"
+                >
+                  {allSpecialists.map((spec) => (
+                    <option key={spec.id} value={spec.id}>
+                      {spec.full_name || spec.email || spec.id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <Label className="text-xs font-bold text-slate-500 uppercase">
+                  Sala / Consultório
+                </Label>
+                <select
+                  value={newBookingRoomId}
+                  onChange={(e) => setNewBookingRoomId(e.target.value)}
+                  className="mt-1 w-full h-10 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-800"
+                >
+                  {allActiveRooms.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name} ({formatTierLabel(normalizeTier(r.tier))})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <Label className="text-xs font-bold text-slate-500 uppercase">
+                  Valor Total Acordado R$ (Opcional)
+                </Label>
+                <Input
+                  type="number"
+                  placeholder="Automático pela tarifa"
+                  value={newBookingAgreedBrl}
+                  onChange={(e) => setNewBookingAgreedBrl(e.target.value)}
+                  className="mt-1 h-10 bg-white text-xs font-bold"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-col md:flex-row gap-6">
+              <div className="flex-shrink-0 border border-slate-100 rounded-xl p-2 bg-white shadow-sm h-fit">
+                <Calendar
+                  mode="single"
+                  selected={newBookingDate}
+                  onSelect={(date) => {
+                    if (date) setNewBookingDate(date);
+                  }}
+                  locale={ptBR}
+                  className="bg-white rounded-lg w-full pointer-events-auto"
+                />
+              </div>
+
+              <div className="flex-1 flex flex-col">
+                <div className="flex items-center justify-between mb-3">
+                  <Label className="text-sm font-bold text-slate-700">
+                    Selecione os Horários Livres (
+                    {newBookingSelectedSlots.length} selecionado(s))
+                  </Label>
+                </div>
+
+                <div className="flex-1 bg-white border border-slate-100 shadow-sm rounded-xl p-4 overflow-y-auto min-h-[250px] max-h-[310px]">
+                  {loadingSlots ? (
+                    <div className="flex flex-col items-center justify-center h-full gap-2">
+                      <Loader2 className="w-6 h-6 animate-spin text-[#BF4B24]" />
+                      <p className="text-xs text-slate-500 font-medium">
+                        Verificando disponibilidade em tempo real...
+                      </p>
+                    </div>
+                  ) : availableSlots.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full text-center p-4">
+                      <CalendarDays className="w-10 h-10 text-slate-300 mb-2" />
+                      <p className="text-sm font-bold text-slate-500">
+                        Nenhum horário disponível nesta data.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
+                      {availableSlots.map((slot) => {
+                        const isSelected =
+                          newBookingSelectedSlots.includes(slot);
+                        return (
+                          <button
+                            key={slot}
+                            type="button"
+                            onClick={() => toggleNewBookingSlot(slot)}
+                            className={`py-2.5 px-3 rounded-lg border text-sm font-bold transition-all ${
+                              isSelected
+                                ? "bg-[#BF4B24] border-[#BF4B24] text-white shadow-md scale-105"
+                                : "bg-slate-50 border-slate-200 text-slate-600 hover:border-orange-300 hover:text-[#BF4B24]"
+                            }`}
+                          >
+                            {slot}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="mt-2 pt-2 border-t border-slate-200/50">
+            <Button
+              variant="ghost"
+              onClick={() => setIsNewBookingOpen(false)}
+              className="rounded-xl font-bold text-slate-500 hover:text-slate-800"
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={handleCreateManualBooking}
+              disabled={
+                actionLoading ||
+                newBookingSelectedSlots.length === 0 ||
+                !newBookingRoomId ||
+                !newBookingSpecialistId
+              }
+              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl h-10 shadow-md"
+            >
+              {actionLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 mr-2" />
+              )}
+              Confirmar Reserva ({newBookingSelectedSlots.length}h)
             </Button>
           </DialogFooter>
         </DialogContent>

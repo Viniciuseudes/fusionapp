@@ -176,6 +176,7 @@ export default function LoginPage() {
               full_name: fullName.trim(),
               role: "user",
             },
+            emailRedirectTo: `${window.location.origin}/auth/callback`,
           },
         });
 

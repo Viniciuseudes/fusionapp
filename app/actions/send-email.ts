@@ -1,3 +1,4 @@
+// app/actions/send-email.ts
 "use server";
 
 import { Resend } from "resend";
@@ -9,10 +10,10 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 const FROM_EMAIL =
   process.env.RESEND_FROM_EMAIL ||
-  "Fusion Clinic <nao-responda@fusionclinic.com.br>";
+  "Fusion Clinic <nao-responda@fusionapp.com.br>";
 
 const FALLBACK_ADMIN_EMAIL =
-  process.env.ADMIN_NOTIFICATION_EMAIL || "tecnologia@fusionclinic.com.br";
+  process.env.ADMIN_NOTIFICATION_EMAIL || "tecnologia@fusionapp.com.br";
 
 function getAdminSupabase() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -56,11 +57,13 @@ function buildEmailLayout(title: string, badgeText: string, bodyHtml: string) {
 }
 
 // ============================================================================
-// 1. E-MAIL DE BOAS-VINDAS (APÓS CONFIRMAR O CÓDIGO DE 2 FATORES NO CADASTRO)
+// 1. E-MAIL DE BOAS-VINDAS
 // ============================================================================
 export async function sendWelcomeEmail(toEmail: string, userName: string) {
   try {
-    if (!process.env.RESEND_API_KEY || !toEmail) return { success: false };
+    if (!process.env.RESEND_API_KEY || !toEmail) {
+      return { success: false, error: "Credenciais ou destinatário ausentes" };
+    }
 
     const html = buildEmailLayout(
       `Bem-vindo(a) à Fusion Clinic, ${userName}!`,
@@ -79,17 +82,18 @@ export async function sendWelcomeEmail(toEmail: string, userName: string) {
       `,
     );
 
-    await resend.emails.send({
+    const { data, error } = await resend.emails.send({
       from: FROM_EMAIL,
       to: [toEmail],
       subject: "Bem-vindo(a) à Fusion Clinic! Sua conta está ativa",
       html,
     });
 
-    return { success: true };
-  } catch (err) {
+    if (error) throw new Error(error.message);
+    return { success: true, data };
+  } catch (err: any) {
     console.error("Erro ao enviar e-mail de boas-vindas:", err);
-    return { success: false };
+    return { success: false, error: err.message };
   }
 }
 
@@ -101,16 +105,16 @@ export async function sendBookingNotificationEmails(bookingId: string) {
     if (!process.env.RESEND_API_KEY || !bookingId) return { success: false };
     const supabase = getAdminSupabase();
 
-    // 1. Busca os dados completos da reserva
     const { data: booking, error: bErr } = await supabase
       .from("bookings")
       .select("*")
       .eq("id", bookingId)
       .single();
 
-    if (bErr || !booking) return { success: false, error: "Reserva não localizada" };
+    if (bErr || !booking) {
+      return { success: false, error: "Reserva não localizada" };
+    }
 
-    // 2. Busca Sala, Profissional, Anfitrião e Admins
     const [roomRes, specialistRes, adminsRes] = await Promise.all([
       supabase.from("rooms").select("*").eq("id", booking.room_id).single(),
       supabase.from("profiles").select("*").eq("id", booking.user_id).single(),
@@ -130,7 +134,6 @@ export async function sendBookingNotificationEmails(bookingId: string) {
       hostProfile = hData;
     }
 
-    // Caso o e-mail não esteja na tabela profiles, busca no Auth Admin do Supabase
     let specialistEmail = specialist?.email;
     if (!specialistEmail && booking.user_id) {
       const { data: authUser } = await supabase.auth.admin.getUserById(
@@ -173,7 +176,6 @@ export async function sendBookingNotificationEmails(bookingId: string) {
 
     const emailPayloads: any[] = [];
 
-    // A) E-mail para o PROFISSIONAL (Confirmação de Reserva)
     if (specialistEmail) {
       emailPayloads.push({
         from: FROM_EMAIL,
@@ -192,14 +194,13 @@ export async function sendBookingNotificationEmails(bookingId: string) {
             <p style="margin:4px 0;"><strong>🔑 Código:</strong> ${codeShort}</p>
           </div>
           <p style="font-size:13px;color:#475569;">
-            <strong>Lembrete de Check-in:</strong> Ao chegar na clínica, abra o painel da Fusion Clinic no seu celular e escaneie o QR Code da sala para iniciar seu atendimento.
+            <strong>Lembrete de Check-in:</strong> Ao chegar na clínica, abra o painel da Fusion Clinic no seu celular e escaneie o QR Code da porta para iniciar seu atendimento.
           </p>
           `,
         ),
       });
     }
 
-    // B) E-mail para o ANFITRIÃO / CLÍNICA (Aviso de Nova Locação)
     if (hostEmail) {
       emailPayloads.push({
         from: FROM_EMAIL,
@@ -224,7 +225,6 @@ export async function sendBookingNotificationEmails(bookingId: string) {
       });
     }
 
-    // C) E-mail para o ADMINISTRADOR (Torre de Controle Fusion)
     if (adminEmails.length > 0) {
       emailPayloads.push({
         from: FROM_EMAIL,
@@ -248,14 +248,18 @@ export async function sendBookingNotificationEmails(bookingId: string) {
       });
     }
 
-    await Promise.allSettled(
-      emailPayloads.map((payload) => resend.emails.send(payload)),
+    const results = await Promise.allSettled(
+      emailPayloads.map(async (payload) => {
+        const { error } = await resend.emails.send(payload);
+        if (error) throw new Error(error.message);
+        return true;
+      }),
     );
 
-    return { success: true, sentCount: emailPayloads.length };
-  } catch (err) {
+    return { success: true, sentCount: emailPayloads.length, results };
+  } catch (err: any) {
     console.error("Erro ao disparar e-mails de reserva:", err);
-    return { success: false };
+    return { success: false, error: err.message };
   }
 }
 
@@ -307,7 +311,6 @@ export async function sendPaymentNotificationEmails(params: {
 
     const emailPayloads: any[] = [];
 
-    // A) Recibo de Pagamento para o PROFISSIONAL
     if (specialistEmail) {
       emailPayloads.push({
         from: FROM_EMAIL,
@@ -334,7 +337,6 @@ export async function sendPaymentNotificationEmails(params: {
       });
     }
 
-    // B) Alerta de Cash-In para o ADMINISTRADOR
     if (adminEmails.length > 0) {
       emailPayloads.push({
         from: FROM_EMAIL,
@@ -357,7 +359,6 @@ export async function sendPaymentNotificationEmails(params: {
       });
     }
 
-    // C) Se houver um Anfitrião específico atrelado ao pagamento (ex: taxa direta da sala)
     if (params.hostId) {
       const { data: hostProf } = await supabase
         .from("profiles")
@@ -381,13 +382,211 @@ export async function sendPaymentNotificationEmails(params: {
       }
     }
 
+    const results = await Promise.allSettled(
+      emailPayloads.map(async (payload) => {
+        const { error } = await resend.emails.send(payload);
+        if (error) throw new Error(error.message);
+        return true;
+      }),
+    );
+
+    return { success: true, results };
+  } catch (err: any) {
+    console.error("Erro ao disparar e-mails de pagamento:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+// ============================================================================
+// 4. CANCELAMENTO DE RESERVA (PROFISSIONAL + ANFITRIÃO + ADMIN)
+// ============================================================================
+export async function sendBookingCancellationEmails(bookingId: string) {
+  try {
+    if (!process.env.RESEND_API_KEY || !bookingId) return { success: false };
+    const supabase = getAdminSupabase();
+
+    const { data: booking } = await supabase
+      .from("bookings")
+      .select("*")
+      .eq("id", bookingId)
+      .single();
+    if (!booking) return { success: false };
+
+    const [roomRes, specialistRes, adminsRes] = await Promise.all([
+      supabase.from("rooms").select("*").eq("id", booking.room_id).single(),
+      supabase.from("profiles").select("*").eq("id", booking.user_id).single(),
+      supabase.from("profiles").select("email, full_name").eq("role", "admin"),
+    ]);
+
+    const room = roomRes.data;
+    const specialist = specialistRes.data;
+    const startDt = parseISO(booking.start_time);
+    const formattedDate = format(startDt, "dd/MM/yyyy", { locale: ptBR });
+    const formattedHour = format(startDt, "HH:mm");
+
+    let specialistEmail = specialist?.email;
+    if (!specialistEmail && booking.user_id) {
+      const { data: authUser } = await supabase.auth.admin.getUserById(
+        booking.user_id,
+      );
+      specialistEmail = authUser?.user?.email;
+    }
+
+    let hostEmail: string | null = null;
+    let clinicName = "Fusion Clinic";
+    if (room?.host_id) {
+      const { data: hData } = await supabase
+        .from("profiles")
+        .select("email, full_name")
+        .eq("id", room.host_id)
+        .single();
+      hostEmail = hData?.email || null;
+      clinicName = hData?.full_name || clinicName;
+
+      if (!hostEmail) {
+        const { data: authHost } = await supabase.auth.admin.getUserById(
+          room.host_id,
+        );
+        hostEmail = authHost?.user?.email || null;
+      }
+    }
+
+    const adminEmails = Array.from(
+      new Set([
+        ...(adminsRes.data || []).map((a: any) => a.email).filter(Boolean),
+        FALLBACK_ADMIN_EMAIL,
+      ]),
+    );
+
+    const roomName = room?.name || "Consultório Fusion";
+    const specialistName = specialist?.full_name || "Profissional";
+    const emailPayloads: any[] = [];
+
+    if (specialistEmail) {
+      emailPayloads.push({
+        from: FROM_EMAIL,
+        to: [specialistEmail],
+        subject: `❌ Reserva Cancelada: ${roomName} (${formattedDate})`,
+        html: buildEmailLayout(
+          "Reserva Cancelada",
+          "Aviso de Cancelamento",
+          `
+          <p>Olá, <strong>${specialistName}</strong>.</p>
+          <p>Sua reserva para a <strong>${roomName}</strong> no dia <strong>${formattedDate} às ${formattedHour}</strong> foi cancelada.</p>
+          <p>Seus créditos/valores foram processados conforme a política de cancelamento da plataforma.</p>
+          `,
+        ),
+      });
+    }
+
+    if (hostEmail) {
+      emailPayloads.push({
+        from: FROM_EMAIL,
+        to: [hostEmail],
+        subject: `❌ Reserva Cancelada na ${roomName} (${formattedDate})`,
+        html: buildEmailLayout(
+          "Aviso de Cancelamento",
+          "Agenda Liberada",
+          `
+          <p>Olá, <strong>${clinicName}</strong>.</p>
+          <p>A reserva de <strong>${specialistName}</strong> na <strong>${roomName}</strong> para o dia <strong>${formattedDate} às ${formattedHour}</strong> foi cancelada.</p>
+          <p>O horário já está livre e disponível novamente na sua agenda para novas locações.</p>
+          `,
+        ),
+      });
+    }
+
+    if (adminEmails.length > 0) {
+      emailPayloads.push({
+        from: FROM_EMAIL,
+        to: adminEmails,
+        subject: `❌ [Admin Cancelamento] ${specialistName} — ${roomName} (${formattedDate} ${formattedHour})`,
+        html: buildEmailLayout(
+          "Reserva Cancelada no Sistema",
+          "Torre de Controle Admin",
+          `
+          <p>A reserva abaixo foi cancelada e o horário foi liberado na agenda:</p>
+          <p><strong>Profissional:</strong> ${specialistName}</p>
+          <p><strong>Sala:</strong> ${roomName} (${clinicName})</p>
+          <p><strong>Data/Hora:</strong> ${formattedDate} às ${formattedHour}</p>
+          `,
+        ),
+      });
+    }
+
     await Promise.allSettled(
       emailPayloads.map((payload) => resend.emails.send(payload)),
     );
-
     return { success: true };
-  } catch (err) {
-    console.error("Erro ao disparar e-mails de pagamento:", err);
-    return { success: false };
+  } catch (err: any) {
+    console.error("Erro ao enviar e-mail de cancelamento:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+// ============================================================================
+// 5. TRANSFERÊNCIA DE HORAS (FUSION GIFT)
+// ============================================================================
+export async function sendGiftNotificationEmail(
+  receiverEmail: string,
+  receiverName: string,
+  senderName: string,
+  amount: number,
+  tier: string,
+) {
+  try {
+    if (!process.env.RESEND_API_KEY || !receiverEmail) {
+      return { success: false };
+    }
+    const tierUpper = String(tier).toUpperCase();
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: [receiverEmail],
+      subject: `🎁 Você ganhou ${amount} hora(s) na Fusion Clinic!`,
+      html: buildEmailLayout(
+        "Você recebeu um Fusion Gift!",
+        "Créditos Recebidos",
+        `
+        <p>Olá, <strong>${receiverName || "Doutor(a)"}</strong>!</p>
+        <p>Temos uma ótima notícia! <strong>${senderName}</strong> acabou de te enviar <strong>${amount} hora(s)</strong> da categoria <strong>${tierUpper}</strong> para você utilizar em nossos consultórios.</p>
+        <p>Acesse seu painel agora mesmo para conferir sua Carteira Digital e agendar seus atendimentos.</p>
+        `,
+      ),
+    });
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+// ============================================================================
+// 6. CANCELAMENTO DE ASSINATURA
+// ============================================================================
+export async function sendSubscriptionCancellationEmail(
+  userEmail: string,
+  userName: string,
+) {
+  try {
+    if (!process.env.RESEND_API_KEY || !userEmail) {
+      return { success: false };
+    }
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: [userEmail],
+      subject: "Sua assinatura foi cancelada — Fusion Clinic",
+      html: buildEmailLayout(
+        "Assinatura Cancelada",
+        "Aviso Financeiro",
+        `
+        <p>Olá, <strong>${userName}</strong>.</p>
+        <p>Confirmamos o cancelamento do seu plano de horas recorrente (Fusion Pass).</p>
+        <p>Nenhuma nova cobrança será realizada. Suas horas já creditadas continuam válidas até o prazo de vencimento na sua carteira.</p>
+        <p>Se quiser voltar a ter os melhores descontos, basta assinar novamente a qualquer momento!</p>
+        `,
+      ),
+    });
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
   }
 }
