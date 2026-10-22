@@ -1,8 +1,9 @@
+// components/host/availability-tab.tsx
 "use client";
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
-import { Clock, MapPin, Calendar, ChevronRight, Loader2 } from "lucide-react";
+import { Clock, MapPin, Loader2, Sparkles } from "lucide-react";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -17,7 +18,7 @@ export function AvailabilityTab({ onSelectSpace }: AvailabilityTabProps) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function fetchHostRooms() {
+    async function fetchHostAndCohostRooms() {
       try {
         const {
           data: { user },
@@ -25,15 +26,56 @@ export function AvailabilityTab({ onSelectSpace }: AvailabilityTabProps) {
         } = await supabase.auth.getUser();
         if (userError || !user) throw new Error("Usuário não autenticado");
 
-        // Busca as salas do host conectado
-        const { data, error } = await supabase
+        // 1. Busca salas onde o usuário é o Anfitrião dono (host_id)
+        const { data: ownedRooms, error: ownedErr } = await supabase
           .from("rooms")
-          .select("id, name, image_url, address_details")
+          .select("id, name, image_url, address_details, host_id")
           .eq("host_id", user.id)
           .order("created_at", { ascending: false });
 
-        if (error) throw error;
-        setRooms(data || []);
+        if (ownedErr) throw ownedErr;
+
+        // 2. Busca contratos ativos onde o usuário é Coanfitrião (specialist_id + allow_sublease)
+        const todayStr = new Date().toISOString().split("T")[0];
+        const { data: cohostContracts } = await supabase
+          .from("room_contracts")
+          .select("room_id, start_date, end_date, allow_sublease, status")
+          .eq("specialist_id", user.id)
+          .eq("status", "active")
+          .eq("allow_sublease", true)
+          .lte("start_date", todayStr)
+          .gte("end_date", todayStr);
+
+        const cohostRoomIds = Array.from(
+          new Set(
+            (cohostContracts || []).map((c: any) => c.room_id).filter(Boolean),
+          ),
+        );
+
+        let subleasedRooms: any[] = [];
+        if (cohostRoomIds.length > 0) {
+          const { data: subRooms } = await supabase
+            .from("rooms")
+            .select("id, name, image_url, address_details, host_id")
+            .in("id", cohostRoomIds);
+
+          subleasedRooms = (subRooms || []).map((r: any) => ({
+            ...r,
+            is_cohost_room: true,
+          }));
+        }
+
+        // Mescla sem duplicar
+        const ownedIds = new Set((ownedRooms || []).map((r: any) => r.id));
+        const combined = [
+          ...(ownedRooms || []).map((r: any) => ({
+            ...r,
+            is_cohost_room: false,
+          })),
+          ...subleasedRooms.filter((r) => !ownedIds.has(r.id)),
+        ];
+
+        setRooms(combined);
       } catch (err) {
         console.error("Erro ao buscar salas para disponibilidade:", err);
       } finally {
@@ -41,7 +83,7 @@ export function AvailabilityTab({ onSelectSpace }: AvailabilityTabProps) {
       }
     }
 
-    fetchHostRooms();
+    fetchHostAndCohostRooms();
   }, [supabase]);
 
   if (loading) {
@@ -62,8 +104,8 @@ export function AvailabilityTab({ onSelectSpace }: AvailabilityTabProps) {
           Gerenciador de Horários
         </h1>
         <p className="text-sm text-slate-500 font-medium">
-          Selecione um espaço para configure os horários de funcionamento,
-          turnos e bloqueios de calendário.
+          Selecione um espaço para configurar os horários abertos para locação,
+          turnos e bloqueios de uso próprio no calendário.
         </p>
       </div>
 
@@ -80,14 +122,17 @@ export function AvailabilityTab({ onSelectSpace }: AvailabilityTabProps) {
         {rooms.length === 0 ? (
           <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-slate-200">
             <p className="text-slate-500 font-medium">
-              Você ainda não possui nenhuma sala cadastrada para configurar
-              horários.
+              Você ainda não possui nenhuma sala própria ou sob sublocação ativa
+              para configurar horários.
             </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {rooms.map((space) => {
-              const address = space.address_details || {};
+              const address =
+                typeof space.address_details === "string"
+                  ? JSON.parse(space.address_details)
+                  : space.address_details || {};
               const fullAddress = address.street
                 ? `${address.street}, Sala ${address.number || ""}`
                 : "Localização sob consulta";
@@ -110,9 +155,17 @@ export function AvailabilityTab({ onSelectSpace }: AvailabilityTabProps) {
 
                     <div className="flex-1 flex flex-col justify-between">
                       <div>
-                        <h3 className="text-slate-900 font-bold mb-1 line-clamp-1">
-                          {space.name}
-                        </h3>
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <h3 className="text-slate-900 font-bold line-clamp-1">
+                            {space.name}
+                          </h3>
+                          {space.is_cohost_room && (
+                            <Badge className="bg-purple-100 text-purple-800 border-0 text-[10px] font-black flex items-center gap-1">
+                              <Sparkles className="w-3 h-3" /> Coanfitrião (80%
+                              Seu)
+                            </Badge>
+                          )}
+                        </div>
                         <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium mb-4">
                           <MapPin className="w-3.5 h-3.5 shrink-0 text-[#BF4B24]" />
                           <span className="line-clamp-1">{fullAddress}</span>

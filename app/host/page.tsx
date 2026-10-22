@@ -1,6 +1,7 @@
+// app/host/page.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { cn } from "@/lib/utils";
@@ -17,9 +18,10 @@ import {
   Package,
   ChevronLeft,
   ChevronRight,
+  Stethoscope,
+  Sparkles,
 } from "lucide-react";
 
-// Importações dos sub-componentes
 import { HostOverview } from "@/components/host/overview-tab";
 import { HostSpaceList } from "@/components/host/spaces-list-tab";
 import { HostSpaceForm } from "@/components/host/space-form";
@@ -47,11 +49,11 @@ type HostView =
 
 const navItems = [
   { id: "overview", label: "Visão Geral", icon: LayoutDashboard },
+  { id: "availability", label: "Horários", icon: CalendarClock },
   { id: "bookings", label: "Agenda", icon: CalendarDays },
   { id: "contracts", label: "Contratos & Fixos", icon: FileText },
   { id: "operations", label: "Controle Interno", icon: Package },
   { id: "spaces", label: "Meus Espaços", icon: Building },
-  { id: "availability", label: "Horários", icon: CalendarClock },
   { id: "messages", label: "Mensagens", icon: MessageSquare },
   { id: "reviews", label: "Avaliações", icon: Star },
   { id: "financial", label: "Financeiro", icon: Wallet },
@@ -59,14 +61,55 @@ const navItems = [
 
 export default function HostPage() {
   const router = useRouter();
+  const supabase = createClient();
 
   const [currentView, setCurrentView] = useState<HostView>("overview");
   const [selectedSpaceId, setSelectedSpaceId] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
+  const [isOwnerHost, setIsOwnerHost] = useState(true);
+  const [isCohost, setIsCohost] = useState(false);
+
+  useEffect(() => {
+    async function detectHostOrCohostMode() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const todayStr = new Date().toISOString().split("T")[0];
+      const [ownedRes, cohostRes] = await Promise.all([
+        supabase.from("rooms").select("id").eq("host_id", user.id).limit(1),
+        supabase
+          .from("room_contracts")
+          .select("id")
+          .eq("specialist_id", user.id)
+          .eq("status", "active")
+          .eq("allow_sublease", true)
+          .lte("start_date", todayStr)
+          .gte("end_date", todayStr)
+          .limit(1),
+      ]);
+
+      const hasOwned = (ownedRes.data || []).length > 0;
+      const hasCohost = (cohostRes.data || []).length > 0;
+
+      setIsOwnerHost(hasOwned || !hasCohost);
+      setIsCohost(hasCohost);
+    }
+    detectHostOrCohostMode();
+  }, [supabase]);
+
+  // Para Coanfitrião puro (que não é dono da clínica), escondemos abas exclusivas de proprietário
+  const visibleNavItems = navItems.filter((item) => {
+    if (!isOwnerHost && isCohost) {
+      return !["spaces", "operations", "financial"].includes(item.id);
+    }
+    return true;
+  });
+
   const handleLogout = async () => {
     try {
-      const supabase = createClient();
       await supabase.auth.signOut();
       sessionStorage.clear();
       window.location.replace("/login");
@@ -92,11 +135,18 @@ export default function HostPage() {
               </span>
             </div>
             <div>
-              <h1 className="text-base font-black text-white tracking-tight">
-                Fusion Host
+              <h1 className="text-base font-black text-white tracking-tight flex items-center gap-1.5">
+                {isCohost && !isOwnerHost ? "Fusion Co-Host" : "Fusion Host"}
+                {isCohost && (
+                  <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                )}
               </h1>
-              <p className="text-xs text-slate-400 font-medium uppercase tracking-wider">
-                Gestão de Clínicas
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                {isCohost && !isOwnerHost
+                  ? "Sublocação • 80% Seu"
+                  : isCohost && isOwnerHost
+                    ? "Anfitrião & Co-Host"
+                    : "Gestão de Clínicas"}
               </p>
             </div>
           </div>
@@ -112,7 +162,7 @@ export default function HostPage() {
         </div>
 
         <nav className="flex flex-col gap-1 p-4 flex-1 overflow-y-auto">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const isActive =
               currentView === item.id ||
               (item.id === "spaces" &&
@@ -139,7 +189,15 @@ export default function HostPage() {
           })}
         </nav>
 
-        <div className="p-4 border-t border-slate-800">
+        <div className="p-4 border-t border-slate-800 space-y-2">
+          <button
+            onClick={() => router.push("/dashboard")}
+            className="flex items-center gap-3 rounded-xl px-4 py-3 text-xs font-bold text-orange-300 bg-orange-500/10 hover:bg-orange-500/20 w-full transition-colors"
+          >
+            <Stethoscope className="h-4 w-4 text-[#BF4B24]" />
+            Modo Especialista (Alugar)
+          </button>
+
           <button
             onClick={handleLogout}
             className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-bold text-slate-400 hover:text-red-400 hover:bg-red-400/10 w-full transition-colors"
@@ -228,16 +286,18 @@ export default function HostPage() {
         </div>
       </main>
 
-      {/* NAVEGAÇÃO MOBILE (BOTTOM NAV) */}
+      {/* NAVEGAÇÃO MOBILE (BOTTOM NAV) — Inclui Horários para Co-Anfitrião e Anfitrião */}
       <nav className="fixed inset-x-0 bottom-0 z-50 flex lg:hidden items-stretch justify-around border-t border-slate-800 bg-slate-900 pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_40px_rgba(0,0,0,0.2)] overflow-x-auto scrollbar-hide">
-        {navItems
-          .filter((item) => !["financial", "availability"].includes(item.id))
+        {visibleNavItems
+          .filter((item) => !["financial"].includes(item.id))
           .map((item) => {
             const isActive =
               currentView === item.id ||
               (item.id === "spaces" &&
                 (currentView === "create_space" ||
-                  currentView === "edit_space"));
+                  currentView === "edit_space")) ||
+              (item.id === "availability" &&
+                currentView === "availability_config");
 
             return (
               <button

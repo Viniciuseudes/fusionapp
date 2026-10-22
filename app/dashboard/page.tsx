@@ -1,3 +1,4 @@
+// app/dashboard/page.tsx
 "use client";
 
 import { useState, useEffect, Suspense } from "react";
@@ -10,6 +11,7 @@ import {
   MessageSquare,
   User,
   Loader2,
+  Building2,
 } from "lucide-react";
 
 import { SearchTab } from "@/components/search-tab";
@@ -17,19 +19,28 @@ import { FavoritesTab } from "@/components/favorites-tab";
 import { BookingsTab } from "@/components/bookings-tab";
 import { ChatTab } from "@/components/chat-tab";
 import { ProfileTab } from "@/components/profile-tab";
+import { CohostTab } from "@/components/cohost-tab";
 import { NotificationBell } from "@/components/notification-bell";
 import { RoomDetail } from "@/components/room-detail";
 import { ReviewModal } from "@/components/review-modal";
 import { OnboardingTutorial } from "@/components/onboarding-tutorial";
 import { PushRegistry } from "@/components/push-registry";
 
-type TabType = "search" | "favorites" | "bookings" | "chat" | "profile";
+type TabType =
+  "search" | "favorites" | "bookings" | "cohost" | "chat" | "profile";
+
+const VALID_TABS: TabType[] = [
+  "search",
+  "favorites",
+  "bookings",
+  "cohost",
+  "chat",
+  "profile",
+];
 
 function DashboardContent() {
   const router = useRouter();
   const supabase = createClient();
-
-  // INJEÇÃO DO HOOK DE URL
   const searchParams = useSearchParams();
 
   const [activeTab, setActiveTab] = useState<TabType>("search");
@@ -37,12 +48,12 @@ function DashboardContent() {
   const [pendingReviewBooking, setPendingReviewBooking] = useState<any | null>(
     null,
   );
+  const [isCohost, setIsCohost] = useState(false);
 
   useEffect(() => {
     const scanParam = searchParams.get("scan");
     const currentHash = window.location.hash.replace("#", "");
 
-    // 1. INTERCEPTOR SÊNIOR: Verifica se é uma requisição de Scanner
     if (scanParam && currentHash !== "bookings") {
       window.history.replaceState(
         null,
@@ -50,23 +61,15 @@ function DashboardContent() {
         window.location.pathname + window.location.search + "#bookings",
       );
       setActiveTab("bookings");
-    }
-    // 2. Fluxo Padrão: Se não tem Hash nem requisição, vai para Busca
-    else if (!window.location.hash || window.location.hash === "") {
+    } else if (!window.location.hash || window.location.hash === "") {
       window.history.replaceState(
         null,
         "",
         window.location.pathname + window.location.search + "#search",
       );
       setActiveTab("search");
-    }
-    // 3. Se tiver Hash normal salvo, recupera a aba
-    else {
-      if (
-        ["search", "favorites", "bookings", "chat", "profile"].includes(
-          currentHash,
-        )
-      ) {
+    } else {
+      if (VALID_TABS.includes(currentHash as TabType)) {
         setActiveTab(currentHash as TabType);
       }
     }
@@ -91,9 +94,7 @@ function DashboardContent() {
         return;
       }
 
-      if (
-        ["search", "favorites", "bookings", "chat", "profile"].includes(hash)
-      ) {
+      if (VALID_TABS.includes(hash as TabType)) {
         setSelectedRoom(null);
         setActiveTab(hash as TabType);
       }
@@ -190,6 +191,30 @@ function DashboardContent() {
           return;
         }
 
+        const todayStr = new Date().toISOString().split("T")[0];
+
+        if (user.email) {
+          await supabase
+            .from("room_contracts")
+            .update({ specialist_id: user.id })
+            .ilike("specialist_email", user.email)
+            .is("specialist_id", null);
+        }
+
+        const { data: cohostContracts } = await supabase
+          .from("room_contracts")
+          .select("id, room_id")
+          .eq("specialist_id", user.id)
+          .eq("status", "active")
+          .eq("allow_sublease", true)
+          .lte("start_date", todayStr)
+          .gte("end_date", todayStr)
+          .limit(1);
+
+        if (cohostContracts && cohostContracts.length > 0) {
+          setIsCohost(true);
+        }
+
         const hasSeenOnboarding = localStorage.getItem(
           `fusion_onboarding_${user.id}`,
         );
@@ -246,6 +271,8 @@ function DashboardContent() {
             onNavigateToChat={() => handleTabChange("chat")}
           />
         );
+      case "cohost":
+        return <CohostTab />;
       case "chat":
         return <ChatTab />;
       case "profile":
@@ -281,6 +308,7 @@ function DashboardContent() {
               </p>
             </div>
           </div>
+
           <ul className="flex flex-col gap-1 p-3 flex-1">
             <DesktopNavItem
               icon={Search}
@@ -300,6 +328,17 @@ function DashboardContent() {
               isActive={activeTab === "bookings"}
               onClick={() => handleTabChange("bookings")}
             />
+
+            {isCohost && (
+              <DesktopNavItem
+                icon={Building2}
+                label="Minha Sala"
+                badge="80%"
+                isActive={activeTab === "cohost"}
+                onClick={() => handleTabChange("cohost")}
+              />
+            )}
+
             <DesktopNavItem
               icon={MessageSquare}
               label="Mensagens"
@@ -323,7 +362,7 @@ function DashboardContent() {
       </main>
 
       {!selectedRoom && (
-        <nav className="fixed inset-x-0 bottom-0 z-50 flex lg:hidden items-stretch justify-around border-t border-slate-200 bg-white/90 backdrop-blur-md pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
+        <nav className="fixed inset-x-0 bottom-0 z-50 flex lg:hidden items-stretch justify-around border-t border-slate-200 bg-white/95 backdrop-blur-md pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
           <ul className="flex justify-between items-center w-full max-w-md mx-auto">
             <MobileNavItem
               icon={Search}
@@ -343,6 +382,14 @@ function DashboardContent() {
               isActive={activeTab === "bookings"}
               onClick={() => handleTabChange("bookings")}
             />
+            {isCohost && (
+              <MobileNavItem
+                icon={Building2}
+                label="Minha Sala"
+                isActive={activeTab === "cohost"}
+                onClick={() => handleTabChange("cohost")}
+              />
+            )}
             <MobileNavItem
               icon={MessageSquare}
               label="Inbox"
@@ -383,17 +430,34 @@ function DashboardContent() {
   );
 }
 
-function DesktopNavItem({ icon: Icon, label, isActive, onClick }: any) {
+function DesktopNavItem({ icon: Icon, label, badge, isActive, onClick }: any) {
   return (
     <li>
       <button
         onClick={onClick}
-        className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all duration-200 ${isActive ? "bg-[#BF4B24]/10 text-[#BF4B24]" : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"}`}
+        className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm font-bold transition-all duration-200 ${
+          isActive
+            ? "bg-[#BF4B24]/10 text-[#BF4B24]"
+            : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+        }`}
       >
-        <Icon
-          className={`w-5 h-5 ${isActive ? "stroke-[2.5px]" : "stroke-2"}`}
-        />{" "}
-        {label}
+        <span className="flex items-center gap-3">
+          <Icon
+            className={`w-5 h-5 ${isActive ? "stroke-[2.5px]" : "stroke-2"}`}
+          />
+          {label}
+        </span>
+        {badge && (
+          <span
+            className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+              isActive
+                ? "bg-[#BF4B24] text-white"
+                : "bg-slate-100 text-slate-700"
+            }`}
+          >
+            {badge}
+          </span>
+        )}
       </button>
     </li>
   );
@@ -404,20 +468,30 @@ function MobileNavItem({ icon: Icon, label, isActive, onClick }: any) {
     <li className="flex-1">
       <button
         onClick={onClick}
-        className={`flex w-full flex-col items-center justify-center gap-1.5 py-3 text-[10px] font-bold transition-all duration-200 ${isActive ? "text-[#BF4B24] scale-105" : "text-slate-400 hover:text-slate-700"}`}
+        className={`flex w-full flex-col items-center justify-center gap-1.5 py-3 text-[10px] font-bold transition-all duration-200 ${
+          isActive
+            ? "text-[#BF4B24] scale-105"
+            : "text-slate-400 hover:text-slate-700"
+        }`}
       >
         <div
-          className={`relative flex items-center justify-center transition-transform duration-300 ${isActive ? "-translate-y-1" : ""}`}
+          className={`relative flex items-center justify-center transition-transform duration-300 ${
+            isActive ? "-translate-y-1" : ""
+          }`}
         >
           <Icon
-            className={`w-5 h-5 transition-colors ${isActive ? "fill-[#BF4B24]/20 stroke-[2.5px]" : "stroke-2"}`}
+            className={`w-5 h-5 transition-colors ${
+              isActive ? "fill-[#BF4B24]/20 stroke-[2.5px]" : "stroke-2"
+            }`}
           />
           {isActive && (
             <span className="absolute -bottom-3 w-1.5 h-1.5 bg-[#BF4B24] rounded-full animate-in zoom-in" />
           )}
         </div>
         <span
-          className={`text-[10px] mt-1 font-semibold transition-opacity duration-300 ${isActive ? "opacity-100" : "opacity-0 absolute"}`}
+          className={`text-[10px] mt-1 font-semibold transition-opacity duration-300 ${
+            isActive ? "opacity-100" : "opacity-0 absolute"
+          }`}
         >
           {label}
         </span>

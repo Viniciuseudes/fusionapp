@@ -49,7 +49,6 @@ export async function GET(request: Request) {
         const paymentData = await asaasRes.json();
 
         if (paymentData.status === "RECEIVED" || paymentData.status === "CONFIRMED") {
-          // Confirma TODOS os slots vinculados a este pagamento Asaas
           await supabaseAdmin
             .from("bookings")
             .update({ status: "confirmed" })
@@ -73,7 +72,7 @@ export async function GET(request: Request) {
   }
 }
 
-// POST: Criação da Cobrança PIX ou Cartão (com suporte a múltiplos slots e trava de concorrência)
+// POST: Criação da Cobrança PIX ou Cartão (com Split Inteligente para Coanfitrião 80/20)
 export async function POST(request: Request) {
   try {
     const supabase = await createClient();
@@ -115,7 +114,6 @@ export async function POST(request: Request) {
     const booking = targetBookings[0];
     const nowMs = Date.now();
 
-    // 1.1. Valida se outro profissional não ocupou nenhum dos slots selecionados
     for (const tb of targetBookings) {
       const { data: conflicts } = await supabaseAdmin
         .from("bookings")
@@ -153,21 +151,43 @@ export async function POST(request: Request) {
       .eq("id", user.id)
       .single();
 
-    // 3. Sala e Anfitrião para o Split de Pagamento
+    // 3. Sala e Verificação de Coanfitrião Ativo para o Split de Pagamento (80% Recebedor / 20% Fusion)
     const { data: room } = await supabaseAdmin
       .from("rooms")
       .select("name, host_id")
       .eq("id", booking.room_id)
       .single();
 
-    let hostWalletId: string | null = null;
-    if (room?.host_id) {
+    const bookingDateStr = new Date(booking.start_time).toISOString().split("T")[0];
+    const { data: activeCohostContract } = await supabaseAdmin
+      .from("room_contracts")
+      .select("id, specialist_id, cohost_split_pct")
+      .eq("room_id", booking.room_id)
+      .eq("status", "active")
+      .eq("contract_type", "monthly_exclusive")
+      .eq("allow_sublease", true)
+      .lte("start_date", bookingDateStr)
+      .gte("end_date", bookingDateStr)
+      .maybeSingle();
+
+    let recipientWalletId: string | null = null;
+
+    if (activeCohostContract?.specialist_id) {
+      // Se existe Coanfitrião ativo, os 80% vão para o Coanfitrião!
+      const { data: cohostProfile } = await supabaseAdmin
+        .from("profiles")
+        .select("asaas_wallet_id")
+        .eq("id", activeCohostContract.specialist_id)
+        .single();
+      recipientWalletId = cohostProfile?.asaas_wallet_id || null;
+    } else if (room?.host_id) {
+      // Caso contrário, os 80% vão para o Anfitrião dono da sala
       const { data: hostProfile } = await supabaseAdmin
         .from("profiles")
         .select("asaas_wallet_id")
         .eq("id", room.host_id)
         .single();
-      hostWalletId = hostProfile?.asaas_wallet_id || null;
+      recipientWalletId = hostProfile?.asaas_wallet_id || null;
     }
 
     // 4. Cria/Busca Cliente no Asaas
@@ -205,7 +225,7 @@ export async function POST(request: Request) {
       asaasCustomerId = customerResult.id;
     }
 
-    // 5. Monta Payload de Pagamento Padrão
+    // 5. Monta Payload de Pagamento Padrão (80% Recebedor / 20% Plataforma Fusion)
     const dueDate = new Date().toISOString().split("T")[0];
     const paymentPayload: any = {
       customer: asaasCustomerId,
@@ -216,8 +236,8 @@ export async function POST(request: Request) {
       externalReference: primaryBookingId,
     };
 
-    if (hostWalletId) {
-      paymentPayload.split = [{ walletId: hostWalletId, percentualValue: 90.0 }];
+    if (recipientWalletId) {
+      paymentPayload.split = [{ walletId: recipientWalletId, percentualValue: 80.0 }];
     }
 
     // 6. Inteligência Antifraude e Tokenização (Cartão de Crédito)
@@ -266,7 +286,6 @@ export async function POST(request: Request) {
       throw new Error(paymentResult.errors?.[0]?.description || "Erro ao gerar cobrança.");
     }
 
-    // Vincula o asaas_payment_id a TODOS os horários reservados neste checkout
     const unitBrlCost = Number((Number(price) / targetIds.length).toFixed(2));
     await supabaseAdmin
       .from("bookings")

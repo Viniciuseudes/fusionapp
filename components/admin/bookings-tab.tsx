@@ -122,6 +122,7 @@ interface BookingInfo {
   room_id: string;
   clinic_name: string;
   is_contract: boolean;
+  is_subcontract: boolean;
   contract_id: string | null;
   contract_type: string | null;
   contract_pdf_url: string | null;
@@ -209,7 +210,7 @@ function normalizeHourSlotFormat(rawSlot: string): string {
 export function AdminBookingsTab({
   onOpenSpecialistDossier,
 }: AdminBookingsTabProps) {
-  const supabase = createClient();
+  const [supabase] = useState(() => createClient());
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [bookings, setBookings] = useState<BookingInfo[]>([]);
@@ -443,16 +444,35 @@ export function AdminBookingsTab({
       const contractsById = new Map<string, any>(
         contractsData.map((c: any) => [c.id, c]),
       );
-      const activeCohostByRoomId = new Map<string, any>();
+
+      // Mapeia todos os contratos de Co-Anfitrião ativos por sala para validar a data exata de cada reserva
+      const activeCohostContractsListByRoomId = new Map<string, any[]>();
       contractsData.forEach((c: any) => {
         if (
           c.status === "active" &&
           c.contract_type === "monthly_exclusive" &&
           c.allow_sublease
         ) {
-          activeCohostByRoomId.set(c.room_id, c);
+          const list = activeCohostContractsListByRoomId.get(c.room_id) || [];
+          list.push(c);
+          activeCohostContractsListByRoomId.set(c.room_id, list);
         }
       });
+
+      // Retorna o contrato do Co-Anfitrião APENAS se a reserva ocorrer a partir do start_date e até o end_date dele
+      const findCohostForBookingDate = (
+        roomId: string,
+        bookingStartIso: string,
+      ) => {
+        const list = activeCohostContractsListByRoomId.get(roomId) || [];
+        if (list.length === 0) return null;
+        const bDateStr = format(parseISO(bookingStartIso), "yyyy-MM-dd");
+        return (
+          list.find(
+            (c: any) => bDateStr >= c.start_date && bDateStr <= c.end_date,
+          ) || null
+        );
+      };
 
       const packageRateMap: Record<
         "start" | "vip" | "master",
@@ -548,6 +568,12 @@ export function AdminBookingsTab({
 
         const slotUnits = calculateSlotUnits(b.start_time, b.end_time);
 
+        // Verifica se a sala possui Co-Anfitrião vigente NA DATA DESTA RESERVA (>= start_date e <= end_date)
+        const roomCohostContract = findCohostForBookingDate(
+          b.room_id,
+          b.start_time,
+        );
+
         const linkedContract = b.contract_id
           ? contractsById.get(b.contract_id)
           : null;
@@ -562,18 +588,45 @@ export function AdminBookingsTab({
               ? Number(b.agreed_value_brl)
               : Number(linkedContract?.session_value || 0);
 
-          const feePct = Number(linkedContract?.platform_fee_pct ?? 15) / 100;
-          const platformFee = contractSessionVal * feePct;
-          const hostPayout = Math.max(0, contractSessionVal - platformFee);
+          // Se este contrato fixo (Turno/Diária) está dentro da sala de um Co-Anfitrião ativo na data
+          const isSubContractUnderCohost = Boolean(
+            roomCohostContract &&
+            b.contract_id &&
+            b.contract_id !== roomCohostContract.id,
+          );
+
+          // AQUI: Usamos os valores configurados NESTE subcontrato, e não os valores globais do Coanfitrião!
+          const customPlatformFeePctForSubcontract = isSubContractUnderCohost
+            ? Number(linkedContract?.platform_fee_pct ?? 20) / 100
+            : Number(linkedContract?.platform_fee_pct ?? 15) / 100;
+
+          const customCohostPctForSubcontract = isSubContractUnderCohost
+            ? Number(linkedContract?.host_split_pct ?? 80) / 100
+            : 0;
+
+          const platformFee =
+            contractSessionVal * customPlatformFeePctForSubcontract;
+          const cohostPayout =
+            contractSessionVal * customCohostPctForSubcontract;
+
+          const hostPayout = isSubContractUnderCohost
+            ? 0
+            : Math.max(0, contractSessionVal - platformFee);
 
           const cType = linkedContract?.contract_type || b.booking_origin || "";
-          let typeLabel = "Contrato • Alocação Fixa";
+          let typeLabel = isSubContractUnderCohost
+            ? "Subcontrato Fixo (Co-Host)"
+            : "Contrato • Alocação Fixa";
           if (cType.includes("monthly_exclusive"))
             typeLabel = "Contrato • Sala Fixa Mensal";
           else if (cType.includes("fixed_shift"))
-            typeLabel = "Contrato • Turno Fixo";
+            typeLabel = isSubContractUnderCohost
+              ? "Subcontrato • Turno Fixo"
+              : "Contrato • Turno Fixo";
           else if (cType.includes("fixed_daily"))
-            typeLabel = "Contrato • Diária Fixa";
+            typeLabel = isSubContractUnderCohost
+              ? "Subcontrato • Diária Fixa"
+              : "Contrato • Diária Fixa";
 
           return {
             id: b.id,
@@ -599,30 +652,44 @@ export function AdminBookingsTab({
             room_name: room?.name || "Sala Removida",
             clinic_name: clinicName || "Fusion Clinic",
             is_contract: true,
+            is_subcontract: isSubContractUnderCohost,
             contract_id: b.contract_id || null,
             contract_type: linkedContract?.contract_type || null,
             contract_pdf_url: linkedContract?.pdf_url || null,
-            cohost_name: null,
-            cohost_split_pct: 0,
+            cohost_name: isSubContractUnderCohost
+              ? roomCohostContract.specialist_name
+              : null,
+            cohost_split_pct: isSubContractUnderCohost
+              ? Number(linkedContract?.host_split_pct ?? 80)
+              : 0,
             platform_fee_brl: platformFee,
-            cohost_payout_brl: 0,
+            cohost_payout_brl: cohostPayout,
             host_payout_brl: hostPayout,
           };
         }
 
-        const roomCohostContract = activeCohostByRoomId.get(b.room_id);
         const cohostName = roomCohostContract?.specialist_name || null;
         const cohostSplitPct = roomCohostContract
-          ? Number(roomCohostContract.cohost_split_pct || 0)
+          ? Number(roomCohostContract.cohost_split_pct || 80)
           : 0;
 
         const computeAvulsoSplit = (grossVal: number) => {
+          if (roomCohostContract) {
+            const cohostShare = grossVal * (cohostSplitPct / 100);
+            const platformFee = Math.max(0, grossVal - cohostShare);
+            return {
+              platformFee,
+              cohostPayout: cohostShare,
+              hostPayout: 0,
+            };
+          }
           const platformFee = grossVal * 0.2;
           const netAfterPlatform = Math.max(0, grossVal - platformFee);
-          const cohostPayout =
-            cohostSplitPct > 0 ? netAfterPlatform * (cohostSplitPct / 100) : 0;
-          const hostPayout = Math.max(0, netAfterPlatform - cohostPayout);
-          return { platformFee, cohostPayout, hostPayout };
+          return {
+            platformFee,
+            cohostPayout: 0,
+            hostPayout: netAfterPlatform,
+          };
         };
 
         const rawTotalCost = Number(b.total_cost || 0);
@@ -672,6 +739,7 @@ export function AdminBookingsTab({
             room_name: room?.name || "Sala Removida",
             clinic_name: clinicName || "Fusion Clinic",
             is_contract: false,
+            is_subcontract: false,
             contract_id: null,
             contract_type: null,
             contract_pdf_url: null,
@@ -841,6 +909,7 @@ export function AdminBookingsTab({
           room_name: room?.name || "Sala Removida",
           clinic_name: clinicName || "Fusion Clinic",
           is_contract: false,
+          is_subcontract: false,
           contract_id: null,
           contract_type: null,
           contract_pdf_url: null,
@@ -866,7 +935,6 @@ export function AdminBookingsTab({
     }
   };
 
-  // Abre a gaveta de Perfil Completo do Profissional
   const handleOpenSpecialistProfile = async (userId: string) => {
     if (!userId) return;
     setInjectAmount("8");
@@ -911,7 +979,6 @@ export function AdminBookingsTab({
     }
   };
 
-  // --- ENGINE DE INJEÇÃO DE CRÉDITOS DIRETO NA GAVETA DO ESPECIALISTA ---
   const handleInjectCredits = async () => {
     if (!selectedSpecialist) return;
     const hoursNum = Number(injectAmount);
@@ -1011,7 +1078,6 @@ export function AdminBookingsTab({
     }
   };
 
-  // Navega diretamente para a aba Especialistas (Dossiê Completo)
   const handleGoToFullDossier = (spec: SpecialistProfile) => {
     try {
       sessionStorage.setItem("fusion_admin_selected_specialist_id", spec.id);
@@ -1097,7 +1163,6 @@ export function AdminBookingsTab({
     }
   };
 
-  // --- CARREGADOR PRECISO DE AGENDA DA SALA (CORRIGIDO PARA HORA CLÍNICA DE 50 MIN E BLOCKED_DATES) ---
   const loadRoomScheduleForDate = async (
     roomId: string,
     date: Date,
@@ -1248,7 +1313,6 @@ export function AdminBookingsTab({
       const isToday = isSameDay(date, now);
       const currentHour = now.getHours();
 
-      // Verifica intersecção real em milissegundos (compatível com Hora Clínica 50min)
       const finalFreeSlots = dailySlots.filter((slot) => {
         const startHour = parseInt(slot.split("h")[0], 10);
         if (isToday && startHour <= currentHour) return false;
@@ -1283,7 +1347,6 @@ export function AdminBookingsTab({
     }
   };
 
-  // --- ABRIR MODAL DE NOVA RESERVA MANUAL PELO ADMIN ---
   const handleOpenNewManualBooking = async () => {
     setActionLoading(true);
     try {
@@ -1309,8 +1372,7 @@ export function AdminBookingsTab({
         setNewBookingSpecialistId(specs[0].id);
       }
       if (activeRooms.length > 0) {
-        const firstRoom = activeRooms[0];
-        setNewBookingRoomId(firstRoom.id);
+        setNewBookingRoomId(activeRooms[0].id);
       }
       setNewBookingDate(new Date());
       setNewBookingSelectedSlots([]);
@@ -1350,7 +1412,6 @@ export function AdminBookingsTab({
 
       const payloads = sortedSlots.map((slot) => {
         const startHour = parseInt(slot.split("h")[0], 10);
-        // Grava exatamente no padrão de Hora Clínica (HH:00 às HH:50) usado no RoomDetail
         const slotStart = setSeconds(
           setMinutes(setHours(newBookingDate, startHour), 0),
           0,
@@ -1476,7 +1537,6 @@ export function AdminBookingsTab({
 
       if (updateError) throw updateError;
 
-      // Dispara os e-mails de aviso de cancelamento para o Profissional e Anfitrião
       sendBookingCancellationEmails(selectedBooking.id).catch(console.error);
 
       let refunded = false;
@@ -1563,7 +1623,6 @@ export function AdminBookingsTab({
       const [startStr] = selectedSlot.split("-");
       const startHour = parseInt(startStr.replace("h", ""), 10);
 
-      // Mantém a duração original da reserva ou aplica os 50 minutos padrão da Hora Clínica
       const origStartMs = new Date(selectedBooking.start_time).getTime();
       const origEndMs = new Date(selectedBooking.end_time).getTime();
       const origDurationMs =
@@ -1755,8 +1814,9 @@ export function AdminBookingsTab({
             Histórico de Agendamentos & Contratos
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-1">
-            Gestão operacional e financeira de reservas avulsas (Take Rate 20%),
-            turnos fixos, diárias e sublocações.
+            Gestão operacional e financeira de reservas avulsas, contratos fixos
+            e sublocações de Co-Anfitrião (contabilizadas a partir do início do
+            contrato).
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -1907,7 +1967,9 @@ export function AdminBookingsTab({
                         </p>
                         {booking.is_contract && (
                           <Badge className="bg-purple-100 text-purple-800 border-0 text-[9px] px-1.5 py-0 font-black">
-                            CONTRATO
+                            {booking.is_subcontract
+                              ? "SUBCONTRATO"
+                              : "CONTRATO"}
                           </Badge>
                         )}
                       </div>
@@ -1934,12 +1996,13 @@ export function AdminBookingsTab({
                         <span>{booking.specialist_name}</span>
                         <ExternalLink className="w-3 h-3 opacity-60 group-hover:opacity-100" />
                       </button>
-                      {booking.cohost_name && !booking.is_contract && (
-                        <p className="text-[10px] font-bold text-purple-700 flex items-center gap-1 mt-0.5">
-                          <Sparkles className="w-3 h-3" /> Co-Anfitrião:{" "}
-                          {booking.cohost_name} ({booking.cohost_split_pct}%)
-                        </p>
-                      )}
+                      {booking.cohost_name &&
+                        (!booking.is_contract || booking.is_subcontract) && (
+                          <p className="text-[10px] font-bold text-emerald-700 flex items-center gap-1 mt-0.5">
+                            <Sparkles className="w-3 h-3" /> Repasse Co-Host:{" "}
+                            {booking.cohost_name} ({booking.cohost_split_pct}%)
+                          </p>
+                        )}
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
@@ -2314,29 +2377,6 @@ export function AdminBookingsTab({
                   </p>
                 )}
               </div>
-
-              <div className="p-4 rounded-2xl bg-orange-50/70 border border-orange-200 flex items-center justify-between">
-                <div>
-                  <p className="text-[10px] font-black uppercase text-orange-900">
-                    Reservas Ativas no Filtro Atual
-                  </p>
-                  <p className="text-xs font-bold text-orange-700 mt-0.5">
-                    {specialistBookingsInView.length} agendamento(s)
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-[10px] font-bold uppercase text-orange-800">
-                    Volume no Período
-                  </p>
-                  <p className="text-base font-black text-[#BF4B24]">
-                    R${" "}
-                    {specialistTotalSpentInView.toLocaleString("pt-BR", {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
-                  </p>
-                </div>
-              </div>
             </div>
           )}
         </SheetContent>
@@ -2410,10 +2450,10 @@ export function AdminBookingsTab({
                 </div>
                 {selectedBooking.cohost_payout_brl > 0 && (
                   <div className="flex justify-between text-xs">
-                    <span className="text-purple-300">
+                    <span className="text-emerald-300">
                       Repasse Co-Anfitrião ({selectedBooking.cohost_name}):
                     </span>
-                    <span className="font-bold text-purple-300">
+                    <span className="font-bold text-emerald-300">
                       R${" "}
                       {selectedBooking.cohost_payout_brl.toLocaleString(
                         "pt-BR",
@@ -2443,7 +2483,9 @@ export function AdminBookingsTab({
                 <div className="p-4 rounded-xl bg-purple-50 border border-purple-200 flex items-center justify-between">
                   <div>
                     <p className="text-xs font-black text-purple-950 uppercase">
-                      Reserva de Contrato Recorrente
+                      {selectedBooking.is_subcontract
+                        ? "Subcontrato Fixo (Vinculado ao Co-Host)"
+                        : "Reserva de Contrato Recorrente"}
                     </p>
                     <p className="text-xs text-purple-700 font-medium">
                       Alocação garantida por contrato de locação.

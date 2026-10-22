@@ -1,18 +1,15 @@
+// components/host/overview-tab.tsx
 "use client";
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/utils/supabase/client";
 import {
-  TrendingUp,
   Users,
   CalendarDays,
   Wallet,
-  ArrowUpRight,
-  ArrowDownRight,
   Activity,
   Map as MapIcon,
   Maximize,
-  Filter,
   PlusCircle,
   ShieldAlert,
   MessageSquare,
@@ -22,6 +19,7 @@ import {
   LogOut,
   FileText,
   Sparkles,
+  CalendarClock,
 } from "lucide-react";
 import {
   AreaChart,
@@ -116,13 +114,14 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
   const [totalRevenue, setTotalRevenue] = useState(0);
   const [netHostRevenue, setNetHostRevenue] = useState(0);
   const [contractRevenue, setContractRevenue] = useState(0);
+  const [cohostSubleaseNet, setCohostSubleaseNet] = useState(0);
+  const [isCohostUser, setIsCohostUser] = useState(false);
   const [totalBookings, setTotalBookings] = useState(0);
   const [globalRevPerSqM, setGlobalRevPerSqM] = useState(0);
   const [occupancyRate, setOccupancyRate] = useState(0);
 
   const handleLogout = async () => {
     try {
-      const supabase = createClient();
       await supabase.auth.signOut();
       sessionStorage.clear();
       window.location.replace("/login");
@@ -141,6 +140,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
         if (!user) return;
 
         const now = new Date();
+        const todayStr = format(now, "yyyy-MM-dd");
         let startDate = startOfDay(subDays(now, 30));
         let endDate = endOfDay(now);
 
@@ -150,13 +150,54 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           startDate = startOfDay(subDays(now, 7));
         }
 
-        const { data: rooms, error: roomsErr } = await supabase
+        // 1. Busca salas onde o usuário é Anfitrião Dono (host_id)
+        const { data: ownedRooms, error: roomsErr } = await supabase
           .from("rooms")
-          .select("id, name, address_details, tier, category_id, modalities")
+          .select(
+            "id, name, host_id, address_details, tier, category_id, modalities",
+          )
           .eq("host_id", user.id);
 
         if (roomsErr) throw roomsErr;
-        if (!rooms || rooms.length === 0) {
+
+        // 2. Busca contratos ativos onde o usuário é Coanfitrião (specialist_id + allow_sublease)
+        const { data: myCohostContracts } = await supabase
+          .from("room_contracts")
+          .select("*")
+          .eq("specialist_id", user.id)
+          .eq("status", "active")
+          .eq("allow_sublease", true)
+          .lte("start_date", todayStr)
+          .gte("end_date", todayStr);
+
+        const cohostRoomIds = Array.from(
+          new Set(
+            (myCohostContracts || [])
+              .map((c: any) => c.room_id)
+              .filter(Boolean),
+          ),
+        );
+
+        setIsCohostUser(cohostRoomIds.length > 0);
+
+        let subleasedRooms: any[] = [];
+        if (cohostRoomIds.length > 0) {
+          const { data: cRooms } = await supabase
+            .from("rooms")
+            .select(
+              "id, name, host_id, address_details, tier, category_id, modalities",
+            )
+            .in("id", cohostRoomIds);
+          subleasedRooms = cRooms || [];
+        }
+
+        const ownedIdsSet = new Set((ownedRooms || []).map((r: any) => r.id));
+        const rooms = [
+          ...(ownedRooms || []),
+          ...subleasedRooms.filter((r: any) => !ownedIdsSet.has(r.id)),
+        ];
+
+        if (rooms.length === 0) {
           setLoading(false);
           return;
         }
@@ -172,7 +213,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
                 "id, created_at, room_id, user_id, start_time, end_time, total_cost, upgrade_fee_amount, status, contract_id, booking_origin, agreed_value_brl",
               )
               .in("room_id", roomIds)
-              .in("status", ["confirmed", "completed", "pending_payment"])
+              .in("status", ["confirmed", "completed", "in_progress"])
               .gte("start_time", startDate.toISOString())
               .lte("start_time", endDate.toISOString()),
             supabase.from("room_contracts").select("*").in("room_id", roomIds),
@@ -315,15 +356,22 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           return tierPackages.get(sortedHours[0])!;
         };
 
+        // ====================================================================
+        // RESOLUÇÃO FINANCEIRA SÊNIOR (ANFITRIÃO DONO vs COANFITRIÃO 80/20)
+        // ====================================================================
         const resolveBookingFinancials = (
           b: any,
         ): {
           grossRevenue: number;
-          hostNet: number;
+          userNetRevenue: number;
+          cohostEarned: number;
           durationHours: number;
           isContract: boolean;
         } => {
           const room = roomsMap.get(b.room_id);
+          const isRoomOwner = room?.host_id === user.id;
+          const roomCohost = activeCohostByRoomId.get(b.room_id);
+          const isUserCohostOfRoom = roomCohost?.specialist_id === user.id;
           const roomTier = normalizeTier(room?.tier);
 
           const slotUnits =
@@ -340,7 +388,17 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
               String(b.booking_origin).startsWith("contract")),
           );
 
+          // 1. Reserva de Contrato Fixo: pertence ao Anfitrião Dono da Sala
           if (isContractBooking) {
+            if (!isRoomOwner) {
+              return {
+                grossRevenue: 0,
+                userNetRevenue: 0,
+                cohostEarned: 0,
+                durationHours: slotUnits,
+                isContract: true,
+              };
+            }
             const val =
               Number(b.agreed_value_brl) > 0
                 ? Number(b.agreed_value_brl)
@@ -349,22 +407,32 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
             const hostNet = Math.max(0, val * (1 - feePct));
             return {
               grossRevenue: val,
-              hostNet,
+              userNetRevenue: hostNet,
+              cohostEarned: 0,
               durationHours: slotUnits,
               isContract: true,
             };
           }
 
-          const roomCohost = activeCohostByRoomId.get(b.room_id);
-          const cohostSplitPct = roomCohost
-            ? Number(roomCohost.cohost_split_pct || 0)
-            : 0;
-
-          const computeHostNet = (grossVal: number) => {
-            const netAfterFusion = Math.max(0, grossVal * 0.8);
-            const cohostShare =
-              cohostSplitPct > 0 ? netAfterFusion * (cohostSplitPct / 100) : 0;
-            return Math.max(0, netAfterFusion - cohostShare);
+          // 2. Reserva Avulsa (Sublocação ou Direta):
+          // Se a sala tem Coanfitrião ativo -> 80% Coanfitrião / 20% Fusion / 0% Anfitrião Dono
+          // Se a sala NÃO tem Coanfitrião -> 80% Anfitrião Dono / 20% Fusion
+          const computeAvulsoUserNet = (grossVal: number) => {
+            if (roomCohost) {
+              const cohostPct = Number(roomCohost.cohost_split_pct || 80) / 100;
+              const cohostShare = Math.max(0, grossVal * cohostPct);
+              return {
+                userNet: isUserCohostOfRoom ? cohostShare : 0,
+                cohostEarned: isUserCohostOfRoom ? cohostShare : 0,
+                countedGross: isUserCohostOfRoom ? grossVal : 0,
+              };
+            }
+            const ownerNet = Math.max(0, grossVal * 0.8);
+            return {
+              userNet: isRoomOwner ? ownerNet : 0,
+              cohostEarned: 0,
+              countedGross: isRoomOwner ? grossVal : 0,
+            };
           };
 
           const rawTotalCost = Number(b.total_cost || 0);
@@ -380,9 +448,11 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
                 ? Number(b.agreed_value_brl)
                 : rawTotalCost;
             const grossVal = Math.max(0, baseVal + upgradeFee - discount);
+            const splitRes = computeAvulsoUserNet(grossVal);
             return {
-              grossRevenue: grossVal,
-              hostNet: computeHostNet(grossVal),
+              grossRevenue: splitRes.countedGross,
+              userNetRevenue: splitRes.userNet,
+              cohostEarned: splitRes.cohostEarned,
               durationHours: slotUnits,
               isContract: false,
             };
@@ -510,10 +580,12 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
             0,
             creditsForThisSlot * resolvedHourlyRate + upgradeFee - discount,
           );
+          const splitRes = computeAvulsoUserNet(grossVal);
 
           return {
-            grossRevenue: grossVal,
-            hostNet: computeHostNet(grossVal),
+            grossRevenue: splitRes.countedGross,
+            userNetRevenue: splitRes.userNet,
+            cohostEarned: splitRes.cohostEarned,
             durationHours: slotUnits,
             isContract: false,
           };
@@ -522,6 +594,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
         let revTotal = 0;
         let netTotal = 0;
         let contractRevTotal = 0;
+        let cohostNetTotal = 0;
         let bookTotal = bookings.length;
         let areaTotal = 0;
         let totalOccupiedHours = 0;
@@ -548,6 +621,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           roomStats[r.id] = {
             id: r.id,
             name: r.name,
+            isOwnedByUser: r.host_id === user.id,
             areaSqM: area,
             revenue: 0,
             netRevenue: 0,
@@ -585,17 +659,23 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
         ];
 
         bookings.forEach((b: any) => {
-          const { grossRevenue, hostNet, durationHours, isContract } =
-            resolveBookingFinancials(b);
+          const {
+            grossRevenue,
+            userNetRevenue,
+            cohostEarned,
+            durationHours,
+            isContract,
+          } = resolveBookingFinancials(b);
 
           revTotal += grossRevenue;
-          netTotal += hostNet;
+          netTotal += userNetRevenue;
+          cohostNetTotal += cohostEarned;
           if (isContract) contractRevTotal += grossRevenue;
           totalOccupiedHours += durationHours;
 
           if (roomStats[b.room_id]) {
             roomStats[b.room_id].revenue += grossRevenue;
-            roomStats[b.room_id].netRevenue += hostNet;
+            roomStats[b.room_id].netRevenue += userNetRevenue;
             roomStats[b.room_id].bookings += 1;
             roomStats[b.room_id].occupiedHours += durationHours;
           }
@@ -606,7 +686,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
 
           if (dailyRev[dateStr]) {
             dailyRev[dateStr].revenue += grossRevenue;
-            dailyRev[dateStr].netRevenue += hostNet;
+            dailyRev[dateStr].netRevenue += userNetRevenue;
             dailyRev[dateStr].bookings += 1;
           }
 
@@ -629,9 +709,49 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           });
         });
 
+        // Contabiliza para o Anfitrião Dono os contratos mensais com Coanfitrião ativo
+        // (já que eles não geram bloqueios na tabela `bookings` para manter a vitrine aberta)
+        contractsData.forEach((c: any) => {
+          const rObj = roomsMap.get(c.room_id);
+          const isOwner = rObj?.host_id === user.id;
+          if (
+            isOwner &&
+            c.status === "active" &&
+            c.contract_type === "monthly_exclusive" &&
+            c.allow_sublease &&
+            c.start_date <= todayStr &&
+            c.end_date >= todayStr
+          ) {
+            const hasBookingsForContract = bookings.some(
+              (b: any) => b.contract_id === c.id,
+            );
+            if (!hasBookingsForContract) {
+              const factor =
+                timeFilter === "hoje"
+                  ? 1 / 30
+                  : timeFilter === "7d"
+                    ? 7 / 30
+                    : 1;
+              const cGross = Number(c.contract_value || 0) * factor;
+              const feePct = Number(c.platform_fee_pct ?? 15) / 100;
+              const cNet = Math.max(0, cGross * (1 - feePct));
+
+              revTotal += cGross;
+              netTotal += cNet;
+              contractRevTotal += cGross;
+
+              if (roomStats[c.room_id]) {
+                roomStats[c.room_id].revenue += cGross;
+                roomStats[c.room_id].netRevenue += cNet;
+              }
+            }
+          }
+        });
+
         setTotalRevenue(revTotal);
         setNetHostRevenue(netTotal);
         setContractRevenue(contractRevTotal);
+        setCohostSubleaseNet(cohostNetTotal);
         setTotalBookings(bookTotal);
         setGlobalRevPerSqM(areaTotal > 0 ? revTotal / areaTotal : 0);
 
@@ -654,9 +774,10 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           const rawOcc = Math.round(
             (r.occupiedHours / capacityPerRoomHours) * 100,
           );
-          const finalOcc = r.hasExclusiveContract
-            ? Math.max(rawOcc, 85)
-            : Math.min(rawOcc, 100);
+          const finalOcc =
+            r.hasExclusiveContract && r.isOwnedByUser
+              ? Math.max(rawOcc, 85)
+              : Math.min(rawOcc, 100);
 
           return {
             ...r,
@@ -707,14 +828,47 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
 
   return (
     <div className="p-4 lg:p-8 animate-in fade-in duration-500 max-w-7xl mx-auto w-full pb-32 font-sans print:p-0 print:pb-0">
+      {/* BANNER EXCLUSIVO PARA COANFITRIÃO */}
+      {isCohostUser && (
+        <div className="mb-6 bg-gradient-to-r from-purple-900 via-slate-900 to-slate-900 text-white p-5 rounded-2xl shadow-lg border border-purple-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 print:hidden">
+          <div className="flex items-start gap-3.5">
+            <div className="w-11 h-11 rounded-xl bg-purple-500/20 border border-purple-400/30 flex items-center justify-center shrink-0">
+              <Sparkles className="w-6 h-6 text-purple-300" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-black text-white">
+                  Modo Coanfitrião Ativo (Sublocação 80/20)
+                </h2>
+                <Badge className="bg-purple-500 text-white border-0 text-[10px] font-black">
+                  80% Seu
+                </Badge>
+              </div>
+              <p className="text-xs text-slate-300 font-medium mt-1">
+                Libere os dias e horários que você não estiver utilizando a sala
+                e receba <strong>80% do valor</strong> de todas as locações
+                avulsas realizadas.
+              </p>
+            </div>
+          </div>
+          <Button
+            onClick={() => onNavigate("availability")}
+            className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl h-10 px-5 shrink-0 w-full sm:w-auto"
+          >
+            <CalendarClock className="w-4 h-4 mr-2" />
+            Gerenciar Meus Horários
+          </Button>
+        </div>
+      )}
+
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8 print:mb-4">
         <div>
           <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight">
             Visão Geral de Desempenho
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-1">
-            Análise de rendimentos (Take Rate Avulso 20% + Contratos), ocupação
-            e rentabilidade por m².
+            Análise de rendimentos (Take Rate Avulso 20% + Contratos &
+            Sublocações), ocupação e rentabilidade por m².
           </p>
         </div>
 
@@ -747,14 +901,18 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
               <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center text-emerald-600">
                 <Wallet className="w-5 h-5" />
               </div>
-              {contractRevenue > 0 && (
+              {contractRevenue > 0 ? (
                 <Badge className="bg-purple-100 text-purple-800 border-0 text-[10px] font-bold">
                   Contratos: R${" "}
                   {contractRevenue.toLocaleString("pt-BR", {
                     maximumFractionDigits: 0,
                   })}
                 </Badge>
-              )}
+              ) : cohostSubleaseNet > 0 ? (
+                <Badge className="bg-purple-100 text-purple-800 border-0 text-[10px] font-bold">
+                  Sublocação (80%)
+                </Badge>
+              ) : null}
             </div>
             <p className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-1">
               Rendimento Bruto
@@ -767,7 +925,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
               })}
             </h3>
             <p className="text-xs font-bold text-emerald-600 mt-1">
-              Repasse Líquido: R${" "}
+              Seu Repasse Líquido: R${" "}
               {netHostRevenue.toLocaleString("pt-BR", {
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2,
@@ -836,7 +994,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
                 Evolução de Receita
               </h2>
               <p className="text-xs font-medium text-slate-500">
-                Acompanhamento de rendimentos brutos
+                Acompanhamento de rendimentos no período
               </p>
             </div>
           </div>
@@ -969,7 +1127,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
                 <th className="px-6 py-4 text-center">Tamanho (m²)</th>
                 <th className="px-6 py-4 text-center">Ocupação Est.</th>
                 <th className="px-6 py-4 text-right">Rendimento Bruto</th>
-                <th className="px-6 py-4 text-right">Repasse Líquido</th>
+                <th className="px-6 py-4 text-right">Seu Repasse Líquido</th>
                 <th className="px-6 py-4 text-right bg-orange-50/50 text-[#BF4B24]">
                   Rendimento / m²
                 </th>
@@ -1018,7 +1176,7 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
                             {room.cohostName && (
                               <p className="text-[10px] font-bold text-purple-700 flex items-center gap-1 mt-0.5">
                                 <Sparkles className="w-3 h-3" /> Co-Anfitrião:{" "}
-                                {room.cohostName}
+                                {room.cohostName} (Sublocação 80/20)
                               </p>
                             )}
                           </div>
@@ -1083,14 +1241,16 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
           Ações Rápidas
         </h3>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <Button
-            onClick={() => onNavigate("create_space")}
-            variant="outline"
-            className="h-auto flex-col items-center justify-center gap-3 p-6 rounded-2xl border-slate-200 text-slate-600 hover:border-[#BF4B24] hover:text-[#BF4B24] hover:bg-orange-50"
-          >
-            <PlusCircle className="w-8 h-8" />
-            <span className="font-bold">Adicionar Sala</span>
-          </Button>
+          {!isCohostUser && (
+            <Button
+              onClick={() => onNavigate("create_space")}
+              variant="outline"
+              className="h-auto flex-col items-center justify-center gap-3 p-6 rounded-2xl border-slate-200 text-slate-600 hover:border-[#BF4B24] hover:text-[#BF4B24] hover:bg-orange-50"
+            >
+              <PlusCircle className="w-8 h-8" />
+              <span className="font-bold">Adicionar Sala</span>
+            </Button>
+          )}
 
           <Button
             onClick={() => onNavigate("contracts")}
@@ -1107,7 +1267,9 @@ export function HostOverview({ onNavigate }: HostOverviewProps) {
             className="h-auto flex-col items-center justify-center gap-3 p-6 rounded-2xl border-slate-200 text-slate-600 hover:border-red-500 hover:text-red-500 hover:bg-red-50"
           >
             <ShieldAlert className="w-8 h-8" />
-            <span className="font-bold">Bloquear Agenda</span>
+            <span className="font-bold">
+              {isCohostUser ? "Horários de Sublocação" : "Bloquear Agenda"}
+            </span>
           </Button>
 
           <Button

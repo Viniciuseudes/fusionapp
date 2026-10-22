@@ -1,6 +1,7 @@
+// components/admin/contracts-tab.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { createClient } from "@/utils/supabase/client";
 import {
   FileText,
@@ -23,6 +24,7 @@ import {
   Wallet,
   CalendarClock,
   Layers,
+  Lock,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -56,7 +58,7 @@ export interface ContractPricingTier {
 }
 
 interface ContractScheduleConfig {
-  daysOfWeek: number[]; // 0=Dom, 1=Seg, ..., 6=Sab
+  daysOfWeek: number[];
   shifts: ("morning" | "afternoon" | "night" | "fullday")[];
   startHour: number;
   endHour: number;
@@ -126,7 +128,7 @@ export function AdminContractsTab({
   mode = "admin",
   preselectedRoomId,
 }: ContractsTabProps) {
-  const supabase = createClient();
+  const [supabase] = useState(() => createClient());
   const { toast } = useToast();
 
   const [loading, setLoading] = useState(true);
@@ -144,7 +146,6 @@ export function AdminContractsTab({
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
 
-  // Modal Criar / Editar Contrato
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingContract, setEditingContract] = useState<RoomContract | null>(
     null,
@@ -152,7 +153,6 @@ export function AdminContractsTab({
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [specSearch, setSpecSearch] = useState("");
 
-  // Faixas escalonadas de valor por período
   const [pricingTiers, setPricingTiers] = useState<
     {
       id: string;
@@ -190,7 +190,7 @@ export function AdminContractsTab({
     platform_fee_pct: "15",
     host_split_pct: "85",
     allow_sublease: false,
-    cohost_split_pct: "70",
+    cohost_split_pct: "80",
     daysOfWeek: [1] as number[],
     selectedShift: "fullday" as "fullday" | "morning" | "afternoon" | "night",
     startHour: 8,
@@ -211,11 +211,27 @@ export function AdminContractsTab({
 
       let roomsQuery = supabase
         .from("rooms")
-        .select("id, name, host_id, tier, is_active")
+        .select("id, name, host_id, tier, is_active, availability")
         .order("name");
 
       if (mode === "host" && user) {
-        roomsQuery = roomsQuery.eq("host_id", user.id);
+        const { data: myCohostContracts } = await supabase
+          .from("room_contracts")
+          .select("room_id")
+          .eq("specialist_id", user.id)
+          .eq("status", "active");
+
+        const cohostRoomIds = (myCohostContracts || [])
+          .map((c: any) => c.room_id)
+          .filter(Boolean);
+
+        if (cohostRoomIds.length > 0) {
+          roomsQuery = roomsQuery.or(
+            `host_id.eq.${user.id},id.in.(${cohostRoomIds.join(",")})`,
+          );
+        } else {
+          roomsQuery = roomsQuery.eq("host_id", user.id);
+        }
       }
 
       const { data: roomsData, error: rErr } = await roomsQuery;
@@ -249,11 +265,11 @@ export function AdminContractsTab({
       } else if (mode === "host" && user) {
         const hostRoomIds = safeRooms.map((r: any) => r.id);
         if (hostRoomIds.length > 0) {
-          contractsQuery = contractsQuery.in("room_id", hostRoomIds);
+          contractsQuery = contractsQuery.or(
+            `specialist_id.eq.${user.id},room_id.in.(${hostRoomIds.join(",")})`,
+          );
         } else {
-          setContracts([]);
-          setLoading(false);
-          return;
+          contractsQuery = contractsQuery.eq("specialist_id", user.id);
         }
       }
 
@@ -281,7 +297,7 @@ export function AdminContractsTab({
             session_value: Number(c.session_value || 0),
             platform_fee_pct: fusionPct,
             host_split_pct: hostPct,
-            cohost_split_pct: Number(c.cohost_split_pct ?? 0),
+            cohost_split_pct: Number(c.cohost_split_pct ?? 80),
             room_name: roomObj?.name || "Sala Removida",
             clinic_name: hostName || "Fusion Clinic",
             schedule_config: c.schedule_config || {
@@ -308,7 +324,42 @@ export function AdminContractsTab({
     }
   };
 
-  // Retorna o valor vigente do contrato na data de hoje (considerando faixas escalonadas se houver)
+  const activeCohostContractByRoomId = useMemo(() => {
+    const map = new Map<string, RoomContract>();
+    contracts.forEach((c) => {
+      if (
+        c.status === "active" &&
+        c.contract_type === "monthly_exclusive" &&
+        c.allow_sublease
+      ) {
+        map.set(c.room_id, c);
+      }
+    });
+    return map;
+  }, [contracts]);
+
+  const parentCohostForModalRoom = useMemo(() => {
+    if (!form.room_id) return null;
+    const cohostContract = activeCohostContractByRoomId.get(form.room_id);
+    if (!cohostContract) return null;
+    if (editingContract && editingContract.id === cohostContract.id) {
+      return null;
+    }
+    return cohostContract;
+  }, [form.room_id, activeCohostContractByRoomId, editingContract]);
+
+  const getParentCohostForContract = (c: RoomContract): RoomContract | null => {
+    const cohostContract = activeCohostContractByRoomId.get(c.room_id);
+    if (!cohostContract || cohostContract.id === c.id) return null;
+    if (
+      c.start_date <= cohostContract.end_date &&
+      c.end_date >= cohostContract.start_date
+    ) {
+      return cohostContract;
+    }
+    return null;
+  };
+
   const getEffectiveContractPricing = (
     c: RoomContract,
     targetDateStr: string = todayIsoDate,
@@ -403,7 +454,6 @@ export function AdminContractsTab({
     );
   };
 
-  // Gerenciamento das Faixas de Preço por Período no Modal
   const handleAddPricingTier = () => {
     const lastTier = pricingTiers[pricingTiers.length - 1];
     let defaultStart = form.start_date;
@@ -494,7 +544,6 @@ export function AdminContractsTab({
     setPricingTiers((prev) => prev.filter((t) => t.id !== id));
   };
 
-  // Sincronização automática das porcentagens Fusion (%) <-> Anfitrião (%)
   const handleFusionPctChange = (valStr: string) => {
     const num = Math.min(100, Math.max(0, Number(valStr) || 0));
     const hostComplement = Math.max(0, Number((100 - num).toFixed(2)));
@@ -515,7 +564,6 @@ export function AdminContractsTab({
     });
   };
 
-  // --- ENGINE DE MATERIALIZAÇÃO NA AGENDA COM SUPORTE A FAIXAS DE VALOR POR PERÍODO ---
   const syncContractBookings = async (
     contract: RoomContract,
     fallbackUserId: string | null,
@@ -534,26 +582,122 @@ export function AdminContractsTab({
     }
 
     const cfg = contract.schedule_config || {
-      daysOfWeek: [1],
+      daysOfWeek: [1, 2, 3, 4, 5, 6, 0],
       shifts: ["fullday"],
       startHour: 8,
       endHour: 20,
       pricingTiers: [],
     };
 
-    if (!cfg.daysOfWeek || cfg.daysOfWeek.length === 0) return 0;
+    const startH = Number(cfg.startHour ?? 8);
+    const endH = Number(cfg.endHour ?? 20);
+
+    // CENÁRIO 1: CONTRATO PRINCIPAL DE CO-ANFITRIÃO
+    if (
+      contract.contract_type === "monthly_exclusive" &&
+      contract.allow_sublease
+    ) {
+      const openSubleaseDays = Array.isArray(cfg.daysOfWeek)
+        ? cfg.daysOfWeek
+        : [];
+      const openHoursSlots: string[] = [];
+      for (let h = startH; h < endH; h++) {
+        const sH = String(h).padStart(2, "0");
+        const eH = String(h + 1).padStart(2, "0");
+        openHoursSlots.push(`${sH}h-${eH}h`);
+      }
+
+      const { data: currentRoom } = await supabase
+        .from("rooms")
+        .select("availability")
+        .eq("id", contract.room_id)
+        .single();
+
+      let currentAvail = currentRoom?.availability || {};
+      if (typeof currentAvail === "string") {
+        try {
+          currentAvail = JSON.parse(currentAvail);
+        } catch {
+          currentAvail = {};
+        }
+      }
+
+      const weekdayNames = [
+        { day: 1, name: "Segunda-feira" },
+        { day: 2, name: "Terça-feira" },
+        { day: 3, name: "Quarta-feira" },
+        { day: 4, name: "Quinta-feira" },
+        { day: 5, name: "Sexta-feira" },
+        { day: 6, name: "Sábado" },
+        { day: 0, name: "Domingo" },
+      ];
+
+      const updatedWeekConfig = weekdayNames.map((wd) => {
+        const isOpenForSublease = openSubleaseDays.includes(wd.day);
+        return {
+          day: wd.day,
+          dayName: wd.name,
+          enabled: isOpenForSublease,
+          rentalType: "hourly",
+          availableHours: isOpenForSublease ? openHoursSlots : [],
+          selectedShifts: [],
+        };
+      });
+
+      await supabase
+        .from("rooms")
+        .update({
+          availability: {
+            ...currentAvail,
+            weekConfig: updatedWeekConfig,
+            exceptions: Array.isArray(currentAvail?.exceptions)
+              ? currentAvail.exceptions
+              : [],
+          },
+        })
+        .eq("id", contract.room_id);
+
+      if (contract.specialist_id) {
+        try {
+          await supabase.from("notifications").insert({
+            user_id: contract.specialist_id,
+            type: "cohost_activated",
+            title: "Modo Coanfitrião Ativado!",
+            content:
+              "Sua sala fixa está ativa! Acesse a aba 'Minha Sala' no seu painel para gerenciar seus horários livres e acompanhar seus repasses.",
+            link: "/dashboard#cohost",
+            is_read: false,
+          });
+        } catch {}
+      }
+
+      return openSubleaseDays.length;
+    }
+
+    // CENÁRIO 2: CONTRATO FIXO SEM SUBLOCAÇÃO OU SUBCONTRATO FIXO
+    const effectiveDays =
+      contract.contract_type === "monthly_exclusive" && !contract.allow_sublease
+        ? [1, 2, 3, 4, 5, 6, 0]
+        : cfg.daysOfWeek || [1];
 
     const occurrenceDates = calculateContractOccurrenceDates(
       contract.start_date,
       contract.end_date,
-      cfg.daysOfWeek,
+      effectiveDays,
     );
 
     if (occurrenceDates.length === 0) return 0;
 
-    const startH = Number(cfg.startHour ?? 8);
-    const endH = Number(cfg.endHour ?? 20);
-    const durationHours = Math.max(1, endH - startH);
+    const effectiveStartH =
+      contract.contract_type === "monthly_exclusive" && !contract.allow_sublease
+        ? 6
+        : startH;
+    const effectiveEndH =
+      contract.contract_type === "monthly_exclusive" && !contract.allow_sublease
+        ? 23
+        : endH;
+
+    const durationHours = Math.max(1, effectiveEndH - effectiveStartH);
 
     const targetUserId =
       contract.specialist_id ||
@@ -563,7 +707,7 @@ export function AdminContractsTab({
 
     if (!targetUserId) return 0;
 
-    const defaultOccurrencesPerMonth = Math.max(1, cfg.daysOfWeek.length * 4);
+    const defaultOccurrencesPerMonth = Math.max(1, effectiveDays.length * 4);
     const baseSessionVal =
       Number(contract.session_value) > 0
         ? Number(contract.session_value)
@@ -592,7 +736,7 @@ export function AdminContractsTab({
         const tierOccurrences = calculateContractOccurrenceDates(
           matchingTier.start_date,
           matchingTier.end_date,
-          cfg.daysOfWeek,
+          effectiveDays,
         );
         return tierOccurrences.length > 0
           ? tierContractVal / tierOccurrences.length
@@ -607,10 +751,10 @@ export function AdminContractsTab({
 
     const bookingsPayload = occurrenceDates.map((dateObj) => {
       const startTime = new Date(dateObj);
-      startTime.setHours(startH, 0, 0, 0);
+      startTime.setHours(effectiveStartH, 0, 0, 0);
 
       const endTime = new Date(dateObj);
-      endTime.setHours(endH, 0, 0, 0);
+      endTime.setHours(effectiveEndH, 0, 0, 0);
 
       const dateSpecificVal = resolveSessionValueForDate(dateObj);
 
@@ -749,8 +893,12 @@ export function AdminContractsTab({
     setPdfFile(null);
     setSpecSearch("");
     setPricingTiers([]);
+
+    const defaultRoomId = preselectedRoomId || rooms[0]?.id || "";
+    const roomHasActiveCohost = activeCohostContractByRoomId.has(defaultRoomId);
+
     setForm({
-      room_id: preselectedRoomId || rooms[0]?.id || "",
+      room_id: defaultRoomId,
       specialist_id: "",
       specialist_name: "",
       specialist_document: "",
@@ -767,10 +915,10 @@ export function AdminContractsTab({
       due_day: "8",
       contract_value: "",
       session_value: "",
-      platform_fee_pct: "15",
-      host_split_pct: "85",
+      platform_fee_pct: roomHasActiveCohost ? "20" : "15",
+      host_split_pct: roomHasActiveCohost ? "80" : "85",
       allow_sublease: false,
-      cohost_split_pct: "70",
+      cohost_split_pct: "80",
       daysOfWeek: [1],
       selectedShift: "fullday",
       startHour: 8,
@@ -787,6 +935,7 @@ export function AdminContractsTab({
     const shiftId = (c.schedule_config?.shifts?.[0] || "fullday") as
       "fullday" | "morning" | "afternoon" | "night";
 
+    // Pega as porcentagens originais salvos NO CONTRATO
     const fusionPct = Number(c.platform_fee_pct ?? 15);
     const hostPct =
       c.host_split_pct !== undefined && c.host_split_pct !== null
@@ -822,7 +971,7 @@ export function AdminContractsTab({
       platform_fee_pct: String(fusionPct),
       host_split_pct: String(hostPct),
       allow_sublease: Boolean(c.allow_sublease),
-      cohost_split_pct: String(c.cohost_split_pct ?? 70),
+      cohost_split_pct: String(c.cohost_split_pct ?? 80),
       daysOfWeek: c.schedule_config?.daysOfWeek || [1],
       selectedShift: shiftId,
       startHour: c.schedule_config?.startHour ?? 8,
@@ -864,9 +1013,11 @@ export function AdminContractsTab({
         variant: "destructive",
         title: "Campos obrigatórios",
         description:
-          "Selecione a sala, o especialista locatário e informe o valor do contrato (ou das faixas de período).",
+          "Selecione a sala, o especialista locatário e informe o valor do contrato.",
       });
     }
+
+    const isSubContractUnderCohost = Boolean(parentCohostForModalRoom);
 
     let effectiveStartDate = form.start_date;
     let effectiveEndDate = form.end_date;
@@ -924,17 +1075,19 @@ export function AdminContractsTab({
           pdfFilename = uploaded.filename;
         } catch (uploadError: any) {
           console.warn("Aviso no upload do PDF:", uploadError);
-          toast({
-            variant: "destructive",
-            title: "Aviso no upload do PDF",
-            description:
-              "O contrato será salvo, mas verifique se o bucket 'contracts' foi criado no Supabase Storage.",
-          });
         }
       }
 
+      const finalAllowSublease =
+        !isSubContractUnderCohost && form.contract_type === "monthly_exclusive"
+          ? form.allow_sublease
+          : false;
+
       const scheduleConfig: ContractScheduleConfig = {
-        daysOfWeek: form.daysOfWeek,
+        daysOfWeek:
+          form.contract_type === "monthly_exclusive" && !finalAllowSublease
+            ? [1, 2, 3, 4, 5, 6, 0]
+            : form.daysOfWeek,
         shifts: [form.selectedShift],
         startHour: Number(form.startHour),
         endHour: Number(form.endHour),
@@ -957,16 +1110,12 @@ export function AdminContractsTab({
         due_day: parsedDueDay,
         contract_value: finalContractValue,
         session_value: Number(computedSessionVal.toFixed(2)),
-        platform_fee_pct: parsedFusionPct,
-        host_split_pct: parsedHostPct,
-        allow_sublease:
-          form.contract_type === "monthly_exclusive"
-            ? form.allow_sublease
-            : false,
-        cohost_split_pct:
-          form.contract_type === "monthly_exclusive" && form.allow_sublease
-            ? Number(form.cohost_split_pct) || 0
-            : 0,
+        platform_fee_pct: parsedFusionPct, // Salva o percentual personalizado aqui
+        host_split_pct: parsedHostPct, // Salva o percentual personalizado aqui
+        allow_sublease: finalAllowSublease,
+        cohost_split_pct: finalAllowSublease
+          ? Number(form.cohost_split_pct) || 80
+          : 0,
         schedule_config: scheduleConfig,
         pdf_url: pdfUrl,
         pdf_filename: pdfFilename,
@@ -1004,10 +1153,11 @@ export function AdminContractsTab({
         title: editingContract
           ? "Contrato atualizado com sucesso!"
           : "Contrato registrado e ativado!",
-        description:
-          validTiers.length > 0
-            ? `${validTiers.length} períodos de preço configurados e ${generatedCount} reserva(s) lançada(s) com os valores de cada período.`
-            : `Split configurado (${parsedFusionPct}% Fusion / ${parsedHostPct}% Anfitrião) e ${generatedCount} reserva(s) lançada(s) na agenda.`,
+        description: isSubContractUnderCohost
+          ? `Subcontrato fixo vinculado ao Coanfitrião (${parsedHostPct}% Coanfitrião / ${parsedFusionPct}% Fusion)! ${generatedCount} datas alocadas.`
+          : finalAllowSublease
+            ? `Modo Co-Anfitrião ativo! ${generatedCount} dia(s) abertos na vitrine.`
+            : `Split configurado e ${generatedCount} bloqueio(s) lançado(s) na agenda.`,
       });
 
       setIsModalOpen(false);
@@ -1063,7 +1213,7 @@ export function AdminContractsTab({
 
   const toggleDayOfWeek = (dayId: number) => {
     if (form.daysOfWeek.includes(dayId)) {
-      if (form.daysOfWeek.length === 1) return;
+      if (form.daysOfWeek.length === 1 && !form.allow_sublease) return;
       setForm({
         ...form,
         daysOfWeek: form.daysOfWeek.filter((d) => d !== dayId),
@@ -1140,7 +1290,6 @@ export function AdminContractsTab({
     return matchesType && matchesStatus && matchesSearch;
   });
 
-  // KPIs Executivos de Contratos
   const activeContracts = contracts.filter((c) => c.status === "active");
   const totalContractRevenue = activeContracts.reduce(
     (acc, curr) => acc + getEffectiveContractPricing(curr).contractValue,
@@ -1160,21 +1309,41 @@ export function AdminContractsTab({
     (c) => getMonthlyPaymentState(c).state === "overdue",
   ).length;
 
-  const getContractTypeBadge = (
-    type: RoomContract["contract_type"],
-    allowSublease: boolean,
-  ) => {
-    switch (type) {
+  const getContractTypeBadge = (c: RoomContract) => {
+    const parentCohost = getParentCohostForContract(c);
+
+    if (parentCohost) {
+      return (
+        <div className="flex flex-col gap-1">
+          <Badge className="bg-slate-900 text-white border-0 w-fit font-bold">
+            {c.contract_type === "fixed_shift"
+              ? "Subcontrato • Turno Fixo"
+              : "Subcontrato • Diária Fixa"}
+          </Badge>
+          <Badge className="bg-emerald-50 text-emerald-800 border border-emerald-200 w-fit text-[10px] font-bold">
+            Repasse p/ Co-Host: {parentCohost.specialist_name.split(" ")[0]}
+          </Badge>
+          <span className="text-[10px] font-semibold text-slate-400 flex items-center gap-1">
+            <Lock className="w-3 h-3" /> Sem direito a sublocar
+          </span>
+        </div>
+      );
+    }
+
+    switch (c.contract_type) {
       case "monthly_exclusive":
         return (
           <div className="flex flex-col gap-1">
             <Badge className="bg-purple-100 text-purple-800 border-0 w-fit font-bold">
               Fixo Mensal (Sala Exclusiva)
             </Badge>
-            {allowSublease && (
+            {c.allow_sublease ? (
               <Badge className="bg-amber-100 text-amber-800 border-0 w-fit text-[10px] font-black">
-                <Sparkles className="w-3 h-3 mr-1" /> Co-Anfitrião (Sublocação
-                Ativa)
+                <Sparkles className="w-3 h-3 mr-1" /> Co-Anfitrião (Sublocação)
+              </Badge>
+            ) : (
+              <Badge className="bg-slate-200 text-slate-700 border-0 w-fit text-[10px] font-bold">
+                100% Bloqueada (Sem Sublocação)
               </Badge>
             )}
           </div>
@@ -1229,13 +1398,21 @@ export function AdminContractsTab({
     }
   };
 
-  const formatScheduleSummary = (cfg: ContractScheduleConfig) => {
+  const formatScheduleSummary = (c: RoomContract) => {
+    const cfg = c.schedule_config;
+    if (c.contract_type === "monthly_exclusive" && !c.allow_sublease) {
+      return "Full-Time (100% Bloqueada p/ Locatário)";
+    }
     if (!cfg || !cfg.daysOfWeek) return "Personalizado";
     const dayLabels = cfg.daysOfWeek
       .map((d) => WEEK_DAYS.find((w) => w.id === d)?.label)
       .filter(Boolean)
       .join(", ");
-    return `${dayLabels} • ${String(cfg.startHour ?? 8).padStart(2, "0")}:00 às ${String(cfg.endHour ?? 20).padStart(2, "0")}:00`;
+    const prefix =
+      c.contract_type === "monthly_exclusive" && c.allow_sublease
+        ? "Sublocação aberta: "
+        : "";
+    return `${prefix}${dayLabels || "Definido pelo Co-Anfitrião"} • ${String(cfg.startHour ?? 8).padStart(2, "0")}:00 às ${String(cfg.endHour ?? 20).padStart(2, "0")}:00`;
   };
 
   const filteredSpecialists =
@@ -1267,8 +1444,8 @@ export function AdminContractsTab({
             Gestão de Contratos, Turnos Fixos & Co-Anfitriões
           </h1>
           <p className="text-xs md:text-sm text-slate-500 font-medium mt-1">
-            Controle de salas fixas mensais, valores escalonados por período,
-            porcentagens personalizadas (Fusion vs Anfitrião) e PDFs.
+            Controle de salas fixas mensais, subcontratos dentro de salas de
+            Co-Anfitrião (repasse configurável) e PDFs.
           </p>
         </div>
         <Button
@@ -1328,7 +1505,7 @@ export function AdminContractsTab({
           </div>
           <p className="text-2xl font-black text-slate-900">{cohostCount}</p>
           <p className="text-[11px] font-medium text-slate-400 mt-1">
-            Aluguel fixo + split sobre sublocações
+            Sublocação na vitrine habilitada
           </p>
         </div>
 
@@ -1403,7 +1580,7 @@ export function AdminContractsTab({
             </p>
             <p className="text-xs text-slate-400 mt-1">
               Cadastre contratos mensais, turnos fixos ou diárias recorrentes
-              para bloquear a agenda e contabilizar a ocupação da sala.
+              para bloquear a agenda ou habilitar um Co-Anfitrião.
             </p>
           </div>
         ) : (
@@ -1414,13 +1591,11 @@ export function AdminContractsTab({
                   <th className="px-6 py-4">Sala & Clínica</th>
                   <th className="px-6 py-4">Locatário / Co-Anfitrião</th>
                   <th className="px-6 py-4">Modalidade & Alocação</th>
-                  <th className="px-6 py-4">Vigência</th>
+                  <th className="px-6 py-4">Vigência (Início → Fim)</th>
                   <th className="px-6 py-4 text-center">
                     Data Limite de Pagamento
                   </th>
-                  <th className="px-6 py-4 text-right">
-                    Valor & Divisão (Fusion / Anfitrião)
-                  </th>
+                  <th className="px-6 py-4 text-right">Valor Fixo & Divisão</th>
                   <th className="px-6 py-4 text-center">Contrato (PDF)</th>
                   <th className="px-6 py-4 text-center">Status</th>
                   <th className="px-6 py-4 text-center">Ações</th>
@@ -1430,12 +1605,16 @@ export function AdminContractsTab({
                 {filteredContracts.map((c) => {
                   const paymentInfo = getMonthlyPaymentState(c);
                   const effectivePricing = getEffectiveContractPricing(c);
+                  const parentCohost = getParentCohostForContract(c);
+
+                  // Usa os valores definidos NO CONTRATO ATUAL
+                  const fusionPct = Number(c.platform_fee_pct);
+                  const recipientPct = Number(c.host_split_pct);
+
                   const fusionAmount =
-                    effectivePricing.contractValue *
-                    (Number(c.platform_fee_pct) / 100);
-                  const hostAmount =
-                    effectivePricing.contractValue *
-                    (Number(c.host_split_pct) / 100);
+                    effectivePricing.contractValue * (fusionPct / 100);
+                  const recipientAmount =
+                    effectivePricing.contractValue * (recipientPct / 100);
                   const tiersList = c.schedule_config?.pricingTiers || [];
 
                   return (
@@ -1466,13 +1645,10 @@ export function AdminContractsTab({
                       </td>
 
                       <td className="px-6 py-4">
-                        {getContractTypeBadge(
-                          c.contract_type,
-                          c.allow_sublease,
-                        )}
+                        {getContractTypeBadge(c)}
                         <p className="text-[11px] font-bold text-slate-600 mt-1 flex items-center gap-1">
                           <Clock className="w-3 h-3 text-slate-400" />
-                          {formatScheduleSummary(c.schedule_config)}
+                          {formatScheduleSummary(c)}
                         </p>
                       </td>
 
@@ -1567,25 +1743,9 @@ export function AdminContractsTab({
                           </p>
                         </div>
 
-                        {tiersList.length > 0 && (
-                          <div className="mt-1 space-y-0.5 text-[10px] text-[#BF4B24] font-bold">
-                            {tiersList.map((t, i) => (
-                              <p key={t.id || i}>
-                                {i + 1}º:{" "}
-                                {format(parseISO(t.start_date), "dd/MM/yy")} a{" "}
-                                {format(parseISO(t.end_date), "dd/MM/yy")} → R${" "}
-                                {Number(t.contract_value).toLocaleString(
-                                  "pt-BR",
-                                  { minimumFractionDigits: 2 },
-                                )}
-                              </p>
-                            ))}
-                          </div>
-                        )}
-
                         <div className="flex items-center justify-end gap-2 mt-0.5">
                           <span className="text-[10px] font-bold text-[#BF4B24]">
-                            Fusion ({c.platform_fee_pct}%): R${" "}
+                            Fusion ({fusionPct}%): R${" "}
                             {fusionAmount.toLocaleString("pt-BR", {
                               minimumFractionDigits: 2,
                               maximumFractionDigits: 2,
@@ -1593,8 +1753,11 @@ export function AdminContractsTab({
                           </span>
                           <span className="text-slate-300">•</span>
                           <span className="text-[10px] font-bold text-emerald-700">
-                            Anfitrião ({c.host_split_pct}%): R${" "}
-                            {hostAmount.toLocaleString("pt-BR", {
+                            {parentCohost
+                              ? `Co-Host ${parentCohost.specialist_name.split(" ")[0]} (${recipientPct}%):`
+                              : `Anfitrião (${recipientPct}%):`}{" "}
+                            R${" "}
+                            {recipientAmount.toLocaleString("pt-BR", {
                               minimumFractionDigits: 2,
                               maximumFractionDigits: 2,
                             })}
@@ -1602,7 +1765,9 @@ export function AdminContractsTab({
                         </div>
                         {c.allow_sublease && (
                           <p className="text-[10px] font-black text-purple-700 mt-0.5">
-                            Sublocação Co-Anfitrião: {c.cohost_split_pct}%
+                            Sublocações a partir de{" "}
+                            {format(parseISO(c.start_date), "dd/MM/yy")}:{" "}
+                            {c.cohost_split_pct}% Co-Anfitrião
                           </p>
                         )}
                       </td>
@@ -1699,13 +1864,48 @@ export function AdminContractsTab({
                 : "Novo Contrato de Sala & Alocação na Agenda"}
             </DialogTitle>
             <DialogDescription>
-              Configure a modalidade contratual, faixas de valor por período (se
-              houver reajuste ou desconto inicial), porcentagens da Fusion e do
-              Anfitrião e o PDF assinado.
+              Configure a modalidade contratual, ative o Modo Co-Anfitrião na
+              sala fixa ou adicione Subcontratos Fixos (Turno/Diária) nos dias
+              liberados pelo Co-Anfitrião (com % livremente negociável).
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-6 py-2">
+            {/* ALERTA QUANDO A SALA SELECIONADA JÁ POSSUI UM CO-ANFITRIÃO ATIVO */}
+            {parentCohostForModalRoom && (
+              <div className="p-4 rounded-2xl bg-slate-900 text-white border border-slate-800 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                    <Building2 className="w-4 h-4" />
+                    Subcontrato Fixo dentro da Sala do Co-Anfitrião
+                  </span>
+                  <Badge className="bg-emerald-500/20 text-emerald-300 border-0 text-[10px] font-bold">
+                    Repasse Personalizável
+                  </Badge>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Esta sala possui contrato exclusivo com o Co-Anfitrião{" "}
+                  <strong className="text-white">
+                    {parentCohostForModalRoom.specialist_name}
+                  </strong>{" "}
+                  (vigência de{" "}
+                  {format(
+                    parseISO(parentCohostForModalRoom.start_date),
+                    "dd/MM/yyyy",
+                  )}{" "}
+                  a{" "}
+                  {format(
+                    parseISO(parentCohostForModalRoom.end_date),
+                    "dd/MM/yyyy",
+                  )}
+                  ). Este novo contrato fixo (Turno ou Diária) alocará os dias
+                  escolhidos abaixo, não poderá sublocar a sala e terá o repasse
+                  configurável (Padrão: 80% Co-Anfitrião e 20% Fusion, mas você
+                  pode editar abaixo).
+                </p>
+              </div>
+            )}
+
             {/* 1. SALA E MODALIDADE */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -1714,18 +1914,43 @@ export function AdminContractsTab({
                 </Label>
                 <select
                   value={form.room_id}
-                  onChange={(e) =>
-                    setForm({ ...form, room_id: e.target.value })
-                  }
+                  onChange={(e) => {
+                    const nextRoomId = e.target.value;
+                    const cohostOnRoom =
+                      activeCohostContractByRoomId.get(nextRoomId);
+                    const isSub =
+                      cohostOnRoom &&
+                      (!editingContract ||
+                        editingContract.id !== cohostOnRoom.id);
+
+                    setForm({
+                      ...form,
+                      room_id: nextRoomId,
+                      contract_type:
+                        isSub && form.contract_type === "monthly_exclusive"
+                          ? "fixed_daily"
+                          : form.contract_type,
+                      allow_sublease: isSub ? false : form.allow_sublease,
+                      // Define como padrão 20/80, mas destrava a edição
+                      platform_fee_pct: isSub ? "20" : form.platform_fee_pct,
+                      host_split_pct: isSub ? "80" : form.host_split_pct,
+                    });
+                  }}
                   disabled={Boolean(preselectedRoomId)}
                   className="mt-1 w-full h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-800 outline-none"
                 >
                   <option value="">Selecione uma sala...</option>
-                  {rooms.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name} ({String(r.tier || "start").toUpperCase()})
-                    </option>
-                  ))}
+                  {rooms.map((r) => {
+                    const roomCohost = activeCohostContractByRoomId.get(r.id);
+                    return (
+                      <option key={r.id} value={r.id}>
+                        {r.name} ({String(r.tier || "start").toUpperCase()})
+                        {roomCohost
+                          ? ` — [Co-Host: ${roomCohost.specialist_name}]`
+                          : ""}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
@@ -1735,17 +1960,29 @@ export function AdminContractsTab({
                 </Label>
                 <select
                   value={form.contract_type}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const nextType = e.target.value as any;
                     setForm({
                       ...form,
-                      contract_type: e.target.value as any,
-                    })
-                  }
+                      contract_type: nextType,
+                      allow_sublease:
+                        nextType === "monthly_exclusive" &&
+                        !parentCohostForModalRoom
+                          ? form.allow_sublease
+                          : false,
+                      daysOfWeek:
+                        nextType === "monthly_exclusive" && !form.allow_sublease
+                          ? [1, 2, 3, 4, 5, 6, 0]
+                          : form.daysOfWeek,
+                    });
+                  }}
                   className="mt-1 w-full h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-800 outline-none"
                 >
-                  <option value="monthly_exclusive">
-                    Contrato Fixo Mensal (Sala Exclusiva / Co-Anfitrião)
-                  </option>
+                  {!parentCohostForModalRoom && (
+                    <option value="monthly_exclusive">
+                      Contrato Fixo Mensal (Sala Exclusiva / Co-Anfitrião)
+                    </option>
+                  )}
                   <option value="fixed_shift">
                     Contrato de Turno Fixo (Ex: Toda Segunda pela Manhã)
                   </option>
@@ -1764,7 +2001,9 @@ export function AdminContractsTab({
               <div className="flex items-center justify-between">
                 <Label className="text-xs font-black uppercase text-slate-600 flex items-center gap-1.5">
                   <Users className="w-4 h-4 text-[#BF4B24]" />
-                  Profissional Locatário (Ou Co-Anfitrião da Sala)
+                  {parentCohostForModalRoom
+                    ? "Profissional do Subcontrato Fixo (Sem direito a sublocar)"
+                    : "Profissional Locatário (Ou Co-Anfitrião da Sala)"}
                 </Label>
                 {form.specialist_id && (
                   <Badge className="bg-emerald-100 text-emerald-800 border-0 text-[10px]">
@@ -1775,7 +2014,7 @@ export function AdminContractsTab({
 
               <div className="relative">
                 <Input
-                  placeholder="Buscar profissional já cadastrado pelo nome ou CPF (opcional)..."
+                  placeholder="Buscar profissional já cadastrado pelo nome ou CPF..."
                   value={specSearch}
                   onChange={(e) => setSpecSearch(e.target.value)}
                   className="bg-white border-slate-200 h-10 text-sm"
@@ -1867,75 +2106,92 @@ export function AdminContractsTab({
               </div>
             </div>
 
-            {/* 3. REGRA DE CO-ANFITRIÃO / SUBLOCAÇÃO */}
-            {form.contract_type === "monthly_exclusive" && (
-              <div className="p-5 rounded-2xl border-2 border-purple-200 bg-purple-50/40 space-y-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h4 className="font-black text-purple-950 flex items-center gap-2 text-sm">
-                      <Sparkles className="w-4 h-4 text-purple-600" />
-                      Direito de Realocação / Sublocação (Modo Co-Anfitrião)
-                    </h4>
-                    <p className="text-xs text-purple-800/80 font-medium mt-1">
-                      Permite que o locatário da sala fixa disponibilize seus
-                      horários ociosos na plataforma e receba uma porcentagem
-                      sobre os agendamentos avulsos realizados na sala.
-                    </p>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={form.allow_sublease}
-                    onChange={(e) =>
-                      setForm({ ...form, allow_sublease: e.target.checked })
-                    }
-                    className="h-5 w-5 accent-purple-600 rounded cursor-pointer mt-1"
-                  />
-                </div>
-
-                {form.allow_sublease && (
-                  <div className="pt-2 border-t border-purple-200/60 grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+            {/* 3. REGRA DE CO-ANFITRIÃO (Apenas para Contrato Mensal Principal) */}
+            {form.contract_type === "monthly_exclusive" &&
+              !parentCohostForModalRoom && (
+                <div className="p-5 rounded-2xl border-2 border-purple-200 bg-purple-50/40 space-y-4">
+                  <div className="flex items-start justify-between gap-4">
                     <div>
-                      <Label className="text-xs font-bold text-purple-900">
-                        Repasse do Co-Anfitrião nas Sublocações (%)
-                      </Label>
-                      <div className="relative mt-1">
-                        <Input
-                          type="number"
-                          min="0"
-                          max="100"
-                          value={form.cohost_split_pct}
-                          onChange={(e) =>
-                            setForm({
-                              ...form,
-                              cohost_split_pct: e.target.value,
-                            })
-                          }
-                          className="bg-white border-purple-200 font-black text-purple-900 pr-8"
-                        />
-                        <Percent className="w-4 h-4 text-purple-500 absolute right-3 top-1/2 -translate-y-1/2" />
+                      <h4 className="font-black text-purple-950 flex items-center gap-2 text-sm">
+                        <Sparkles className="w-4 h-4 text-purple-600" />
+                        Ativar Modo Co-Anfitrião (Direito de Sublocação na
+                        Fusion)
+                      </h4>
+                      <p className="text-xs text-purple-800/80 font-medium mt-1">
+                        O Co-Anfitrião poderá gerenciar os horários da sala e
+                        receberá a porcentagem estipulada abaixo de tudo que
+                        sublocar (avulso ou subcontratos) a partir da Data
+                        Inicial deste contrato.
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={form.allow_sublease}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setForm({
+                          ...form,
+                          allow_sublease: checked,
+                          cohost_split_pct: checked ? "80" : "0",
+                          daysOfWeek: checked ? [2, 4] : [1, 2, 3, 4, 5, 6, 0],
+                        });
+                      }}
+                      className="h-5 w-5 accent-purple-600 rounded cursor-pointer mt-1"
+                    />
+                  </div>
+
+                  {form.allow_sublease && (
+                    <div className="pt-2 border-t border-purple-200/60 grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+                      <div>
+                        <Label className="text-xs font-bold text-purple-900">
+                          Participação do Co-Anfitrião nas Sublocações Avulsas
+                          (%)
+                        </Label>
+                        <div className="relative mt-1">
+                          <Input
+                            type="number"
+                            min="0"
+                            max="100"
+                            value={form.cohost_split_pct}
+                            onChange={(e) =>
+                              setForm({
+                                ...form,
+                                cohost_split_pct: e.target.value,
+                              })
+                            }
+                            className="bg-white border-purple-200 font-black text-purple-900 pr-8"
+                          />
+                          <Percent className="w-4 h-4 text-purple-500 absolute right-3 top-1/2 -translate-y-1/2" />
+                        </div>
+                      </div>
+                      <div className="text-xs text-purple-900 bg-white/80 p-3 rounded-xl border border-purple-100 font-medium">
+                        Apenas reservas a partir de{" "}
+                        <strong>
+                          {format(parseISO(form.start_date), "dd/MM/yyyy")}
+                        </strong>{" "}
+                        entrarão no repasse de{" "}
+                        <strong>{form.cohost_split_pct || 80}%</strong> do
+                        Co-Anfitrião.
                       </div>
                     </div>
-                    <div className="text-xs text-purple-900 bg-white/80 p-3 rounded-xl border border-purple-100 font-medium">
-                      Nos horários vagos alugados de forma avulsa, a Fusion
-                      retém 20% e o Co-Anfitrião recebe{" "}
-                      <strong>{form.cohost_split_pct || 0}%</strong> do líquido.
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+                  )}
+                </div>
+              )}
 
-            {/* 4. VIGÊNCIA, DIAS DA SEMANA E TURNOS BLOQUEADOS NA AGENDA */}
+            {/* 4. VIGÊNCIA, DIAS DA SEMANA E TURNOS */}
             <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-4">
               <Label className="text-xs font-black uppercase text-slate-600 flex items-center gap-1.5">
                 <CalendarDays className="w-4 h-4 text-[#BF4B24]" />
-                Vigência Geral e Alocação Automática na Agenda
+                {form.contract_type === "monthly_exclusive" &&
+                form.allow_sublease
+                  ? "Vigência do Co-Anfitrião e Dias Iniciais Abertos para Sublocação"
+                  : "Vigência e Alocação Automática na Agenda"}
               </Label>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
                   <Label className="text-xs font-bold text-slate-600">
-                    Data Inicial *
+                    Data Inicial (Corte de Repasse) *
                   </Label>
                   <Input
                     type="date"
@@ -1970,9 +2226,7 @@ export function AdminContractsTab({
                     }
                     className="mt-1 w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-800"
                   >
-                    <option value="active">
-                      Vigente (Bloquear Agenda e Contabilizar)
-                    </option>
+                    <option value="active">Vigente (Ativo)</option>
                     <option value="pending_signature">
                       Aguardando Assinatura (Pré-Reserva)
                     </option>
@@ -1982,105 +2236,115 @@ export function AdminContractsTab({
                 </div>
               </div>
 
-              <div>
-                <Label className="text-xs font-bold text-slate-600 mb-2 block">
-                  Dias da Semana Reservados para este Contrato
-                </Label>
-                <div className="flex flex-wrap gap-2">
-                  {WEEK_DAYS.map((d) => {
-                    const active = form.daysOfWeek.includes(d.id);
-                    return (
-                      <button
-                        type="button"
-                        key={d.id}
-                        onClick={() => toggleDayOfWeek(d.id)}
-                        className={`px-3.5 py-2 rounded-xl text-xs font-black border transition-all ${
-                          active
-                            ? "bg-[#BF4B24] text-white border-[#BF4B24] shadow-xs"
-                            : "bg-white text-slate-600 border-slate-200 hover:border-orange-300"
-                        }`}
+              {form.contract_type === "monthly_exclusive" &&
+              !form.allow_sublease ? (
+                <div className="bg-slate-900 text-white p-3.5 rounded-xl text-xs font-bold flex items-center justify-between">
+                  <span>
+                    🔒 Sala Fixa Exclusiva (Sem Co-Anfitrião): Todos os dias e
+                    horários ficarão 100% bloqueados na vitrine durante a
+                    vigência.
+                  </span>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <Label className="text-xs font-bold text-slate-600 mb-2 block">
+                      {form.contract_type === "monthly_exclusive" &&
+                      form.allow_sublease
+                        ? "Selecione os dias da semana que o Co-Anfitrião quer deixar ABERTOS para sublocar:"
+                        : "Dias da Semana Reservados para este Contrato Fixo:"}
+                    </Label>
+                    <div className="flex flex-wrap gap-2">
+                      {WEEK_DAYS.map((d) => {
+                        const active = form.daysOfWeek.includes(d.id);
+                        return (
+                          <button
+                            type="button"
+                            key={d.id}
+                            onClick={() => toggleDayOfWeek(d.id)}
+                            className={`px-3.5 py-2 rounded-xl text-xs font-black border transition-all ${
+                              active
+                                ? "bg-[#BF4B24] text-white border-[#BF4B24] shadow-xs"
+                                : "bg-white text-slate-600 border-slate-200 hover:border-orange-300"
+                            }`}
+                          >
+                            {d.full}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className="md:col-span-1">
+                      <Label className="text-xs font-bold text-slate-600">
+                        Turno Padrão
+                      </Label>
+                      <select
+                        value={form.selectedShift}
+                        onChange={(e) =>
+                          handleShiftChange(e.target.value as any)
+                        }
+                        className="mt-1 w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-800"
                       >
-                        {d.full}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+                        {SHIFT_OPTIONS.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="md:col-span-1">
-                  <Label className="text-xs font-bold text-slate-600">
-                    Turno Padrão
-                  </Label>
-                  <select
-                    value={form.selectedShift}
-                    onChange={(e) => handleShiftChange(e.target.value as any)}
-                    className="mt-1 w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-800"
-                  >
-                    {SHIFT_OPTIONS.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                    <div>
+                      <Label className="text-xs font-bold text-slate-600">
+                        Hora de Início
+                      </Label>
+                      <Input
+                        type="number"
+                        min="6"
+                        max="22"
+                        value={form.startHour}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            startHour: Number(e.target.value),
+                          })
+                        }
+                        className="mt-1 bg-white font-bold"
+                      />
+                    </div>
 
-                <div>
-                  <Label className="text-xs font-bold text-slate-600">
-                    Hora de Entrada
-                  </Label>
-                  <Input
-                    type="number"
-                    min="6"
-                    max="22"
-                    value={form.startHour}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        startHour: Number(e.target.value),
-                      })
-                    }
-                    className="mt-1 bg-white font-bold"
-                  />
-                </div>
-
-                <div>
-                  <Label className="text-xs font-bold text-slate-600">
-                    Hora de Saída
-                  </Label>
-                  <Input
-                    type="number"
-                    min="7"
-                    max="23"
-                    value={form.endHour}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        endHour: Number(e.target.value),
-                      })
-                    }
-                    className="mt-1 bg-white font-bold"
-                  />
-                </div>
-              </div>
-
-              <div className="bg-orange-50/80 border border-orange-200 rounded-xl p-3 flex items-center justify-between text-xs">
-                <span className="font-bold text-orange-950">
-                  Total de diárias/turnos que serão lançados na agenda no
-                  período:
-                </span>
-                <Badge className="bg-[#BF4B24] text-white border-0 font-black">
-                  {previewDates.length} agendamento(s) de contrato
-                </Badge>
-              </div>
+                    <div>
+                      <Label className="text-xs font-bold text-slate-600">
+                        Hora de Término
+                      </Label>
+                      <Input
+                        type="number"
+                        min="7"
+                        max="23"
+                        value={form.endHour}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            endHour: Number(e.target.value),
+                          })
+                        }
+                        className="mt-1 bg-white font-bold"
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
 
-            {/* 5. VALORES FINANCEIROS, ESCALONAMENTO POR PERÍODO E SPLIT */}
+            {/* 5. VALORES FINANCEIROS E REPASSE PERSONALIZADO (DESTAKED) */}
             <div className="p-4 rounded-2xl bg-slate-900 text-white space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <Label className="text-xs font-black uppercase tracking-wider text-orange-400 flex items-center gap-1.5">
                   <Wallet className="w-4 h-4" />
-                  Configuração Financeira & Valores por Período
+                  {parentCohostForModalRoom
+                    ? `Valor do Subcontrato e Divisão de Repasses`
+                    : "Valor do Aluguel Fixo (Repasse do Anfitrião Dono)"}
                 </Label>
                 <Button
                   type="button"
@@ -2095,7 +2359,6 @@ export function AdminContractsTab({
                 </Button>
               </div>
 
-              {/* CAMPOS PADRÃO */}
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
                 <div>
                   <Label className="text-xs font-bold text-slate-300">
@@ -2171,14 +2434,12 @@ export function AdminContractsTab({
                 </div>
               </div>
 
-              {/* TABELA DE FAIXAS DE PREÇO POR PERÍODO */}
               {pricingTiers.length > 0 && (
                 <div className="p-3.5 rounded-xl bg-slate-800/80 border border-orange-500/30 space-y-3">
                   <div className="flex items-center justify-between">
                     <p className="text-xs font-black text-orange-300 flex items-center gap-1.5">
                       <Layers className="w-4 h-4" />
-                      Escalonamento de Valores por Período (Cada reserva na
-                      agenda usará o valor da sua respectiva data)
+                      Escalonamento de Valores por Período
                     </p>
                     <button
                       type="button"
@@ -2294,11 +2555,10 @@ export function AdminContractsTab({
                 </div>
               )}
 
-              {/* CAMPOS DE PORCENTAGEM DA FUSION E DO ANFITRIÃO */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-slate-800">
                 <div className="bg-slate-800/90 p-3.5 rounded-xl border border-slate-700">
                   <Label className="text-xs font-black text-orange-400 uppercase flex items-center justify-between">
-                    <span>Porcentagem da Fusion (%)</span>
+                    <span>Taxa Fusion (%)</span>
                     <span className="text-white">
                       R${" "}
                       {((previewContractVal * previewFusionPct) / 100).toFixed(
@@ -2322,7 +2582,11 @@ export function AdminContractsTab({
 
                 <div className="bg-slate-800/90 p-3.5 rounded-xl border border-slate-700">
                   <Label className="text-xs font-black text-emerald-400 uppercase flex items-center justify-between">
-                    <span>Porcentagem do Anfitrião (%)</span>
+                    <span>
+                      {parentCohostForModalRoom
+                        ? `Repasse Co-Host (${parentCohostForModalRoom.specialist_name.split(" ")[0]}) (%)`
+                        : "Repasse do Anfitrião Dono (%)"}
+                    </span>
                     <span className="text-white">
                       R${" "}
                       {((previewContractVal * previewHostPct) / 100).toFixed(2)}
@@ -2405,12 +2669,12 @@ export function AdminContractsTab({
               {saving ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Sincronizando Contrato e Períodos...
+                  Sincronizando Contrato...
                 </>
               ) : (
                 <>
                   <CheckCircle2 className="w-4 h-4 mr-2" />
-                  Salvar Contrato e Gerar Agendamentos
+                  Salvar Contrato e Sincronizar Agenda
                 </>
               )}
             </Button>
