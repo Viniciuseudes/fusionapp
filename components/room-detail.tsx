@@ -42,7 +42,6 @@ import {
   ChevronLeft,
   Printer,
   Loader2,
-  Sparkles,
   Grid,
   Share,
   Shield,
@@ -50,11 +49,13 @@ import {
   Lock,
   User,
   Check,
-  Crown,
-  TrendingUp,
+  BadgeCheck,
+  Clock,
+  Building2,
+  ArrowRight,
+  TrendingDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import {
   CheckoutModal,
@@ -65,12 +66,12 @@ import { useMobileBack } from "@/hooks/use-mobile-back";
 
 const AMENITIES_LIST = [
   { id: "wifi", label: "Wi-Fi de alta velocidade", icon: Wifi },
-  { id: "tv", label: 'TV 65" com HDMI', icon: Monitor },
-  { id: "coffee", label: "Café e água", icon: Coffee },
-  { id: "ac", label: "Ar-condicionado", icon: Wind },
+  { id: "tv", label: 'Smart TV 65" com HDMI', icon: Monitor },
+  { id: "coffee", label: "Café e água cortesia", icon: Coffee },
+  { id: "ac", label: "Ambiente climatizado", icon: Wind },
   { id: "printer", label: "Impressora disponível", icon: Printer },
-  { id: "parking", label: "Estacionamento", icon: Car },
-  { id: "security", label: "Segurança 24h", icon: ShieldCheck },
+  { id: "parking", label: "Estacionamento no local", icon: Car },
+  { id: "security", label: "Portaria e segurança", icon: ShieldCheck },
 ];
 
 export interface RoomDetailProps {
@@ -80,6 +81,7 @@ export interface RoomDetailProps {
   onNavigateToProfile?: () => void;
   initialModality?: "hora" | "turno" | "fixo";
   onNavigateToChat?: () => void;
+  onOpenFusionPass?: (tier?: string, hours?: number | null) => void;
 }
 
 const normalizeSlotLabel = (h: string): string => {
@@ -102,9 +104,10 @@ export function RoomDetail(props: RoomDetailProps) {
     onNavigateToProfile,
     initialModality = "hora",
     onNavigateToChat,
+    onOpenFusionPass,
   } = props;
   const router = useRouter();
-  const supabase = createClient();
+  const [supabase] = useState(() => createClient());
   const { toast } = useToast();
 
   const [loading, setLoading] = useState(true);
@@ -122,6 +125,9 @@ export function RoomDetail(props: RoomDetailProps) {
 
   const [roomBookings, setRoomBookings] = useState<any[]>([]);
   const bookingConfirmedRef = useRef<boolean>(false);
+
+  const bookingSectionRef = useRef<HTMLDivElement>(null);
+  const [highlightSchedule, setHighlightSchedule] = useState(false);
 
   const [selectedShift, setSelectedShift] = useState<
     "morning" | "afternoon" | "night" | null
@@ -161,6 +167,75 @@ export function RoomDetail(props: RoomDetailProps) {
     }, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  const scrollToBookingSection = () => {
+    if (bookingSectionRef.current) {
+      bookingSectionRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+      setHighlightSchedule(true);
+      setTimeout(() => setHighlightSchedule(false), 1800);
+    }
+  };
+
+  // Navega diretamente para o módulo Fusion Pass ("Mais horas, mais desconto") e abre os pacotes
+  const handleGoToFusionPass = () => {
+    const targetTier = roomData?.tier || "start";
+    try {
+      sessionStorage.setItem(
+        "fusion_preselect_pass",
+        JSON.stringify({
+          tier: targetTier,
+          hours: selectedPkgHours,
+          roomId: roomData?.id,
+        }),
+      );
+    } catch {}
+
+    if (onOpenFusionPass) {
+      onOpenFusionPass(targetTier, selectedPkgHours);
+      return;
+    }
+
+    // Fecha o modal de detalhes da sala para revelar a tela principal onde está o Fusion Pass
+    onBack();
+
+    // Após fechar o RoomDetail, localiza e aciona automaticamente o banner "Fusion Pass / Mais horas, mais desconto"
+    setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent("fusion:open-pass", {
+          detail: { tier: targetTier, hours: selectedPkgHours },
+        }),
+      );
+
+      const candidates = Array.from(
+        document.querySelectorAll("button, a, [role='button'], div"),
+      );
+
+      const passTrigger = candidates.find((el) => {
+        const text = (el.textContent || "").toLowerCase();
+        return (
+          (text.includes("mais horas") && text.includes("mais desconto")) ||
+          text.includes("comprar pacote") ||
+          text.includes("recarregar") ||
+          text.includes("adquirir pass") ||
+          text.includes("fusion pass")
+        );
+      }) as HTMLElement | undefined;
+
+      if (passTrigger) {
+        passTrigger.scrollIntoView({ behavior: "smooth", block: "center" });
+        const clickable =
+          (passTrigger.closest("button") as HTMLElement) ||
+          (passTrigger.querySelector("button") as HTMLElement) ||
+          passTrigger;
+        clickable.click();
+      } else {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    }, 280);
+  };
 
   const fetchRoomBookings = useCallback(async () => {
     if (!roomData?.id) return;
@@ -353,19 +428,21 @@ export function RoomDetail(props: RoomDetailProps) {
   const avgRating =
     reviews.length > 0
       ? (
-          reviews.reduce((acc, curr) => acc + curr.rating, 0) / reviews.length
+          reviews.reduce(
+            (acc: number, curr: any) => acc + Number(curr.rating || 0),
+            0,
+          ) / reviews.length
         ).toFixed(1)
       : "Novo";
 
   const filteredReviews =
     reviewFilter === 0
       ? reviews
-      : reviews.filter((r) => r.rating === reviewFilter);
+      : reviews.filter((r: any) => r.rating === reviewFilter);
 
-  const availableSlots = useMemo(() => {
+  const availableSlots = useMemo<string[]>(() => {
     if (!roomData || activeTab !== "hora") return [];
 
-    // Verifica se a data está na lista de blocked_dates da sala
     const selectedDateStr = format(selectedDate, "yyyy-MM-dd");
     if (
       Array.isArray(roomData.blocked_dates) &&
@@ -399,14 +476,14 @@ export function RoomDetail(props: RoomDetailProps) {
           partialBlockedSlots = (
             Array.isArray(exception.hours) ? exception.hours : []
           )
-            .map(normalizeSlotLabel)
+            .map((h: string) => normalizeSlotLabel(h))
             .filter(Boolean);
         }
         if (exception.type === "extra") {
-          const extraHours = (
+          const extraHours: string[] = (
             Array.isArray(exception.hours) ? exception.hours : []
           )
-            .map(normalizeSlotLabel)
+            .map((h: string) => normalizeSlotLabel(h))
             .filter(Boolean);
           return extraHours;
         }
@@ -420,12 +497,14 @@ export function RoomDetail(props: RoomDetailProps) {
     let baseSlots: string[] = [];
 
     if (configForDay.rentalType === "hourly") {
-      const hours = Array.isArray(configForDay.availableHours)
+      const hours: string[] = Array.isArray(configForDay.availableHours)
         ? configForDay.availableHours
         : [];
-      baseSlots = hours.map(normalizeSlotLabel).filter(Boolean);
+      baseSlots = hours
+        .map((h: string) => normalizeSlotLabel(h))
+        .filter(Boolean);
     } else {
-      const shifts = Array.isArray(configForDay.selectedShifts)
+      const shifts: string[] = Array.isArray(configForDay.selectedShifts)
         ? configForDay.selectedShifts
         : [];
 
@@ -454,7 +533,7 @@ export function RoomDetail(props: RoomDetailProps) {
     }
 
     if (partialBlockedSlots.length > 0) {
-      return baseSlots.filter((s) => !partialBlockedSlots.includes(s));
+      return baseSlots.filter((s: string) => !partialBlockedSlots.includes(s));
     }
 
     return baseSlots;
@@ -506,14 +585,14 @@ export function RoomDetail(props: RoomDetailProps) {
   };
 
   const totalHourlyCost = selectedSlots.reduce(
-    (acc, slotKey) => acc + getSlotPrice(slotKey),
+    (acc: number, slotKey: string) => acc + getSlotPrice(slotKey),
     0,
   );
 
   const toggleSlot = (slotKey: string) => {
-    setSelectedSlots((prev) =>
+    setSelectedSlots((prev: string[]) =>
       prev.includes(slotKey)
-        ? prev.filter((s) => s !== slotKey)
+        ? prev.filter((s: string) => s !== slotKey)
         : [...prev, slotKey].sort(),
     );
   };
@@ -537,9 +616,9 @@ export function RoomDetail(props: RoomDetailProps) {
   const totalShiftCost = shiftPrice * selectedDays.length;
 
   const toggleDay = (day: number) => {
-    setSelectedDays((prev) =>
+    setSelectedDays((prev: number[]) =>
       prev.includes(day)
-        ? prev.filter((d) => d !== day)
+        ? prev.filter((d: number) => d !== day)
         : [...prev, day].sort(),
     );
   };
@@ -579,7 +658,7 @@ export function RoomDetail(props: RoomDetailProps) {
         const slotEnd =
           rawSlotEnd > slotStart ? rawSlotEnd : slotStart + 50 * 60 * 1000;
 
-        return roomBookings.some((b) => {
+        return roomBookings.some((b: any) => {
           if (b.status === "cancelled" || b.status === "rejected") return false;
 
           if (
@@ -602,7 +681,6 @@ export function RoomDetail(props: RoomDetailProps) {
           const rawBEnd = new Date(b.end_time).getTime();
           const bEnd = rawBEnd > bStart ? rawBEnd : bStart + 50 * 60 * 1000;
 
-          // Intersecção de intervalo: StartA < EndB && EndA > StartB
           return slotStart < bEnd && slotEnd > bStart;
         });
       } catch {
@@ -612,33 +690,41 @@ export function RoomDetail(props: RoomDetailProps) {
     [roomBookings, currentTime],
   );
 
-  const isSlotPast = (slotKey: string) => {
-    try {
-      const [dateStr, timeStr] = slotKey.split("|");
-      const startSlotStr = timeStr.split(" - ")[0];
-      const slotStart = parseSlotDate(dateStr, startSlotStr).getTime();
-      return slotStart < currentTime;
-    } catch {
-      return true;
-    }
-  };
+  const isSlotPast = useCallback(
+    (slotKey: string) => {
+      try {
+        const [dateStr, timeStr] = slotKey.split("|");
+        const startSlotStr = timeStr.split(" - ")[0];
+        const slotStart = parseSlotDate(dateStr, startSlotStr).getTime();
+        return slotStart < currentTime;
+      } catch {
+        return true;
+      }
+    },
+    [currentTime],
+  );
+
+  const freeSlotsForSelectedDate = useMemo<string[]>(() => {
+    const datePrefix = format(selectedDate, "yyyy-MM-dd");
+    return availableSlots.filter((slotTime: string) => {
+      const slotKey = `${datePrefix}|${slotTime}`;
+      return !isSlotBooked(slotKey) && !isSlotPast(slotKey);
+    });
+  }, [availableSlots, selectedDate, isSlotBooked, isSlotPast]);
 
   const handleAction = async () => {
     if (activeTab === "hora" && selectedSlots.length === 0) {
-      return toast({
-        variant: "destructive",
-        title: "Atenção",
-        description: "Selecione pelo menos um horário.",
-      });
+      scrollToBookingSection();
+      return;
     }
     if (
       activeTab === "turno" &&
       (!selectedShift || selectedDays.length === 0)
     ) {
+      scrollToBookingSection();
       return toast({
-        variant: "destructive",
-        title: "Atenção",
-        description: "Selecione um turno e ao menos um dia da semana.",
+        title: "Selecione o turno e os dias",
+        description: "Escolha o turno e os dias da semana desejados abaixo.",
       });
     }
 
@@ -683,7 +769,6 @@ export function RoomDetail(props: RoomDetailProps) {
           throw new Error("A data base selecionada é inválida.");
         }
 
-        // Atualiza a lista de reservas do servidor antes de travar os slots
         await fetchRoomBookings();
 
         const sortedSlots = [...selectedSlots].sort();
@@ -697,7 +782,7 @@ export function RoomDetail(props: RoomDetailProps) {
           }
         }
 
-        const bookingPayloads = sortedSlots.map((slotKey) => {
+        const bookingPayloads = sortedSlots.map((slotKey: string) => {
           const [dateStr, slotTime] = slotKey.split("|");
           const startSlotStr = slotTime.split(" - ")[0];
           const endSlotStr = slotTime.split(" - ")[1];
@@ -782,7 +867,7 @@ export function RoomDetail(props: RoomDetailProps) {
         const now = new Date();
 
         if (txs) {
-          txs.forEach((tx) => {
+          txs.forEach((tx: any) => {
             if (tx.amount > 0 && tx.expires_at && new Date(tx.expires_at) < now)
               return;
             const amt = Number(tx.amount);
@@ -816,7 +901,7 @@ export function RoomDetail(props: RoomDetailProps) {
       } else {
         toast({
           title: "Iniciando negociação...",
-          description: "Criando canal seguro com o anfitrião e a Fusion...",
+          description: "Criando canal seguro com a clínica e a Fusion...",
         });
 
         const { data: existingChat } = await supabase
@@ -840,7 +925,7 @@ export function RoomDetail(props: RoomDetailProps) {
         }
 
         toast({
-          title: "Chat aberto!",
+          title: "Canal aberto!",
           description: "Redirecionando para as mensagens...",
         });
 
@@ -963,8 +1048,8 @@ export function RoomDetail(props: RoomDetailProps) {
         onBack();
       } else {
         toast({
-          title: "A processar pagamento...",
-          description: "Por favor, aguarde um momento.",
+          title: "Processando pagamento...",
+          description: "Por favor, aguarde um instante.",
         });
 
         const paymentRef = lockIds[0];
@@ -1070,7 +1155,7 @@ export function RoomDetail(props: RoomDetailProps) {
 
         toast({
           title: "Pagamento Aprovado! 🎉",
-          description: "A sua reserva foi confirmada com sucesso.",
+          description: "Sua reserva foi confirmada com sucesso.",
         });
         setIsCheckoutOpen(false);
         setCheckoutSummary(null);
@@ -1103,7 +1188,6 @@ export function RoomDetail(props: RoomDetailProps) {
     setPixCopyPaste(null);
     setActiveBookingId(null);
 
-    // Se a reserva já foi confirmada (Cartão, Carteira ou PIX pago), NÃO apaga nada!
     if (bookingConfirmedRef.current) {
       setCheckoutSummary(null);
       await fetchRoomBookings();
@@ -1122,12 +1206,12 @@ export function RoomDetail(props: RoomDetailProps) {
 
       const pendingIds =
         checkBookings
-          ?.filter((b) => b.status === "pending_payment")
-          .map((b) => b.id) || [];
+          ?.filter((b: any) => b.status === "pending_payment")
+          .map((b: any) => b.id) || [];
 
       if (pendingIds.length > 0) {
-        setRoomBookings((prevBookings) =>
-          prevBookings.filter((b) => !pendingIds.includes(b.id)),
+        setRoomBookings((prevBookings: any[]) =>
+          prevBookings.filter((b: any) => !pendingIds.includes(b.id)),
         );
         await supabaseClient.from("bookings").delete().in("id", pendingIds);
       }
@@ -1192,7 +1276,7 @@ export function RoomDetail(props: RoomDetailProps) {
     setIsSharing(true);
     const shareData = {
       title: roomData?.name || "Sala na Fusion Clinic",
-      text: `Dá uma olhada nesta sala: ${roomData?.name || "Premium"} na Fusion Clinic!`,
+      text: `Confira este espaço na Fusion Clinic: ${roomData?.name || "Consultório"}`,
       url: window.location.href,
     };
     try {
@@ -1267,9 +1351,9 @@ export function RoomDetail(props: RoomDetailProps) {
   if (loading) {
     return (
       <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-6 text-center">
-        <Loader2 className="h-12 w-12 animate-spin text-[#BF4B24]" />
-        <h2 className="text-xl font-black text-slate-900 mb-2">
-          A preparar o espaço...
+        <Loader2 className="h-8 w-8 animate-spin text-[#BF4B24] mb-3" />
+        <h2 className="text-base font-bold text-slate-800">
+          Carregando detalhes do consultório...
         </h2>
       </div>
     );
@@ -1279,7 +1363,7 @@ export function RoomDetail(props: RoomDetailProps) {
     return (
       <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-6 text-center">
         <AlertCircle className="h-12 w-12 text-slate-300 mb-4" />
-        <h2 className="text-xl font-black text-slate-900 mb-2">
+        <h2 className="text-xl font-bold text-slate-900 mb-2">
           Sala não encontrada
         </h2>
         <Button
@@ -1302,13 +1386,17 @@ export function RoomDetail(props: RoomDetailProps) {
   }
 
   const rawGallery = Array.isArray(address.gallery) ? address.gallery : [];
-  const allImages = [roomData.image_url, ...rawGallery].filter(Boolean);
-  const imagesToShow = allImages.slice(0, 5);
+  const allImages: string[] = [roomData.image_url, ...rawGallery].filter(
+    Boolean,
+  );
+  const imagesToShow: string[] = allImages.slice(0, 5);
   const totalImages = imagesToShow.length;
   const isPartner = roomData.is_partner === true;
-  const roomModalities = roomData.modalities || [];
+  const roomModalities: string[] = Array.isArray(roomData.modalities)
+    ? roomData.modalities
+    : [];
 
-  const displayAmenities =
+  const displayAmenities: string[] =
     Array.isArray(address.amenities) && address.amenities.length > 0
       ? address.amenities
       : ["wifi", "tv", "coffee", "ac", "printer", "parking"];
@@ -1331,75 +1419,87 @@ export function RoomDetail(props: RoomDetailProps) {
     `${address.neighborhood || ""}, ${address.city || ""}`,
   );
 
+  const clinicHostName = roomData.profiles?.full_name || "Equipe Fusion Clinic";
+
   return (
     <div className="fixed inset-0 z-[100] bg-white flex flex-col animate-in slide-in-from-bottom-4 duration-300">
+      {/* TOP BAR LIMPA */}
       <div className="flex-none bg-white z-30 border-b border-slate-100 md:border-transparent">
-        <div className="max-w-5xl mx-auto pt-6 px-5 flex justify-between items-center pb-4">
+        <div className="max-w-5xl mx-auto pt-5 px-5 flex justify-between items-center pb-3.5">
           <button
             onClick={onBack}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm border border-slate-200 text-slate-900 transition-transform hover:scale-105"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-white border border-slate-200 text-slate-900 transition-colors hover:bg-slate-50"
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             <button
               onClick={handleShare}
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm border border-slate-200 transition-transform hover:scale-105"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-white border border-slate-200 transition-colors hover:bg-slate-50"
             >
               <Share className="w-4 h-4 text-slate-900" />
             </button>
             <button
               onClick={handleFavoriteToggle}
               disabled={isFavoriteLoading}
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm border border-slate-200 transition-transform hover:scale-105 disabled:opacity-50"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-white border border-slate-200 transition-colors hover:bg-slate-50 disabled:opacity-50"
             >
               <Heart
-                className={`w-5 h-5 transition-colors ${isFavorited ? "fill-red-500 text-red-500" : "text-slate-900"}`}
+                className={`w-5 h-5 transition-colors ${
+                  isFavorited ? "fill-red-500 text-red-500" : "text-slate-900"
+                }`}
               />
             </button>
           </div>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto pb-8 md:pb-12 scrollbar-hide">
-        <div className="max-w-5xl mx-auto px-5 pt-2 pb-6">
+      <div className="flex-1 overflow-y-auto pb-28 md:pb-12 scrollbar-hide">
+        {/* CABEÇALHO EDITORIAL DO ESPAÇO */}
+        <div className="max-w-5xl mx-auto px-5 pt-2 pb-5">
           {isPartner && (
-            <div className="mb-3 inline-flex items-center gap-1.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white text-[10px] font-black px-3 py-1.5 rounded-lg uppercase tracking-widest shadow-md">
-              <Sparkles className="w-3 h-3" /> Fusion Partner
+            <div className="mb-2.5 inline-flex items-center gap-1.5 bg-stone-100 text-stone-800 border border-stone-200/80 text-[11px] font-bold px-2.5 py-1 rounded-md">
+              <BadgeCheck className="w-3.5 h-3.5 text-[#BF4B24]" />
+              Espaço Verificado • Fusion Partner
             </div>
           )}
-          <div className="flex justify-between items-start gap-4 mb-3">
-            <h1 className="text-2xl md:text-3xl font-black text-slate-900 leading-tight">
-              {roomData.name || "Consultório Premium"}
+
+          <div className="flex justify-between items-start gap-4 mb-2">
+            <h1 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight leading-tight">
+              {roomData.name || "Consultório"}
             </h1>
-            <div className="flex items-center gap-1 bg-amber-50 px-2 py-1 rounded-md shrink-0 border border-amber-100 mt-1">
+            <div className="flex items-center gap-1 bg-stone-100 px-2.5 py-1 rounded-lg shrink-0 mt-0.5">
               <Star className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
-              <span className="text-xs font-bold text-slate-700">
+              <span className="text-xs font-bold text-slate-800">
                 {avgRating}{" "}
-                <span className="text-slate-400 font-normal hidden md:inline">
-                  ({reviews.length} avaliações)
+                <span className="text-slate-500 font-medium hidden md:inline">
+                  ({reviews.length})
                 </span>
               </span>
             </div>
           </div>
-          <div className="flex items-center gap-4 text-xs md:text-sm font-medium text-slate-600">
-            <div className="flex items-center gap-1.5 font-bold">
-              <MapPin className="w-4 h-4 text-[#BF4B24]" />
-              {address.city
-                ? `${address.city}, ${address.state}`
-                : "Localização protegida"}
+
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs md:text-sm text-slate-600">
+            <div className="flex items-center gap-1 font-semibold text-slate-700">
+              <MapPin className="w-3.5 h-3.5 text-[#BF4B24]" />
+              {address.neighborhood
+                ? `${address.neighborhood}, ${address.city || ""}`
+                : address.city
+                  ? `${address.city}, ${address.state}`
+                  : "Localização verificada"}
             </div>
             <span className="text-slate-300">•</span>
-            <div className="flex items-center gap-1.5">
-              <Users className="w-4 h-4 text-slate-400" /> Até{" "}
-              {address.capacity || 4} pessoas
+            <div className="flex items-center gap-1 text-slate-600">
+              <Users className="w-3.5 h-3.5 text-slate-400" />
+              Até {address.capacity || 4} pessoas
             </div>
           </div>
         </div>
 
-        <div className="md:hidden relative w-full h-[35vh] bg-slate-200 flex overflow-x-auto snap-x snap-mandatory scrollbar-hide touch-pan-x">
+        {/* GALERIA MOBILE */}
+        <div className="md:hidden relative w-full h-[34vh] bg-slate-100 flex overflow-x-auto snap-x snap-mandatory scrollbar-hide touch-pan-x">
           {allImages.length > 0 ? (
-            allImages.map((img, idx) => (
+            allImages.map((img: string, idx: number) => (
               <div
                 key={idx}
                 onClick={() => setIsAllPhotosOpen(true)}
@@ -1424,16 +1524,83 @@ export function RoomDetail(props: RoomDetailProps) {
           {allImages.length > 0 && (
             <button
               onClick={() => setIsAllPhotosOpen(true)}
-              className="absolute bottom-4 right-4 bg-white/90 backdrop-blur-md text-slate-900 font-black text-xs py-1.5 px-3 rounded-lg flex items-center gap-1 shadow-sm border border-slate-200"
+              className="absolute bottom-3.5 right-4 bg-slate-900/80 backdrop-blur-xs text-white font-semibold text-xs py-1.5 px-3 rounded-lg flex items-center gap-1.5"
             >
               <Grid className="w-3.5 h-3.5" /> 1/{allImages.length}
             </button>
           )}
         </div>
 
+        {/* BARRA RÁPIDA DE HORÁRIOS MOBILE (LOGO ABAIXO DA FOTO) */}
+        <div className="md:hidden px-5 pt-4">
+          <div className="bg-stone-50 border border-stone-200/90 rounded-2xl p-3.5 flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-white border border-stone-200 flex items-center justify-center shrink-0">
+                  <CalendarIcon className="w-4 h-4 text-[#BF4B24]" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-900">
+                    {isSameDay(selectedDate, today)
+                      ? "Disponibilidade para Hoje"
+                      : format(selectedDate, "dd 'de' MMMM", { locale: ptBR })}
+                  </p>
+                  <p className="text-[11px] text-slate-500 font-medium">
+                    {freeSlotsForSelectedDate.length > 0
+                      ? `${freeSlotsForSelectedDate.length} horário(s) livre(s) nesta data`
+                      : "Toque para escolher outra data no calendário"}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={scrollToBookingSection}
+                className="text-xs font-bold text-[#BF4B24] bg-white border border-stone-200 px-3 py-2 rounded-xl shrink-0 active:scale-95 transition-transform"
+              >
+                Ver calendário
+              </button>
+            </div>
+
+            {activeTab === "hora" && freeSlotsForSelectedDate.length > 0 && (
+              <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pt-1">
+                {freeSlotsForSelectedDate
+                  .slice(0, 5)
+                  .map((slotTime: string) => {
+                    const slotKey = `${format(selectedDate, "yyyy-MM-dd")}|${slotTime}`;
+                    const isSelected = selectedSlots.includes(slotKey);
+                    return (
+                      <button
+                        key={slotKey}
+                        type="button"
+                        onClick={() => toggleSlot(slotKey)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap border transition-colors shrink-0 ${
+                          isSelected
+                            ? "bg-[#BF4B24] text-white border-[#BF4B24]"
+                            : "bg-white text-slate-700 border-stone-200 hover:border-stone-300"
+                        }`}
+                      >
+                        {slotTime.split(" - ")[0]}
+                      </button>
+                    );
+                  })}
+                {freeSlotsForSelectedDate.length > 5 && (
+                  <button
+                    type="button"
+                    onClick={scrollToBookingSection}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 bg-stone-200/60 whitespace-nowrap shrink-0"
+                  >
+                    +{freeSlotsForSelectedDate.length - 5} horários
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* GALERIA DESKTOP */}
         <div className="hidden md:block max-w-5xl mx-auto px-5 mb-8">
-          <div className="grid grid-cols-4 grid-rows-2 gap-2 h-[420px] w-full rounded-2xl overflow-hidden relative bg-slate-50">
-            {imagesToShow.map((img, idx) => {
+          <div className="grid grid-cols-4 grid-rows-2 gap-2 h-[420px] w-full rounded-2xl overflow-hidden relative bg-slate-100">
+            {imagesToShow.map((img: string, idx: number) => {
               const gridClass = getGridClass(totalImages, idx);
               return (
                 <div
@@ -1445,7 +1612,7 @@ export function RoomDetail(props: RoomDetailProps) {
                     src={img}
                     alt={`Detalhe ${idx + 1}`}
                     fill
-                    className="object-cover transition-all duration-300 group-hover:scale-[1.02] group-hover:brightness-95 cursor-pointer"
+                    className="object-cover transition-all duration-300 group-hover:scale-[1.01] group-hover:brightness-95 cursor-pointer"
                     sizes="(max-width: 768px) 100vw, 50vw"
                     priority={idx === 0}
                   />
@@ -1455,7 +1622,7 @@ export function RoomDetail(props: RoomDetailProps) {
             {allImages.length > 5 && (
               <button
                 onClick={() => setIsAllPhotosOpen(true)}
-                className="absolute bottom-4 right-4 bg-white hover:bg-slate-50 border border-slate-200 text-slate-900 font-bold text-xs py-2 px-4 rounded-xl flex items-center gap-2 shadow-md transition-transform active:scale-95"
+                className="absolute bottom-4 right-4 bg-white hover:bg-slate-50 border border-slate-200 text-slate-900 font-semibold text-xs py-2 px-4 rounded-xl flex items-center gap-2 shadow-sm transition-transform active:scale-95"
               >
                 <Grid className="w-3.5 h-3.5" /> Mostrar todas as{" "}
                 {allImages.length} fotos
@@ -1465,24 +1632,41 @@ export function RoomDetail(props: RoomDetailProps) {
         </div>
 
         <div className="px-5 py-6 max-w-5xl mx-auto flex flex-col lg:grid lg:grid-cols-12 gap-10">
-          <div className="order-1 lg:order-1 lg:col-span-8 space-y-10">
+          <div className="order-1 lg:order-1 lg:col-span-7 space-y-8">
+            {/* CREDIBILIDADE HUMANA DO ANFITRIÃO */}
+            <div className="flex items-center justify-between pb-6 border-b border-slate-100">
+              <div className="flex items-center gap-3.5">
+                <div className="w-11 h-11 rounded-full bg-stone-100 border border-stone-200 flex items-center justify-center text-slate-700 shrink-0">
+                  <Building2 className="w-5 h-5 text-[#BF4B24]" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-slate-900">
+                    Espaço gerenciado por {clinicHostName}
+                  </p>
+                  <p className="text-xs text-slate-500 font-medium mt-0.5">
+                    Check-in digital na porta • Hora clínica de 50 min
+                  </p>
+                </div>
+              </div>
+            </div>
+
             <section>
-              <h2 className="text-lg font-black text-slate-900 mb-3">
-                Sobre o espaço
+              <h2 className="text-lg font-bold text-slate-900 mb-2.5">
+                Sobre o consultório
               </h2>
-              <p className="text-slate-600 leading-relaxed text-sm font-medium">
+              <p className="text-slate-600 leading-relaxed text-sm">
                 {roomData.description ||
-                  "Sala equipada com tecnologia de ponta, ideal para consultas. Ambiente climatizado, silencioso e muito confortável."}
+                  "Consultório preparado para atendimentos de saúde, com isolamento acústico, climatização e recepção equipada para receber seus pacientes com conforto."}
               </p>
             </section>
 
             <div className="w-full h-px bg-slate-100" />
 
             <section>
-              <h2 className="text-lg font-black text-slate-900 mb-4">
-                O que o espaço oferece
+              <h2 className="text-lg font-bold text-slate-900 mb-4">
+                O que este espaço oferece
               </h2>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {displayAmenities.map((amId: string) => {
                   const amenityDef = AMENITIES_LIST.find((a) => a.id === amId);
                   if (!amenityDef) return null;
@@ -1490,10 +1674,10 @@ export function RoomDetail(props: RoomDetailProps) {
                   return (
                     <div
                       key={amId}
-                      className="flex items-center gap-3 p-3.5 rounded-xl bg-white border border-slate-200 shadow-sm hover:border-slate-300 transition-colors"
+                      className="flex items-center gap-3 p-3.5 rounded-xl bg-stone-50/70 border border-stone-200/70"
                     >
-                      <Icon className="w-5 h-5 text-[#BF4B24]" />
-                      <span className="text-xs font-bold text-slate-700">
+                      <Icon className="w-5 h-5 text-slate-700 shrink-0" />
+                      <span className="text-xs font-semibold text-slate-800">
                         {amenityDef.label}
                       </span>
                     </div>
@@ -1505,10 +1689,10 @@ export function RoomDetail(props: RoomDetailProps) {
             <div className="w-full h-px bg-slate-100" />
 
             <section>
-              <h2 className="text-lg font-black text-slate-900 mb-4">
-                Localização da Sala
+              <h2 className="text-lg font-bold text-slate-900 mb-4">
+                Localização aproximada
               </h2>
-              <div className="relative w-full h-64 bg-slate-100 rounded-2xl overflow-hidden border border-slate-200 shadow-inner">
+              <div className="relative w-full h-60 bg-slate-100 rounded-2xl overflow-hidden border border-slate-200">
                 <div className="absolute top-[-70px] left-0 w-full h-[calc(100%+70px)] pointer-events-none">
                   <iframe
                     width="100%"
@@ -1520,149 +1704,204 @@ export function RoomDetail(props: RoomDetailProps) {
                   ></iframe>
                 </div>
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="w-48 h-48 bg-[#00bcd4]/20 border-2 border-[#00bcd4]/40 rounded-full shadow-[0_0_15px_rgba(0,188,212,0.3)]"></div>
+                  <div className="w-40 h-40 bg-[#BF4B24]/15 border border-[#BF4B24]/40 rounded-full"></div>
                 </div>
-                <div className="absolute bottom-4 left-4 right-4 md:right-auto md:w-64 bg-white/95 backdrop-blur-md px-4 py-3 rounded-xl shadow-md border border-slate-100 flex items-center gap-3 pointer-events-none">
-                  <div className="w-10 h-10 rounded-full bg-cyan-50 flex items-center justify-center shrink-0">
-                    <MapPin className="w-5 h-5 text-cyan-600" />
+                <div className="absolute bottom-3.5 left-3.5 right-3.5 md:right-auto md:w-64 bg-white/95 backdrop-blur-xs px-4 py-2.5 rounded-xl shadow-xs border border-slate-200/80 flex items-center gap-3 pointer-events-none">
+                  <div className="w-8 h-8 rounded-lg bg-stone-100 flex items-center justify-center shrink-0">
+                    <MapPin className="w-4 h-4 text-[#BF4B24]" />
                   </div>
                   <div className="overflow-hidden">
-                    <p className="text-sm font-black text-slate-900 truncate">
+                    <p className="text-xs font-bold text-slate-900 truncate">
                       {address.neighborhood || "Região Central"}
                     </p>
-                    <p className="text-[10px] font-bold text-slate-500 uppercase truncate">
+                    <p className="text-[11px] font-medium text-slate-500 truncate">
                       {address.city
                         ? `${address.city}, ${address.state}`
-                        : "Localização sob consulta"}
+                        : "Localização verificada"}
                     </p>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-slate-50 rounded-xl p-4 mt-4 border border-slate-100 flex items-start gap-3">
-                <Lock className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-bold text-slate-800">
-                    Endereço exato protegido
-                  </p>
-                  <p className="text-xs text-slate-500 font-medium mt-1 leading-relaxed">
-                    Para segurança da clínica, exibimos apenas a região
-                    aproximada no mapa estático.{" "}
-                    <b>
-                      O endereço completo, número e andar serão liberados
-                      imediatamente após a confirmação da sua reserva.
-                    </b>
-                  </p>
-                </div>
+              <div className="bg-stone-50 rounded-xl p-3.5 mt-3 border border-stone-200/70 flex items-start gap-3">
+                <Lock className="w-4 h-4 text-slate-600 shrink-0 mt-0.5" />
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Para privacidade da clínica, o número exato, sala e instruções
+                  de acesso são liberados assim que sua reserva é confirmada.
+                </p>
               </div>
             </section>
 
+            {/* PACOTES DE HORAS (COM VALOR TOTAL DO PACOTE, ECONOMIA TOTAL E REDIRECIONAMENTO AUTOMÁTICO) */}
             {packages.length > 0 && activeTab === "hora" && (
-              <section className="mt-10 animate-in fade-in slide-in-from-bottom-4">
-                <div className="bg-white rounded-3xl p-6 md:p-8 shadow-sm border border-slate-200 relative overflow-hidden group">
-                  <div
-                    className={`absolute -right-10 -top-10 w-40 h-40 rounded-full blur-3xl pointer-events-none transition-all duration-500 opacity-[0.08] group-hover:opacity-[0.15] ${roomData.tier === "master" ? "bg-amber-500" : roomData.tier === "vip" ? "bg-[#BF4B24]" : "bg-blue-500"}`}
-                  />
-
-                  <div className="relative z-10 flex flex-col md:flex-row gap-8">
+              <section className="pt-2">
+                <div className="bg-stone-50 rounded-2xl p-5 md:p-6 border border-stone-200/90">
+                  <div className="flex flex-col md:flex-row gap-6">
                     <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-3">
-                        {roomData.tier === "master" ? (
-                          <Crown className="w-6 h-6 text-amber-500" />
-                        ) : roomData.tier === "vip" ? (
-                          <Star className="w-6 h-6 text-[#BF4B24]" />
-                        ) : (
-                          <Shield className="w-6 h-6 text-blue-500" />
-                        )}
-                        <h2 className="text-xl font-black text-slate-900 tracking-tight">
-                          Fusion Pass{" "}
-                          {roomData.tier === "master"
-                            ? "Premium"
-                            : roomData.tier === "vip"
-                              ? "VIP"
-                              : "Basic"}
-                        </h2>
-                        <Badge className="bg-indigo-50 text-indigo-600 border-0 text-[10px] uppercase tracking-widest ml-2">
-                          Recomendado
-                        </Badge>
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded bg-slate-900 text-white">
+                          Fusion Pass
+                        </span>
+                        <span className="text-xs font-bold text-[#BF4B24]">
+                          Mais horas, mais desconto
+                        </span>
                       </div>
 
-                      <p className="text-sm font-medium text-slate-500 mb-6 leading-relaxed max-w-lg">
-                        Ao invés de pagar o valor avulso de R${" "}
-                        {getBasePrice().toFixed(2).replace(".", ",")}/h, garanta
-                        horas com desconto exclusivo comprando um pacote. O
-                        saldo fica na sua carteira para usar quando quiser.
+                      <h3 className="text-lg font-bold text-slate-900 mb-1.5">
+                        Pacotes de horas para{" "}
+                        {roomData.tier === "master"
+                          ? "Salas Master"
+                          : roomData.tier === "vip"
+                            ? "Salas VIP"
+                            : "Salas Essencial"}
+                      </h3>
+
+                      <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+                        A hora avulsa nesta sala custa{" "}
+                        <strong className="text-slate-900">
+                          R$ {getBasePrice().toFixed(2).replace(".", ",")}/h
+                        </strong>
+                        . Comprando um pacote de horas, você reduz o custo por
+                        consulta e usa os créditos quando quiser:
                       </p>
 
-                      <div className="flex flex-wrap gap-3 mb-2">
-                        {packages.map((pkg) => (
-                          <button
-                            key={pkg.id}
-                            onClick={() => setSelectedPkgHours(pkg.hours)}
-                            className={`px-6 py-3 text-sm font-bold rounded-xl transition-all border-2 ${selectedPkgHours === pkg.hours ? "bg-slate-900 text-white border-slate-900 shadow-md transform scale-105" : "bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:bg-slate-50"}`}
-                          >
-                            {pkg.hours} horas
-                          </button>
-                        ))}
+                      <div className="grid grid-cols-3 gap-2">
+                        {packages.map((pkg: any) => {
+                          const isSelected = selectedPkgHours === pkg.hours;
+                          const pkgTotal = Number(pkg.price || 0);
+                          return (
+                            <button
+                              key={pkg.id}
+                              type="button"
+                              onClick={() => setSelectedPkgHours(pkg.hours)}
+                              className={`p-3 rounded-xl transition-all border text-left flex flex-col justify-between ${
+                                isSelected
+                                  ? "bg-slate-900 text-white border-slate-900 shadow-xs"
+                                  : "bg-white text-slate-700 border-stone-200 hover:border-stone-300"
+                              }`}
+                            >
+                              <span className="text-xs font-bold block">
+                                {pkg.hours} horas
+                              </span>
+                              <span
+                                className={`text-[11px] font-semibold mt-0.5 block ${
+                                  isSelected
+                                    ? "text-stone-300"
+                                    : "text-slate-500"
+                                }`}
+                              >
+                                R$ {pkgTotal.toFixed(0)} total
+                              </span>
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
 
-                    <div className="md:w-64 shrink-0 flex flex-col justify-center border-t md:border-t-0 md:border-l border-slate-100 pt-6 md:pt-0 md:pl-8">
+                    <div className="md:w-64 shrink-0 flex flex-col justify-center border-t md:border-t-0 md:border-l border-stone-200 pt-4 md:pt-0 md:pl-6">
                       {packages
-                        .filter((p) => p.hours === selectedPkgHours)
-                        .map((pkg) => {
-                          const hourlyRate = pkg.price / pkg.hours;
+                        .filter((p: any) => p.hours === selectedPkgHours)
+                        .map((pkg: any) => {
+                          const pkgHours = Number(pkg.hours || 1);
+                          const pkgTotalBRL = Number(pkg.price || 0);
+                          const hourlyRate = pkgTotalBRL / pkgHours;
                           const basePrice = getBasePrice();
-                          const savings = basePrice - hourlyRate;
+                          const avulsoTotalBRL = basePrice * pkgHours;
+                          const totalSavingsBRL = Math.max(
+                            0,
+                            avulsoTotalBRL - pkgTotalBRL,
+                          );
+                          const hourlySavingsBRL = Math.max(
+                            0,
+                            basePrice - hourlyRate,
+                          );
                           const savingsPercent =
-                            basePrice > 0
-                              ? Math.round((savings / basePrice) * 100)
+                            avulsoTotalBRL > 0
+                              ? Math.round(
+                                  (totalSavingsBRL / avulsoTotalBRL) * 100,
+                                )
                               : 0;
 
                           return (
                             <div
                               key={pkg.id}
-                              className="flex flex-col h-full justify-center"
+                              className="flex flex-col justify-center space-y-3"
                             >
-                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
-                                Preço da hora no passe
-                              </p>
-                              <div className="flex items-baseline gap-1 mb-2">
-                                <span className="text-4xl font-black text-slate-900 leading-none">
-                                  R$ {hourlyRate.toFixed(2).replace(".", ",")}
-                                </span>
-                                <span className="text-sm text-slate-500 font-bold">
-                                  /h
-                                </span>
+                              <div>
+                                <p className="text-[11px] font-semibold text-slate-500 mb-0.5">
+                                  Valor da hora no pacote ({pkgHours}h)
+                                </p>
+                                <div className="flex items-baseline gap-1.5">
+                                  <span className="text-2xl font-bold text-slate-900">
+                                    R$ {hourlyRate.toFixed(2).replace(".", ",")}
+                                  </span>
+                                  <span className="text-xs text-slate-500 font-semibold">
+                                    /hora
+                                  </span>
+                                  {hourlySavingsBRL > 0 && (
+                                    <span className="text-[11px] text-slate-400 line-through ml-1">
+                                      R${" "}
+                                      {basePrice.toFixed(2).replace(".", ",")}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
 
-                              {savings > 0 && (
-                                <div className="flex items-center gap-2 mb-6">
-                                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-md border border-emerald-100 flex items-center gap-1">
-                                    <TrendingUp className="w-3 h-3" /> Poupa R${" "}
-                                    {savings.toFixed(2).replace(".", ",")} /h
+                              {/* COMPARATIVO DO VALOR TOTAL DO PACOTE vs AVULSO */}
+                              <div className="bg-white rounded-xl p-3 border border-stone-200/90 space-y-1.5">
+                                <div className="flex items-center justify-between text-xs">
+                                  <span className="text-slate-500 font-medium">
+                                    Total do pacote ({pkgHours}h):
                                   </span>
-                                  <span className="text-[10px] font-black text-white bg-emerald-500 px-1.5 py-1 rounded-md shadow-sm">
-                                    -{savingsPercent}% OFF
+                                  <span className="font-bold text-slate-900">
+                                    R${" "}
+                                    {pkgTotalBRL.toLocaleString("pt-BR", {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    })}
                                   </span>
                                 </div>
-                              )}
+
+                                {totalSavingsBRL > 0 && (
+                                  <div className="flex items-center justify-between text-[11px]">
+                                    <span className="text-slate-400">
+                                      {pkgHours}h no avulso sairiam por:
+                                    </span>
+                                    <span className="text-slate-400 line-through font-medium">
+                                      R${" "}
+                                      {avulsoTotalBRL.toLocaleString("pt-BR", {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2,
+                                      })}
+                                    </span>
+                                  </div>
+                                )}
+
+                                {totalSavingsBRL > 0 && (
+                                  <div className="pt-1.5 border-t border-stone-100 flex items-center justify-between">
+                                    <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1">
+                                      <TrendingDown className="w-3.5 h-3.5" />
+                                      Economia total:
+                                    </span>
+                                    <span className="text-xs font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/60">
+                                      R${" "}
+                                      {totalSavingsBRL.toLocaleString("pt-BR", {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2,
+                                      })}{" "}
+                                      (-{savingsPercent}%)
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
 
                               <Button
-                                onClick={() => {
-                                  toast({
-                                    title: "A iniciar assinatura",
-                                    description:
-                                      "Vá em 'Saldo Fusion' no painel principal para concluir.",
-                                  });
-                                  setTimeout(
-                                    () => router.push("/dashboard"),
-                                    1000,
-                                  );
-                                }}
-                                className="w-full h-12 bg-slate-900 hover:bg-slate-800 text-white font-black rounded-xl shadow-lg transition-all active:scale-95"
+                                type="button"
+                                onClick={handleGoToFusionPass}
+                                className="w-full h-11 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold text-xs rounded-xl shadow-xs flex items-center justify-center gap-1.5"
                               >
-                                Assinar Pass
+                                Ver pacotes e assinar ({pkgHours}h)
+                                <ArrowRight className="w-3.5 h-3.5" />
                               </Button>
                             </div>
                           );
@@ -1672,83 +1911,124 @@ export function RoomDetail(props: RoomDetailProps) {
                 </div>
               </section>
             )}
-
-            <div className="w-full h-px bg-slate-100 hidden lg:block mt-10" />
           </div>
 
-          <div className="order-2 lg:order-2 lg:col-span-4 flex flex-col gap-6">
-            <div className="bg-white md:p-6 md:border md:border-slate-200 md:rounded-2xl md:shadow-lg md:h-fit md:sticky md:top-24 flex flex-col">
-              <div className="flex bg-slate-100 p-1.5 rounded-xl mb-6">
-                {roomModalities.includes("hora") && (
-                  <button
-                    onClick={() => setActiveTab("hora")}
-                    className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${activeTab === "hora" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
-                  >
-                    Por Hora
-                  </button>
-                )}
-                {roomModalities.includes("turno") && (
-                  <button
-                    onClick={() => setActiveTab("turno")}
-                    className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${activeTab === "turno" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
-                  >
-                    Por Turno
-                  </button>
-                )}
-                {roomModalities.includes("fixo") && (
-                  <button
-                    onClick={() => setActiveTab("fixo")}
-                    className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${activeTab === "fixo" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
-                  >
-                    Mensal (Fixo)
-                  </button>
-                )}
-              </div>
+          {/* COLUNA DE AGENDAMENTO */}
+          <div
+            ref={bookingSectionRef}
+            className="order-2 lg:order-2 lg:col-span-5 flex flex-col gap-6 scroll-mt-20"
+          >
+            <div
+              className={`bg-white p-5 md:p-6 border rounded-2xl transition-all duration-300 md:shadow-md md:h-fit md:sticky md:top-24 flex flex-col ${
+                highlightSchedule
+                  ? "border-[#BF4B24] ring-4 ring-[#BF4B24]/15"
+                  : "border-slate-200"
+              }`}
+            >
+              {roomModalities.length > 1 && (
+                <div className="flex bg-stone-100 p-1 rounded-xl mb-5">
+                  {roomModalities.includes("hora") && (
+                    <button
+                      onClick={() => setActiveTab("hora")}
+                      className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${
+                        activeTab === "hora"
+                          ? "bg-white shadow-xs text-slate-900"
+                          : "text-slate-500"
+                      }`}
+                    >
+                      Por Hora
+                    </button>
+                  )}
+                  {roomModalities.includes("turno") && (
+                    <button
+                      onClick={() => setActiveTab("turno")}
+                      className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${
+                        activeTab === "turno"
+                          ? "bg-white shadow-xs text-slate-900"
+                          : "text-slate-500"
+                      }`}
+                    >
+                      Por Turno
+                    </button>
+                  )}
+                  {roomModalities.includes("fixo") && (
+                    <button
+                      onClick={() => setActiveTab("fixo")}
+                      className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${
+                        activeTab === "fixo"
+                          ? "bg-white shadow-xs text-slate-900"
+                          : "text-slate-500"
+                      }`}
+                    >
+                      Fixo Mensal
+                    </button>
+                  )}
+                </div>
+              )}
 
               {activeTab === "hora" && (
                 <section className="animate-in fade-in">
-                  <div className="flex items-center gap-2 mb-4">
-                    <CalendarIcon className="w-5 h-5 text-[#BF4B24]" />
-                    <h2 className="text-lg font-black text-slate-900">
-                      Agendamento
-                    </h2>
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h2 className="text-base font-bold text-slate-900">
+                        Escolha a data e os horários
+                      </h2>
+                      <p className="text-xs text-slate-500">
+                        Selecione um ou mais horários para reservar
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-lg font-bold text-slate-900">
+                        R$ {getBasePrice()}
+                      </span>
+                      <span className="text-xs text-slate-500 block">
+                        /hora
+                      </span>
+                    </div>
                   </div>
 
-                  <div className="w-full bg-white rounded-2xl border border-slate-100 p-4 mb-6 shadow-sm">
-                    <div className="flex items-center justify-between mb-4">
+                  {/* CALENDÁRIO */}
+                  <div className="w-full bg-stone-50/60 rounded-xl border border-stone-200/80 p-3.5 mb-5">
+                    <div className="flex items-center justify-between mb-3">
                       <button
                         onClick={prevMonth}
                         disabled={!canGoPrevMonth}
-                        className={`p-1.5 rounded-full transition-colors ${canGoPrevMonth ? "text-slate-500 hover:bg-slate-100 hover:text-[#BF4B24]" : "text-slate-200 cursor-not-allowed"}`}
+                        className={`p-1.5 rounded-lg transition-colors ${
+                          canGoPrevMonth
+                            ? "text-slate-600 hover:bg-stone-200/60"
+                            : "text-slate-200 cursor-not-allowed"
+                        }`}
                       >
-                        <ChevronLeft className="w-5 h-5" />
+                        <ChevronLeft className="w-4 h-4" />
                       </button>
-                      <div className="font-bold text-slate-800 capitalize text-sm">
+                      <div className="font-bold text-slate-900 capitalize text-sm">
                         {format(currentMonthView, "MMMM 'de' yyyy", {
                           locale: ptBR,
                         })}
                       </div>
                       <button
                         onClick={nextMonth}
-                        className="p-1.5 rounded-full text-slate-500 hover:bg-slate-100 hover:text-[#BF4B24] transition-colors"
+                        className="p-1.5 rounded-lg text-slate-600 hover:bg-stone-200/60 transition-colors"
                       >
-                        <ChevronRight className="w-5 h-5" />
+                        <ChevronRight className="w-4 h-4" />
                       </button>
                     </div>
-                    <div className="grid grid-cols-7 text-center mb-2">
+
+                    <div className="grid grid-cols-7 text-center mb-1.5">
                       {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map(
-                        (d) => (
+                        (d: string) => (
                           <div
                             key={d}
-                            className="text-[10px] font-bold text-slate-400 uppercase"
+                            className="text-[10px] font-semibold text-slate-400 uppercase"
                           >
                             {d}
                           </div>
                         ),
                       )}
                     </div>
-                    <div className="grid grid-cols-7 gap-y-2 gap-x-1">
-                      {calendarDays.map((day) => {
+
+                    <div className="grid grid-cols-7 gap-y-1.5 gap-x-1">
+                      {calendarDays.map((day: Date) => {
                         const dateStr = format(day, "yyyy-MM-dd");
                         const isSelected = isSameDay(day, selectedDate);
                         const isPast =
@@ -1757,8 +2037,8 @@ export function RoomDetail(props: RoomDetailProps) {
                           day,
                           currentMonthView,
                         );
-                        const hasSelection = selectedSlots.some((slotKey) =>
-                          slotKey.startsWith(dateStr),
+                        const hasSelection = selectedSlots.some(
+                          (slotKey: string) => slotKey.startsWith(dateStr),
                         );
 
                         return (
@@ -1768,14 +2048,28 @@ export function RoomDetail(props: RoomDetailProps) {
                               if (!isPast) setSelectedDate(day);
                             }}
                             disabled={isPast || !isCurrentMonth}
-                            className={`relative h-9 w-full rounded-lg text-xs font-bold flex flex-col items-center justify-center transition-colors ${!isCurrentMonth ? "invisible" : ""} ${isPast ? "text-slate-200 cursor-not-allowed" : ""} ${isSelected ? "bg-[#BF4B24] text-white shadow-md shadow-orange-500/30" : ""} ${!isSelected && !isPast && isCurrentMonth ? "text-slate-700 hover:bg-slate-100" : ""}`}
+                            className={`relative h-9 w-full rounded-lg text-xs font-semibold flex flex-col items-center justify-center transition-colors ${
+                              !isCurrentMonth ? "invisible" : ""
+                            } ${
+                              isPast ? "text-slate-300 cursor-not-allowed" : ""
+                            } ${
+                              isSelected
+                                ? "bg-slate-900 text-white font-bold"
+                                : ""
+                            } ${
+                              !isSelected && !isPast && isCurrentMonth
+                                ? "text-slate-700 hover:bg-stone-200/60"
+                                : ""
+                            }`}
                           >
                             <span className="relative z-10">
                               {format(day, "d")}
                             </span>
                             {hasSelection && (
                               <span
-                                className={`absolute bottom-1 w-1 h-1 rounded-full ${isSelected ? "bg-white" : "bg-[#BF4B24]"}`}
+                                className={`absolute bottom-1 w-1.5 h-1.5 rounded-full ${
+                                  isSelected ? "bg-[#BF4B24]" : "bg-[#BF4B24]"
+                                }`}
                               />
                             )}
                           </button>
@@ -1784,28 +2078,33 @@ export function RoomDetail(props: RoomDetailProps) {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-bold text-slate-800 capitalize">
-                      Horários disponíveis{" "}
-                      <span className="font-medium text-slate-500 lowercase">
-                        (
-                        {format(selectedDate, "EEE, dd 'de' MMM", {
+                  {/* GRADE DE HORÁRIOS */}
+                  <div className="flex items-center justify-between mb-2.5">
+                    <h3 className="text-xs font-bold text-slate-800">
+                      Horários em{" "}
+                      <span className="text-[#BF4B24]">
+                        {format(selectedDate, "dd/MM (EEEE)", {
                           locale: ptBR,
                         })}
-                        )
                       </span>
                     </h3>
+                    <span className="text-[11px] font-semibold text-slate-500">
+                      {freeSlotsForSelectedDate.length} livre(s)
+                    </span>
                   </div>
 
                   {availableSlots.length === 0 ? (
-                    <div className="text-center py-6 bg-slate-50 rounded-xl border border-slate-100">
-                      <AlertCircle className="w-6 h-6 text-slate-300 mx-auto mb-2" />
-                      <p className="text-slate-500 font-bold text-xs">
-                        Nenhum horário disponível para esta data.
+                    <div className="text-center py-6 bg-stone-50 rounded-xl border border-stone-200/70">
+                      <Clock className="w-5 h-5 text-slate-400 mx-auto mb-1.5" />
+                      <p className="text-slate-600 font-semibold text-xs">
+                        Nenhum horário disponível nesta data.
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Experimente selecionar outro dia no calendário acima.
                       </p>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-2 gap-2 max-h-[220px] overflow-y-auto pr-1 scrollbar-hide">
+                    <div className="grid grid-cols-2 gap-2 max-h-[240px] overflow-y-auto pr-1 scrollbar-hide">
                       {availableSlots.map((slotTime: string) => {
                         const slotKey = `${format(selectedDate, "yyyy-MM-dd")}|${slotTime}`;
                         const isBooked = isSlotBooked(slotKey);
@@ -1817,22 +2116,41 @@ export function RoomDetail(props: RoomDetailProps) {
                         return (
                           <button
                             key={slotKey}
+                            type="button"
                             onClick={() =>
                               !isUnavailable && toggleSlot(slotKey)
                             }
                             disabled={isUnavailable}
-                            className={`h-14 rounded-xl flex flex-col items-center justify-center transition-all border-2 ${isUnavailable ? "border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed" : isSelected ? "border-[#BF4B24] bg-orange-50" : "border-slate-100 bg-white hover:border-slate-300"}`}
+                            className={`h-13 rounded-xl flex flex-col items-center justify-center transition-all border ${
+                              isUnavailable
+                                ? "border-slate-100 bg-slate-50 opacity-45 cursor-not-allowed"
+                                : isSelected
+                                  ? "border-[#BF4B24] bg-[#BF4B24]/8 ring-1 ring-[#BF4B24]"
+                                  : "border-slate-200 bg-white hover:border-slate-300"
+                            }`}
                           >
                             <span
-                              className={`text-xs font-bold ${isUnavailable ? "text-slate-400 line-through" : isSelected ? "text-[#BF4B24]" : "text-slate-700"}`}
+                              className={`text-xs font-bold ${
+                                isUnavailable
+                                  ? "text-slate-400 line-through"
+                                  : isSelected
+                                    ? "text-[#BF4B24]"
+                                    : "text-slate-800"
+                              }`}
                             >
                               {slotTime}
                             </span>
                             <span
-                              className={`text-[10px] font-semibold mt-0.5 ${isUnavailable ? "text-slate-400" : isSelected ? "text-[#BF4B24]/80" : "text-slate-400"}`}
+                              className={`text-[10px] font-medium mt-0.5 ${
+                                isUnavailable
+                                  ? "text-slate-400"
+                                  : isSelected
+                                    ? "text-[#BF4B24]"
+                                    : "text-slate-500"
+                              }`}
                             >
                               {isUnavailable
-                                ? "Indisponível"
+                                ? "Ocupado"
                                 : `R$ ${slotPrice.toFixed(2).replace(".", ",")}`}
                             </span>
                           </button>
@@ -1841,42 +2159,41 @@ export function RoomDetail(props: RoomDetailProps) {
                     </div>
                   )}
 
-                  <div className="hidden md:block pt-6 border-t border-slate-100 mt-6">
-                    <div className="flex items-center justify-between mb-4">
-                      <div>
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5">
-                          {selectedSlots.length > 0
-                            ? `Total (${selectedSlots.length} horas)`
-                            : "A partir de"}
-                        </p>
-                        <div className="flex items-baseline gap-1">
-                          <span className="text-2xl font-black text-[#BF4B24]">
-                            R${" "}
-                            {selectedSlots.length > 0
-                              ? totalHourlyCost
-                              : getBasePrice()}
-                          </span>
-                        </div>
+                  {/* BOTÃO DESKTOP */}
+                  <div className="hidden md:block pt-5 border-t border-slate-100 mt-5">
+                    {selectedSlots.length > 0 && (
+                      <div className="flex items-center justify-between mb-3 text-sm">
+                        <span className="font-medium text-slate-600">
+                          Total ({selectedSlots.length}{" "}
+                          {selectedSlots.length === 1 ? "horário" : "horários"})
+                        </span>
+                        <span className="text-lg font-bold text-slate-900">
+                          R$ {totalHourlyCost.toFixed(2).replace(".", ",")}
+                        </span>
                       </div>
-                    </div>
+                    )}
                     <Button
                       onClick={handleAction}
-                      disabled={actionLoading || selectedSlots.length === 0}
-                      className={`w-full h-14 rounded-xl font-black transition-all text-base ${selectedSlots.length > 0 ? "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/25 hover:scale-[1.02]" : "bg-slate-100 text-slate-400 shadow-none"}`}
+                      disabled={actionLoading}
+                      className="w-full h-12 rounded-xl font-bold transition-all text-sm bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-xs"
                     >
-                      {actionLoading ? "A processar..." : "Reservar Agora"}
+                      {actionLoading
+                        ? "Processando..."
+                        : selectedSlots.length > 0
+                          ? `Reservar (${selectedSlots.length}h)`
+                          : "Selecione um horário acima"}
                     </Button>
                   </div>
                 </section>
               )}
 
               {activeTab === "turno" && (
-                <section className="animate-in fade-in space-y-6">
+                <section className="animate-in fade-in space-y-5">
                   <div>
-                    <h2 className="text-sm font-black text-slate-900 mb-3">
-                      1. Qual turno deseja alugar?
+                    <h2 className="text-sm font-bold text-slate-900 mb-2.5">
+                      1. Qual turno você deseja?
                     </h2>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-3 gap-2.5">
                       {[
                         {
                           id: "morning",
@@ -1897,11 +2214,19 @@ export function RoomDetail(props: RoomDetailProps) {
                         <button
                           key={t.id}
                           onClick={() => setSelectedShift(t.id as any)}
-                          className={`flex flex-col items-center justify-center p-3.5 rounded-xl border-2 transition-all ${selectedShift === t.id ? "border-[#BF4B24] bg-orange-50 text-[#BF4B24]" : "border-slate-100 hover:border-slate-200 bg-white"}`}
+                          className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all ${
+                            selectedShift === t.id
+                              ? "border-[#BF4B24] bg-orange-50/60 text-[#BF4B24]"
+                              : "border-slate-200 hover:border-slate-300 bg-white"
+                          }`}
                         >
-                          <span className="text-xs font-black">{t.label}</span>
+                          <span className="text-xs font-bold">{t.label}</span>
                           <span
-                            className={`text-[10px] font-bold mt-1 ${selectedShift === t.id ? "text-[#BF4B24]/70" : "text-slate-400"}`}
+                            className={`text-[10px] font-semibold mt-0.5 ${
+                              selectedShift === t.id
+                                ? "text-[#BF4B24]"
+                                : "text-slate-500"
+                            }`}
                           >
                             {t.price ? `R$ ${t.price}` : "--"}
                           </span>
@@ -1910,34 +2235,43 @@ export function RoomDetail(props: RoomDetailProps) {
                     </div>
                   </div>
                   <div>
-                    <h2 className="text-sm font-black text-slate-900 mb-3">
+                    <h2 className="text-sm font-bold text-slate-900 mb-2.5">
                       2. Quais dias da semana?
                     </h2>
                     <div className="flex gap-2 justify-between">
-                      {["D", "S", "T", "Q", "Q", "S", "S"].map((day, i) => (
-                        <button
-                          key={i}
-                          onClick={() => toggleDay(i)}
-                          className={`w-10 h-10 rounded-full text-xs font-black transition-all ${selectedDays.includes(i) ? "bg-slate-900 text-white shadow-md shadow-slate-900/20" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}
-                        >
-                          {day}
-                        </button>
-                      ))}
+                      {["D", "S", "T", "Q", "Q", "S", "S"].map(
+                        (day: string, i: number) => (
+                          <button
+                            key={i}
+                            onClick={() => toggleDay(i)}
+                            className={`w-10 h-10 rounded-xl text-xs font-bold transition-all ${
+                              selectedDays.includes(i)
+                                ? "bg-slate-900 text-white"
+                                : "bg-stone-100 text-slate-600 hover:bg-stone-200"
+                            }`}
+                          >
+                            {day}
+                          </button>
+                        ),
+                      )}
                     </div>
                   </div>
-                  <div className="bg-blue-50/50 border border-blue-100 p-4 rounded-xl flex gap-3">
-                    <Shield className="w-5 h-5 text-blue-500 shrink-0" />
-                    <p className="text-xs text-blue-800 font-medium leading-relaxed">
-                      Alugueres recorrentes são fechados através do nosso{" "}
-                      <strong className="font-black">Chat Seguro</strong>.
+                  <div className="bg-stone-50 border border-stone-200 p-3.5 rounded-xl flex gap-3">
+                    <Shield className="w-4 h-4 text-slate-700 shrink-0 mt-0.5" />
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      Locações de turnos fixos são combinadas diretamente pelo{" "}
+                      <strong className="font-bold text-slate-800">
+                        Chat Seguro
+                      </strong>{" "}
+                      da plataforma.
                     </p>
                   </div>
                   <div className="hidden md:block pt-4 border-t border-slate-100">
-                    <div className="flex justify-between items-end mb-4">
-                      <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                        Estimativa Semanal
+                    <div className="flex justify-between items-end mb-3">
+                      <span className="text-xs font-semibold text-slate-500">
+                        Estimativa semanal
                       </span>
-                      <span className="text-2xl font-black text-slate-900">
+                      <span className="text-xl font-bold text-slate-900">
                         R$ {totalShiftCost.toFixed(2)}
                       </span>
                     </div>
@@ -1948,10 +2282,10 @@ export function RoomDetail(props: RoomDetailProps) {
                         !selectedShift ||
                         selectedDays.length === 0
                       }
-                      className="w-full h-14 rounded-xl font-black bg-slate-900 hover:bg-slate-800 text-white gap-2 transition-all"
+                      className="w-full h-12 rounded-xl font-bold bg-slate-900 hover:bg-slate-800 text-white gap-2"
                     >
                       {actionLoading ? (
-                        "A processar..."
+                        "Processando..."
                       ) : (
                         <>
                           <MessageSquare className="w-4 h-4" /> Solicitar
@@ -1964,30 +2298,31 @@ export function RoomDetail(props: RoomDetailProps) {
               )}
 
               {activeTab === "fixo" && (
-                <section className="animate-in fade-in space-y-6">
-                  <div className="text-center py-8 bg-slate-50 rounded-2xl border border-slate-200">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">
-                      Contrato Mensal (Exclusivo)
+                <section className="animate-in fade-in space-y-5">
+                  <div className="text-center py-6 bg-stone-50 rounded-xl border border-stone-200">
+                    <p className="text-xs font-semibold text-slate-500 mb-1">
+                      Mensalidade (Sala Exclusiva)
                     </p>
-                    <h3 className="text-3xl font-black text-slate-900">
+                    <h3 className="text-2xl font-bold text-slate-900">
                       {pricingData.monthly ? `R$ ${pricingData.monthly}` : "--"}
                     </h3>
                   </div>
-                  <div className="bg-emerald-50/50 border border-emerald-100 p-4 rounded-xl flex gap-3">
-                    <Shield className="w-5 h-5 text-emerald-600 shrink-0" />
-                    <p className="text-xs text-emerald-800 font-medium leading-relaxed">
-                      O aluguer fixo garante exclusividade total sobre a sala.
-                      Inicie uma negociação segura.
+                  <div className="bg-stone-50 border border-stone-200 p-3.5 rounded-xl flex gap-3">
+                    <Shield className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      No contrato mensal você conta com exclusividade na sala e
+                      pode optar pelo modo Coanfitrião para sublocar seus
+                      horários vagos.
                     </p>
                   </div>
                   <div className="hidden md:block pt-4 border-t border-slate-100">
                     <Button
                       onClick={handleAction}
                       disabled={actionLoading}
-                      className="w-full h-14 rounded-xl font-black bg-slate-900 hover:bg-slate-800 text-white gap-2 shadow-xl shadow-slate-900/10 transition-all"
+                      className="w-full h-12 rounded-xl font-bold bg-slate-900 hover:bg-slate-800 text-white gap-2"
                     >
                       {actionLoading ? (
-                        "A processar..."
+                        "Processando..."
                       ) : (
                         <>
                           <MessageSquare className="w-4 h-4" /> Iniciar
@@ -2001,42 +2336,53 @@ export function RoomDetail(props: RoomDetailProps) {
             </div>
           </div>
 
-          <div className="order-3 lg:order-3 lg:col-span-8 lg:col-start-1 pt-8 border-t border-slate-100 lg:border-none lg:pt-0">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-black text-slate-900">Avaliações</h2>
+          {/* AVALIAÇÕES */}
+          <div className="order-3 lg:order-3 lg:col-span-7 lg:col-start-1 pt-6 border-t border-slate-100 lg:border-none lg:pt-0">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="text-lg font-bold text-slate-900">
+                Avaliações de profissionais
+              </h2>
               <div className="flex items-center gap-1.5">
-                <Star className="w-5 h-5 fill-amber-500 text-amber-500" />
-                <span className="font-black text-lg text-slate-900">
+                <Star className="w-4 h-4 fill-amber-500 text-amber-500" />
+                <span className="font-bold text-base text-slate-900">
                   {avgRating}
                 </span>
-                <span className="text-sm font-medium text-slate-500">
-                  ({reviews.length} avaliações)
+                <span className="text-xs font-medium text-slate-500">
+                  ({reviews.length})
                 </span>
               </div>
             </div>
 
             {reviews.length > 0 && (
-              <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide mb-6 pb-1">
+              <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide mb-5 pb-1">
                 <button
                   onClick={() => setReviewFilter(0)}
-                  className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 border ${reviewFilter === 0 ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"}`}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0 border ${
+                    reviewFilter === 0
+                      ? "bg-slate-900 text-white border-slate-900"
+                      : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                  }`}
                 >
                   Todas
                 </button>
-                {[5, 4, 3, 2, 1].map((star) => {
-                  const count = reviews.filter((r) => r.rating === star).length;
+                {[5, 4, 3, 2, 1].map((star: number) => {
+                  const count = reviews.filter(
+                    (r: any) => r.rating === star,
+                  ).length;
                   if (count === 0) return null;
                   return (
                     <button
                       key={star}
                       onClick={() => setReviewFilter(star)}
-                      className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 flex items-center gap-1 border ${reviewFilter === star ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"}`}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0 flex items-center gap-1 border ${
+                        reviewFilter === star
+                          ? "bg-stone-100 text-slate-900 border-slate-300"
+                          : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                      }`}
                     >
                       {star}{" "}
-                      <Star
-                        className={`w-3 h-3 ${reviewFilter === star ? "fill-amber-500 text-amber-500" : "text-slate-400"}`}
-                      />
-                      <span className="text-[10px] text-slate-400 ml-1">
+                      <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
+                      <span className="text-[10px] text-slate-400 ml-0.5">
                         ({count})
                       </span>
                     </button>
@@ -2047,85 +2393,83 @@ export function RoomDetail(props: RoomDetailProps) {
 
             {loadingReviews ? (
               <div className="flex justify-center py-10">
-                <Loader2 className="w-8 h-8 animate-spin text-slate-300" />
+                <Loader2 className="w-6 h-6 animate-spin text-slate-300" />
               </div>
             ) : reviews.length === 0 ? (
-              <div className="text-center py-12 bg-slate-50 rounded-[2rem] border border-slate-100">
-                <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
-                  <Star className="w-8 h-8 text-slate-300" />
-                </div>
-                <p className="font-bold text-slate-900 text-lg">
-                  Ainda não há avaliações
+              <div className="text-center py-10 bg-stone-50 rounded-2xl border border-stone-200/70">
+                <p className="font-bold text-slate-800 text-sm">
+                  Este consultório ainda não possui avaliações
                 </p>
-                <p className="text-sm text-slate-500 font-medium mt-1">
-                  Seja o primeiro a avaliar este espaço após o seu uso!
+                <p className="text-xs text-slate-500 mt-1">
+                  As avaliações são feitas exclusivamente por profissionais após
+                  o uso da sala.
                 </p>
               </div>
             ) : filteredReviews.length === 0 ? (
-              <div className="text-center py-10 text-slate-500 font-medium">
-                Nenhuma avaliação com essa nota.
+              <div className="text-center py-8 text-slate-500 text-xs font-medium">
+                Nenhuma avaliação com esta nota.
               </div>
             ) : (
-              <div className="space-y-6">
-                {filteredReviews.map((review) => {
+              <div className="space-y-4">
+                {filteredReviews.map((review: any) => {
                   const hasComment =
                     review.comment && review.comment.trim().length > 0;
 
                   return (
                     <div
                       key={review.id}
-                      className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm"
+                      className="bg-white p-5 rounded-2xl border border-slate-200/80"
                     >
-                      <div className="flex items-center gap-4 mb-4">
-                        <div className="w-12 h-12 rounded-full overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
+                      <div className="flex items-center gap-3 mb-3">
+                        <div className="w-10 h-10 rounded-full overflow-hidden bg-stone-100 border border-stone-200 shrink-0">
                           {review.profiles?.avatar_url ? (
                             <img
                               src={review.profiles.avatar_url}
+                              alt="Avatar"
                               className="w-full h-full object-cover"
                             />
                           ) : (
                             <div className="w-full h-full flex items-center justify-center text-slate-400">
-                              <User className="w-6 h-6" />
+                              <User className="w-5 h-5" />
                             </div>
                           )}
                         </div>
                         <div>
-                          <p className="font-black text-slate-900">
+                          <p className="font-bold text-sm text-slate-900">
                             {review.profiles?.full_name ||
                               "Profissional Verificado"}
                           </p>
-                          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                          <p className="text-[11px] font-medium text-slate-400">
                             {format(
                               parseISO(review.created_at),
-                              "dd MMM yyyy",
+                              "dd 'de' MMM, yyyy",
                               {
                                 locale: ptBR,
                               },
                             )}
                           </p>
                         </div>
-                        <div className="ml-auto flex items-center gap-1 bg-amber-50 px-3 py-1.5 rounded-xl border border-amber-100">
-                          <Star className="w-4 h-4 fill-amber-500 text-amber-500" />
-                          <span className="font-black text-amber-700">
+                        <div className="ml-auto flex items-center gap-1 bg-stone-100 px-2.5 py-1 rounded-lg">
+                          <Star className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
+                          <span className="font-bold text-xs text-slate-800">
                             {Number(review.rating).toFixed(1)}
                           </span>
                         </div>
                       </div>
 
                       {hasComment && (
-                        <p className="text-slate-600 leading-relaxed font-medium">
+                        <p className="text-slate-600 text-sm leading-relaxed">
                           "{review.comment}"
                         </p>
                       )}
 
                       {review.host_reply && (
-                        <div className="mt-5 p-5 bg-slate-50 rounded-2xl border border-slate-200 md:ml-12 relative">
-                          <div className="absolute top-0 left-6 -mt-2 w-4 h-4 bg-slate-50 border-t border-l border-slate-200 rotate-45"></div>
-                          <p className="text-xs font-black text-slate-900 mb-1 flex items-center gap-1">
+                        <div className="mt-3.5 p-3.5 bg-stone-50 rounded-xl border border-stone-200/70">
+                          <p className="text-xs font-bold text-slate-800 mb-1 flex items-center gap-1">
                             <Check className="w-3.5 h-3.5 text-[#BF4B24]" />{" "}
-                            Resposta do Anfitrião
+                            Resposta da Clínica
                           </p>
-                          <p className="text-sm font-medium text-slate-600">
+                          <p className="text-xs text-slate-600">
                             {review.host_reply}
                           </p>
                         </div>
@@ -2133,35 +2477,26 @@ export function RoomDetail(props: RoomDetailProps) {
                     </div>
                   );
                 })}
-                {filteredReviews.length > 3 && (
-                  <Button
-                    variant="outline"
-                    className="w-full h-12 rounded-xl font-bold text-slate-700 border-slate-200"
-                  >
-                    Ler todas as avaliações
-                  </Button>
-                )}
               </div>
             )}
           </div>
         </div>
       </div>
 
-      <div className="md:hidden flex-none bg-white border-t border-slate-200 p-4 pb-safe flex items-center justify-between shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)] z-50">
-        <div>
-          <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5">
+      {/* BARRA INFERIOR MOBILE INTELIGENTE */}
+      <div className="md:hidden fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 px-5 py-3.5 pb-[calc(0.875rem+env(safe-area-inset-bottom))] flex items-center justify-between shadow-[0_-8px_30px_rgba(15,23,42,0.08)] z-50">
+        <div onClick={scrollToBookingSection} className="cursor-pointer pr-2">
+          <p className="text-[11px] font-semibold text-slate-500">
             {activeTab === "hora"
               ? selectedSlots.length > 0
-                ? `Total (${selectedSlots.length} horas)`
+                ? `${selectedSlots.length} ${selectedSlots.length === 1 ? "horário selecionado" : "horários selecionados"}`
                 : "A partir de"
               : activeTab === "turno"
-                ? "Estimativa Semanal"
-                : "Mensalidade"}
+                ? "Estimativa semanal"
+                : "Contrato mensal"}
           </p>
           <div className="flex items-baseline gap-1">
-            <span
-              className={`text-2xl font-black ${activeTab === "hora" ? "text-[#BF4B24]" : "text-slate-900"}`}
-            >
+            <span className="text-xl font-bold text-slate-900">
               R${" "}
               {activeTab === "hora"
                 ? selectedSlots.length > 0
@@ -2171,29 +2506,57 @@ export function RoomDetail(props: RoomDetailProps) {
                   ? totalShiftCost
                   : pricingData.monthly || 0}
             </span>
+            {activeTab === "hora" && selectedSlots.length === 0 && (
+              <span className="text-xs font-medium text-slate-500">/hora</span>
+            )}
           </div>
+          {activeTab === "hora" && selectedSlots.length === 0 && (
+            <span className="text-[11px] font-semibold text-[#BF4B24] underline underline-offset-2 block">
+              {freeSlotsForSelectedDate.length > 0
+                ? `${freeSlotsForSelectedDate.length} horários livres hoje`
+                : "Consultar datas"}
+            </span>
+          )}
         </div>
 
         {activeTab === "hora" ? (
           <Button
-            onClick={handleAction}
-            disabled={actionLoading || selectedSlots.length === 0}
-            className={`h-14 px-6 rounded-xl font-black transition-all w-[55%] text-base ${selectedSlots.length > 0 ? "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/25 active:scale-95" : "bg-slate-100 text-slate-400 shadow-none"}`}
+            onClick={() => {
+              if (selectedSlots.length === 0) {
+                scrollToBookingSection();
+              } else {
+                handleAction();
+              }
+            }}
+            disabled={actionLoading}
+            className="h-12 px-6 rounded-xl font-bold transition-all min-w-[165px] text-sm bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-sm active:scale-95"
           >
-            {actionLoading ? "A aguardar..." : "Reservar"}
+            {actionLoading
+              ? "Processando..."
+              : selectedSlots.length > 0
+                ? `Reservar (${selectedSlots.length}h)`
+                : "Ver horários"}
           </Button>
         ) : (
           <Button
-            onClick={handleAction}
-            disabled={
-              actionLoading ||
-              (activeTab === "turno" &&
-                (!selectedShift || selectedDays.length === 0))
-            }
-            className="h-14 px-6 rounded-xl font-black bg-slate-900 text-white w-[55%] text-base flex gap-2 active:scale-95 shadow-xl shadow-slate-900/10"
+            onClick={() => {
+              if (
+                activeTab === "turno" &&
+                (!selectedShift || selectedDays.length === 0)
+              ) {
+                scrollToBookingSection();
+              } else {
+                handleAction();
+              }
+            }}
+            disabled={actionLoading}
+            className="h-12 px-6 rounded-xl font-bold bg-slate-900 hover:bg-slate-800 text-white min-w-[165px] text-sm flex gap-2 active:scale-95"
           >
             {actionLoading ? (
-              "A aguardar..."
+              "Processando..."
+            ) : activeTab === "turno" &&
+              (!selectedShift || selectedDays.length === 0) ? (
+              "Escolher turno"
             ) : (
               <>
                 <MessageSquare className="w-4 h-4" /> Negociar
@@ -2203,6 +2566,7 @@ export function RoomDetail(props: RoomDetailProps) {
         )}
       </div>
 
+      {/* GALERIA DE TODAS AS FOTOS */}
       {isAllPhotosOpen && (
         <div className="fixed inset-0 z-[150] bg-white flex flex-col animate-in fade-in duration-200">
           <div className="flex-none p-4 flex justify-between items-center bg-white border-b border-slate-100 z-10 sticky top-0">
@@ -2213,7 +2577,7 @@ export function RoomDetail(props: RoomDetailProps) {
               <ArrowLeft className="w-5 h-5 text-slate-900" />
             </button>
             <span className="font-bold text-slate-900 text-sm">
-              Todas as fotos
+              Fotos do espaço ({allImages.length})
             </span>
             <button
               onClick={handleShare}
@@ -2223,14 +2587,18 @@ export function RoomDetail(props: RoomDetailProps) {
             </button>
           </div>
           <div className="flex-1 overflow-y-auto bg-white px-2 py-4 md:px-6">
-            <div className="grid grid-cols-2 gap-1 md:max-w-4xl md:mx-auto md:gap-4">
-              {allImages.map((img, idx) => {
+            <div className="grid grid-cols-2 gap-1.5 md:max-w-4xl md:mx-auto md:gap-4">
+              {allImages.map((img: string, idx: number) => {
                 const isFullWidth = idx % 3 === 0;
                 return (
                   <div
                     key={idx}
                     onClick={() => openLightbox(idx)}
-                    className={`relative w-full bg-slate-100 cursor-pointer overflow-hidden md:rounded-2xl group ${isFullWidth ? "col-span-2 h-[35vh] md:h-[60vh]" : "col-span-1 h-[25vh] md:h-[40vh]"}`}
+                    className={`relative w-full bg-slate-100 cursor-pointer overflow-hidden rounded-lg md:rounded-2xl group ${
+                      isFullWidth
+                        ? "col-span-2 h-[35vh] md:h-[60vh]"
+                        : "col-span-1 h-[25vh] md:h-[40vh]"
+                    }`}
                   >
                     <Image
                       src={img}
@@ -2248,6 +2616,7 @@ export function RoomDetail(props: RoomDetailProps) {
         </div>
       )}
 
+      {/* LIGHTBOX TELA CHEIA */}
       {isLightboxOpen && (
         <div className="fixed inset-0 z-[200] bg-black text-white flex flex-col animate-in fade-in zoom-in-95 duration-200">
           <div className="flex-none p-4 flex justify-between items-center bg-transparent z-20 absolute top-0 w-full">
@@ -2257,7 +2626,7 @@ export function RoomDetail(props: RoomDetailProps) {
             >
               <ArrowLeft className="w-6 h-6 text-white" />
             </button>
-            <span className="font-medium text-sm tracking-widest bg-black/40 px-3 py-1 rounded-full backdrop-blur-md">
+            <span className="font-medium text-sm tracking-widest bg-black/50 px-3 py-1 rounded-full">
               {currentPhotoIndex + 1} / {allImages.length}
             </span>
             <button
@@ -2271,7 +2640,11 @@ export function RoomDetail(props: RoomDetailProps) {
             <button
               onClick={prevPhoto}
               disabled={currentPhotoIndex === 0}
-              className={`hidden md:flex absolute left-8 z-20 p-3 rounded-full backdrop-blur-md transition-all border border-white/20 ${currentPhotoIndex === 0 ? "bg-white/5 text-white/30 cursor-not-allowed border-transparent" : "bg-white/10 hover:bg-white/20 text-white"}`}
+              className={`hidden md:flex absolute left-8 z-20 p-3 rounded-full transition-all border border-white/20 ${
+                currentPhotoIndex === 0
+                  ? "bg-white/5 text-white/30 cursor-not-allowed border-transparent"
+                  : "bg-white/10 hover:bg-white/20 text-white"
+              }`}
             >
               <ChevronLeft className="w-8 h-8" />
             </button>
@@ -2280,7 +2653,7 @@ export function RoomDetail(props: RoomDetailProps) {
               onScroll={handleLightboxScroll}
               className="w-full h-full flex overflow-x-auto snap-x snap-mandatory scrollbar-hide scroll-smooth items-center"
             >
-              {allImages.map((img, idx) => (
+              {allImages.map((img: string, idx: number) => (
                 <div
                   key={idx}
                   className="relative w-full h-full shrink-0 snap-center snap-always flex items-center justify-center p-0 md:p-16"
@@ -2299,7 +2672,11 @@ export function RoomDetail(props: RoomDetailProps) {
             <button
               onClick={nextPhoto}
               disabled={currentPhotoIndex === allImages.length - 1}
-              className={`hidden md:flex absolute right-8 z-20 p-3 rounded-full backdrop-blur-md transition-all border border-white/20 ${currentPhotoIndex === allImages.length - 1 ? "bg-white/5 text-white/30 cursor-not-allowed border-transparent" : "bg-white/10 hover:bg-white/20 text-white"}`}
+              className={`hidden md:flex absolute right-8 z-20 p-3 rounded-full transition-all border border-white/20 ${
+                currentPhotoIndex === allImages.length - 1
+                  ? "bg-white/5 text-white/30 cursor-not-allowed border-transparent"
+                  : "bg-white/10 hover:bg-white/20 text-white"
+              }`}
             >
               <ChevronRight className="w-8 h-8" />
             </button>
@@ -2307,40 +2684,35 @@ export function RoomDetail(props: RoomDetailProps) {
         </div>
       )}
 
+      {/* MODAL DE CADASTRO INCOMPLETO */}
       {showProfileModal && (
-        <div className="fixed inset-0 z-[250] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-300">
-          <div className="bg-white rounded-3xl p-6 md:p-8 max-w-sm w-full shadow-2xl animate-in zoom-in-95 duration-300 relative">
-            <button
-              onClick={() => setShowProfileModal(false)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"
-            >
-              <AlertCircle className="w-5 h-5 opacity-0" />
-            </button>
-            <div className="w-16 h-16 bg-amber-50 border border-amber-100 rounded-full flex items-center justify-center mb-4 mx-auto shadow-sm">
-              <Crown className="w-8 h-8 text-amber-500" />
+        <div className="fixed inset-0 z-[250] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl p-6 md:p-8 max-w-sm w-full shadow-xl relative">
+            <div className="w-12 h-12 bg-stone-100 border border-stone-200 rounded-xl flex items-center justify-center mb-4 mx-auto">
+              <ShieldCheck className="w-6 h-6 text-[#BF4B24]" />
             </div>
-            <h3 className="text-xl font-black text-center text-slate-900 mb-2 tracking-tight">
-              Falta muito pouco!
+            <h3 className="text-lg font-bold text-center text-slate-900 mb-2">
+              Complete seus dados para reservar
             </h3>
-            <p className="text-sm text-center text-slate-600 font-medium mb-6 leading-relaxed">
-              Para confirmar sua reserva com total segurança, você precisa
-              atingir o <b className="text-amber-600">Nível Bronze</b>. É rápido
-              e leva menos de 1 minuto!
+            <p className="text-xs text-center text-slate-600 mb-6 leading-relaxed">
+              Para segurança da clínica e emissão do seu comprovante de acesso,
+              precisamos que você preencha seu CPF e endereço no perfil. Leva
+              menos de 1 minuto.
             </p>
-            <div className="space-y-3">
+            <div className="space-y-2.5">
               <Button
                 onClick={() => {
                   setShowProfileModal(false);
                   if (onNavigateToProfile) onNavigateToProfile();
                 }}
-                className="w-full h-12 rounded-xl font-black bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-lg shadow-orange-500/25"
+                className="w-full h-11 rounded-xl font-bold bg-[#BF4B24] hover:bg-[#9A3C1D] text-white"
               >
-                Completar Perfil
+                Completar meu perfil
               </Button>
               <Button
                 onClick={() => setShowProfileModal(false)}
                 variant="ghost"
-                className="w-full h-12 rounded-xl font-bold text-slate-500 hover:bg-slate-50"
+                className="w-full h-11 rounded-xl font-semibold text-slate-500 hover:bg-slate-50"
               >
                 Agora não
               </Button>
