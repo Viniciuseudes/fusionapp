@@ -179,62 +179,42 @@ export function RoomDetail(props: RoomDetailProps) {
     }
   };
 
-  // Navega diretamente para o módulo Fusion Pass ("Mais horas, mais desconto") e abre os pacotes
   const handleGoToFusionPass = () => {
-    const targetTier = roomData?.tier || "start";
+    const rawTier = String(roomData?.tier || "start")
+      .toLowerCase()
+      .trim();
+    const targetTier =
+      rawTier.includes("master") || rawTier.includes("premium")
+        ? "master"
+        : rawTier.includes("vip")
+          ? "vip"
+          : "start";
+
+    const targetHours = selectedPkgHours ? Number(selectedPkgHours) : null;
+
     try {
       sessionStorage.setItem(
         "fusion_preselect_pass",
         JSON.stringify({
           tier: targetTier,
-          hours: selectedPkgHours,
+          hours: targetHours,
           roomId: roomData?.id,
         }),
       );
     } catch {}
 
     if (onOpenFusionPass) {
-      onOpenFusionPass(targetTier, selectedPkgHours);
+      onOpenFusionPass(targetTier, targetHours);
       return;
     }
 
-    // Fecha o modal de detalhes da sala para revelar a tela principal onde está o Fusion Pass
+    window.dispatchEvent(
+      new CustomEvent("fusion:open-pass", {
+        detail: { tier: targetTier, hours: targetHours },
+      }),
+    );
+
     onBack();
-
-    // Após fechar o RoomDetail, localiza e aciona automaticamente o banner "Fusion Pass / Mais horas, mais desconto"
-    setTimeout(() => {
-      window.dispatchEvent(
-        new CustomEvent("fusion:open-pass", {
-          detail: { tier: targetTier, hours: selectedPkgHours },
-        }),
-      );
-
-      const candidates = Array.from(
-        document.querySelectorAll("button, a, [role='button'], div"),
-      );
-
-      const passTrigger = candidates.find((el) => {
-        const text = (el.textContent || "").toLowerCase();
-        return (
-          (text.includes("mais horas") && text.includes("mais desconto")) ||
-          text.includes("comprar pacote") ||
-          text.includes("recarregar") ||
-          text.includes("adquirir pass") ||
-          text.includes("fusion pass")
-        );
-      }) as HTMLElement | undefined;
-
-      if (passTrigger) {
-        passTrigger.scrollIntoView({ behavior: "smooth", block: "center" });
-        const clickable =
-          (passTrigger.closest("button") as HTMLElement) ||
-          (passTrigger.querySelector("button") as HTMLElement) ||
-          passTrigger;
-        clickable.click();
-      } else {
-        window.scrollTo({ top: 0, behavior: "smooth" });
-      }
-    }, 280);
   };
 
   const fetchRoomBookings = useCallback(async () => {
