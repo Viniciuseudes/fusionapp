@@ -9,6 +9,12 @@ import {
   sendBookingNotificationEmails,
   sendPaymentNotificationEmails,
 } from "@/app/actions/send-email";
+import {
+  computeWalletBalancesFIFO,
+  selectCreditTierForBooking,
+  resolveCreditHourlyValueBRL,
+  normalizeCreditTier,
+} from "@/utils/wallet-ledger";
 import { ptBR } from "date-fns/locale";
 import {
   format,
@@ -836,45 +842,32 @@ export function RoomDetail(props: RoomDetailProps) {
           throw new Error(summaryData.error || "Erro ao calcular valores.");
         }
 
+        // PASSO 4.1: Calcula os saldos reais usando o Motor FIFO e aplica a hierarquia Master -> VIP -> Basic
         const { data: txs } = await supabase
           .from("wallet_transactions")
-          .select("amount, tier, expires_at")
-          .eq("user_id", user.id);
+          .select("amount, tier, description, created_at, expires_at")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: true });
 
-        let masterBal = 0;
-        let vipBal = 0;
-        let startBal = 0;
-        const now = new Date();
+        const fifoBalances = computeWalletBalancesFIFO(txs || []);
+        const required = Number(
+          summaryData.creditsRequired || selectedSlots.length,
+        );
 
-        if (txs) {
-          txs.forEach((tx: any) => {
-            if (tx.amount > 0 && tx.expires_at && new Date(tx.expires_at) < now)
-              return;
-            const amt = Number(tx.amount);
-            if (tx.tier === "master") masterBal += amt;
-            else if (tx.tier === "vip") vipBal += amt;
-            else startBal += amt;
-          });
-        }
-
-        const roomTier = roomData.tier || "start";
-        let calcUsedTier = roomTier;
-        const required = summaryData.creditsRequired;
-
-        if (roomTier === "start") {
-          if (startBal >= required) calcUsedTier = "start";
-          else if (vipBal >= required) calcUsedTier = "vip";
-          else if (masterBal >= required) calcUsedTier = "master";
-        } else if (roomTier === "vip") {
-          if (vipBal >= required) calcUsedTier = "vip";
-          else if (masterBal >= required) calcUsedTier = "master";
-        } else {
-          calcUsedTier = "master";
-        }
+        const tierSelection = selectCreditTierForBooking(
+          roomData.tier,
+          required,
+          fifoBalances,
+        );
 
         setCheckoutSummary({
           ...summaryData,
-          usedTier: calcUsedTier,
+          usedTier: tierSelection.usedTier,
+          userBalance: tierSelection.availableInChosenTier,
+          hasEnoughCredits: tierSelection.hasEnoughCredits,
+          upgradeFee: tierSelection.hasEnoughCredits
+            ? 0
+            : summaryData.upgradeFee,
           lockIds: createdLockIds,
         });
         setIsCheckoutOpen(true);
@@ -965,15 +958,46 @@ export function RoomDetail(props: RoomDetailProps) {
         finalHourlyCost = Math.max(0, finalHourlyCost);
       }
 
+      // PASSO 4.2: Pagamento com Carteira gravando o valor financeiro exato do crédito utilizado
       if (method === "wallet") {
         const creditCostPerHour = finalCreditsRequired / selectedSlots.length;
-        const usedTier = checkoutSummary.usedTier || roomData.tier || "start";
+        const usedTier = normalizeCreditTier(
+          checkoutSummary.usedTier || roomData.tier || "start",
+        );
+
+        // Busca o histórico e os pacotes para apurar o valor exato em R$ do crédito consumido
+        // (Ex: Se usou crédito Master numa sala VIP, o valor da reserva reflete o custo do crédito Master)
+        const [userTxsRes, allPkgsRes, userSubsRes] = await Promise.all([
+          supabase
+            .from("wallet_transactions")
+            .select("amount, tier, description, created_at, expires_at")
+            .eq("user_id", user.id)
+            .order("created_at", { ascending: true }),
+          supabase.from("packages").select("id, tier, hours, price, active"),
+          supabase
+            .from("subscriptions")
+            .select("id, tier, hours, status")
+            .eq("user_id", user.id),
+        ]);
+
+        const { hourlyRateBrl } = resolveCreditHourlyValueBRL({
+          usedTier,
+          userTransactions: userTxsRes.data || [],
+          userSubscriptions: userSubsRes.data || [],
+          packages: allPkgsRes.data || [],
+        });
+
+        const unitBookingValueBrl = Number(
+          (hourlyRateBrl * creditCostPerHour).toFixed(2),
+        );
 
         const { error: updateError } = await supabase
           .from("bookings")
           .update({
             total_cost: creditCostPerHour,
             status: "confirmed",
+            booking_origin: `wallet_${usedTier}`,
+            agreed_value_brl: unitBookingValueBrl,
           })
           .in("id", lockIds);
 
@@ -992,7 +1016,7 @@ export function RoomDetail(props: RoomDetailProps) {
             amount: -finalCreditsRequired,
             type: "usage",
             tier: usedTier,
-            description: `Reserva em Créditos (${usedTier.toUpperCase()}): ${roomData.name}`,
+            description: `Reserva em Créditos (${usedTier.toUpperCase()} - R$ ${hourlyRateBrl.toFixed(2)}/h): ${roomData.name}`,
           });
         if (walletError) throw walletError;
 

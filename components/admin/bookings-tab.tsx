@@ -142,13 +142,13 @@ interface AdminBookingsTabProps {
 
 function normalizeTier(tier?: string | null): "start" | "vip" | "master" {
   const t = (tier || "start").toLowerCase().trim();
-  if (t.includes("master")) return "master";
+  if (t.includes("master") || t.includes("premium")) return "master";
   if (t.includes("vip")) return "vip";
   return "start";
 }
 
 function formatTierLabel(tier: "start" | "vip" | "master"): string {
-  if (tier === "master") return "Master";
+  if (tier === "master") return "Premium";
   if (tier === "vip") return "VIP";
   return "Basic";
 }
@@ -224,14 +224,14 @@ export function AdminBookingsTab({
   const [originFilter, setOriginFilter] = useState("all");
   const [search, setSearch] = useState("");
 
-  // Modal de Visualização de Reserva (Sheet)
+  // Modal de Visualização de Reserva
   const [selectedBooking, setSelectedBooking] = useState<BookingInfo | null>(
     null,
   );
   const [isViewOpen, setIsViewOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
-  // Modal de Perfil do Profissional e Injeção de Créditos (Sheet)
+  // Modal de Perfil e Créditos
   const [selectedSpecialist, setSelectedSpecialist] =
     useState<SpecialistProfile | null>(null);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -243,7 +243,7 @@ export function AdminBookingsTab({
   const [injectReason, setInjectReason] = useState("");
   const [injectLoading, setInjectLoading] = useState(false);
 
-  // Modal de Reagendamento (Dialog)
+  // Modal de Reagendamento
   const [isRescheduleOpen, setIsRescheduleOpen] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState<Date | undefined>(
     new Date(),
@@ -256,7 +256,7 @@ export function AdminBookingsTab({
   const [selectedRescheduleRoomId, setSelectedRescheduleRoomId] =
     useState<string>("");
 
-  // Modal de Nova Reserva Manual pelo Admin
+  // Modal de Nova Reserva Manual
   const [isNewBookingOpen, setIsNewBookingOpen] = useState(false);
   const [allSpecialists, setAllSpecialists] = useState<any[]>([]);
   const [allActiveRooms, setAllActiveRooms] = useState<any[]>([]);
@@ -445,7 +445,6 @@ export function AdminBookingsTab({
         contractsData.map((c: any) => [c.id, c]),
       );
 
-      // Mapeia todos os contratos de Co-Anfitrião ativos por sala para validar a data exata de cada reserva
       const activeCohostContractsListByRoomId = new Map<string, any[]>();
       contractsData.forEach((c: any) => {
         if (
@@ -459,7 +458,6 @@ export function AdminBookingsTab({
         }
       });
 
-      // Retorna o contrato do Co-Anfitrião APENAS se a reserva ocorrer a partir do start_date e até o end_date dele
       const findCohostForBookingDate = (
         roomId: string,
         bookingStartIso: string,
@@ -565,15 +563,12 @@ export function AdminBookingsTab({
         const clinicName = hostId ? hostsMap.get(hostId) : "Fusion Clinic";
         const roomTier = normalizeTier(room?.tier);
         const specialistProfile = richProfilesMap.get(b.user_id);
-
         const slotUnits = calculateSlotUnits(b.start_time, b.end_time);
 
-        // Verifica se a sala possui Co-Anfitrião vigente NA DATA DESTA RESERVA (>= start_date e <= end_date)
         const roomCohostContract = findCohostForBookingDate(
           b.room_id,
           b.start_time,
         );
-
         const linkedContract = b.contract_id
           ? contractsById.get(b.contract_id)
           : null;
@@ -588,14 +583,12 @@ export function AdminBookingsTab({
               ? Number(b.agreed_value_brl)
               : Number(linkedContract?.session_value || 0);
 
-          // Se este contrato fixo (Turno/Diária) está dentro da sala de um Co-Anfitrião ativo na data
           const isSubContractUnderCohost = Boolean(
             roomCohostContract &&
             b.contract_id &&
             b.contract_id !== roomCohostContract.id,
           );
 
-          // AQUI: Usamos os valores configurados NESTE subcontrato, e não os valores globais do Coanfitrião!
           const customPlatformFeePctForSubcontract = isSubContractUnderCohost
             ? Number(linkedContract?.platform_fee_pct ?? 20) / 100
             : Number(linkedContract?.platform_fee_pct ?? 15) / 100;
@@ -608,7 +601,6 @@ export function AdminBookingsTab({
             contractSessionVal * customPlatformFeePctForSubcontract;
           const cohostPayout =
             contractSessionVal * customCohostPctForSubcontract;
-
           const hostPayout = isSubContractUnderCohost
             ? 0
             : Math.max(0, contractSessionVal - platformFee);
@@ -677,37 +669,24 @@ export function AdminBookingsTab({
           if (roomCohostContract) {
             const cohostShare = grossVal * (cohostSplitPct / 100);
             const platformFee = Math.max(0, grossVal - cohostShare);
-            return {
-              platformFee,
-              cohostPayout: cohostShare,
-              hostPayout: 0,
-            };
+            return { platformFee, cohostPayout: cohostShare, hostPayout: 0 };
           }
           const platformFee = grossVal * 0.2;
           const netAfterPlatform = Math.max(0, grossVal - platformFee);
-          return {
-            platformFee,
-            cohostPayout: 0,
-            hostPayout: netAfterPlatform,
-          };
+          return { platformFee, cohostPayout: 0, hostPayout: netAfterPlatform };
         };
 
         const rawTotalCost = Number(b.total_cost || 0);
         const upgradeFee = Number(b.upgrade_fee_amount || 0);
         const discount = couponDiscountMap.get(b.id) || 0;
 
-        const userTxs = userWalletMap.get(b.user_id) || [];
-        const bookingTime = new Date(b.created_at).getTime();
-
-        const matchingDebit = userTxs.find((tx: any) => {
-          if (Number(tx.amount) >= 0) return false;
-          const txTime = new Date(tx.created_at).getTime();
-          return Math.abs(txTime - bookingTime) <= 10 * 60 * 1000;
-        });
-
-        const positiveTxs = userTxs.filter((tx: any) => Number(tx.amount) > 0);
-        const defaultPositiveType =
-          positiveTxs[positiveTxs.length - 1]?.type || "credit";
+        // Verifica se é uma reserva originada da carteira que já tem o agreed_value_brl registado (Ajuste do Passo 5)
+        const isWalletBooking =
+          b.booking_origin && String(b.booking_origin).startsWith("wallet_");
+        const walletOriginTier = isWalletBooking
+          ? (String(b.booking_origin).replace("wallet_", "") as
+              "start" | "vip" | "master")
+          : null;
 
         if (Number(b.agreed_value_brl) > 0 || rawTotalCost >= slotUnits * 20) {
           const baseVal =
@@ -716,6 +695,11 @@ export function AdminBookingsTab({
               : rawTotalCost;
           const finalBrl = Math.max(0, baseVal + upgradeFee - discount);
           const split = computeAvulsoSplit(finalBrl);
+
+          let originLabel = `${formatTierLabel(roomTier)} • Reserva Direta`;
+          if (isWalletBooking && walletOriginTier) {
+            originLabel = `${formatTierLabel(walletOriginTier)} • Pago com Carteira`;
+          }
 
           return {
             id: b.id,
@@ -726,12 +710,12 @@ export function AdminBookingsTab({
             status: b.status,
             total_cost: rawTotalCost,
             credits_used: slotUnits,
-            credit_tier_raw: matchingDebit?.tier || room?.tier || roomTier,
-            credit_tx_type: defaultPositiveType,
+            credit_tier_raw: walletOriginTier || room?.tier || roomTier,
+            credit_tx_type: isWalletBooking ? "usage" : "credit_card",
             credit_expires_at: null,
             gross_value_brl: finalBrl,
             hourly_rate_brl: finalBrl / slotUnits,
-            pricing_label: `${formatTierLabel(roomTier)} • Reserva Direta`,
+            pricing_label: originLabel,
             room_tier: roomTier,
             room_id: b.room_id,
             specialist_name:
@@ -751,134 +735,40 @@ export function AdminBookingsTab({
           };
         }
 
+        // Bloco legacy para reservas antigas da carteira que não tinham o agreed_value_brl guardado
         const creditsForThisSlot =
           rawTotalCost > 0 && rawTotalCost <= slotUnits * 2
             ? rawTotalCost
             : slotUnits;
-
         let creditTierUsed: "start" | "vip" | "master" = roomTier;
         let rawTierString: string = room?.tier || roomTier;
 
-        if (matchingDebit?.tier) {
-          creditTierUsed = normalizeTier(matchingDebit.tier);
-          rawTierString = matchingDebit.tier;
+        const userTxs = userWalletMap.get(b.user_id) || [];
+        const positiveTxs = userTxs.filter((tx: any) => Number(tx.amount) > 0);
+        const defaultPositiveType =
+          positiveTxs[positiveTxs.length - 1]?.type || "credit";
+
+        const userSubs = userSubsMap.get(b.user_id) || [];
+        const activeSub =
+          userSubs.find((s: any) => s.status === "ACTIVE") || userSubs[0];
+        if (activeSub) {
+          creditTierUsed = normalizeTier(activeSub.tier || roomTier);
+          rawTierString = activeSub.tier;
         }
 
-        const compatibleTiers: ("start" | "vip" | "master")[] =
-          roomTier === "master"
-            ? ["master"]
-            : roomTier === "vip"
-              ? ["vip", "master"]
-              : ["start", "vip", "master"];
-
-        const purchaseCredits = positiveTxs.filter(
-          (tx: any) =>
-            !String(tx.description || "")
-              .toLowerCase()
-              .includes("estorno"),
+        const fallbackRoomPkg = getRateFromPackageTable(
+          creditTierUsed,
+          Number(activeSub?.hours) || null,
         );
-
-        const validPriorPurchases = purchaseCredits.filter((tx: any) => {
-          const createdMs = new Date(tx.created_at).getTime();
-          const notAfterBooking = createdMs <= bookingTime + 60 * 1000;
-          const notExpiredAtBooking =
-            !tx.expires_at || new Date(tx.expires_at).getTime() >= bookingTime;
-          return notAfterBooking && notExpiredAtBooking;
-        });
-
-        const candidateCredits =
-          validPriorPurchases.length > 0
-            ? validPriorPurchases
-            : purchaseCredits;
-
-        const sourceCreditTx =
-          [...candidateCredits]
-            .reverse()
-            .find((tx: any) => normalizeTier(tx.tier) === creditTierUsed) ||
-          [...candidateCredits]
-            .reverse()
-            .find((tx: any) =>
-              compatibleTiers.includes(normalizeTier(tx.tier)),
-            ) ||
-          candidateCredits[candidateCredits.length - 1];
-
-        let detectedPackageHours: number | null = null;
-        if (sourceCreditTx) {
-          creditTierUsed = normalizeTier(sourceCreditTx.tier || roomTier);
-          if (!matchingDebit?.tier && sourceCreditTx.tier) {
-            rawTierString = sourceCreditTx.tier;
-          }
-          const txAmt = Math.round(Number(sourceCreditTx.amount));
-          const descMatch = String(sourceCreditTx.description || "").match(
-            /(\d+)\s*(?:h|hora|horas|crédito|credito)/i,
-          );
-          const candidateHours =
-            descMatch && Number(descMatch[1]) > 0
-              ? Number(descMatch[1])
-              : txAmt;
-
-          if (candidateHours > 0 && candidateHours <= 60) {
-            detectedPackageHours = candidateHours;
-          }
-        } else {
-          const userSubs = userSubsMap.get(b.user_id) || [];
-          const activeSub =
-            userSubs.find((s: any) => s.status === "ACTIVE") || userSubs[0];
-          if (activeSub) {
-            creditTierUsed = normalizeTier(activeSub.tier || roomTier);
-            if (!matchingDebit?.tier && activeSub.tier) {
-              rawTierString = activeSub.tier;
-            }
-            detectedPackageHours = Number(activeSub.hours) || null;
-          }
-        }
-
-        let { rate: resolvedHourlyRate, matchedHours } =
-          getRateFromPackageTable(creditTierUsed, detectedPackageHours);
-
-        if (resolvedHourlyRate === null && creditTierUsed !== roomTier) {
-          const fallbackRoomPkg = getRateFromPackageTable(
-            roomTier,
-            detectedPackageHours,
-          );
-          resolvedHourlyRate = fallbackRoomPkg.rate;
-          matchedHours = fallbackRoomPkg.matchedHours;
-        }
-
+        let resolvedHourlyRate = fallbackRoomPkg.rate;
         let pricingOriginLabel = "";
-        if (resolvedHourlyRate !== null) {
-          pricingOriginLabel = matchedHours
-            ? `${formatTierLabel(creditTierUsed)} • Pacote ${matchedHours}h`
-            : `${formatTierLabel(creditTierUsed)} • Crédito`;
-        } else {
-          const roomModalityRate = extractRoomModalitiesHourlyRate(
-            room?.modalities,
-            room?.address_details,
-          );
-          const categoryObj = room?.category_id
-            ? categoriesMap.get(room.category_id)
-            : null;
-          const categoryRate =
-            categoryObj && Number(categoryObj.credit_cost_per_hour) >= 15
-              ? Number(categoryObj.credit_cost_per_hour)
-              : null;
 
-          if (roomModalityRate) {
-            resolvedHourlyRate = roomModalityRate;
-            pricingOriginLabel = `${formatTierLabel(roomTier)} • Tarifa da Sala`;
-          } else if (categoryRate) {
-            resolvedHourlyRate = categoryRate;
-            pricingOriginLabel = `${formatTierLabel(roomTier)} • Categoria`;
-          } else {
-            const defaultTierRates: Record<"start" | "vip" | "master", number> =
-              {
-                start: 33.38,
-                vip: 41.13,
-                master: 60,
-              };
-            resolvedHourlyRate = defaultTierRates[roomTier];
-            pricingOriginLabel = `${formatTierLabel(roomTier)} • Padrão`;
-          }
+        if (resolvedHourlyRate !== null) {
+          pricingOriginLabel = `${formatTierLabel(creditTierUsed)} • Legado`;
+        } else {
+          resolvedHourlyRate =
+            roomTier === "master" ? 60 : roomTier === "vip" ? 41.13 : 33.38;
+          pricingOriginLabel = `${formatTierLabel(roomTier)} • Padrão`;
         }
 
         const grossBrl = Math.max(
@@ -897,8 +787,8 @@ export function AdminBookingsTab({
           total_cost: rawTotalCost,
           credits_used: creditsForThisSlot,
           credit_tier_raw: rawTierString || creditTierUsed,
-          credit_tx_type: sourceCreditTx?.type || defaultPositiveType,
-          credit_expires_at: sourceCreditTx?.expires_at || null,
+          credit_tx_type: defaultPositiveType,
+          credit_expires_at: null,
           gross_value_brl: grossBrl,
           hourly_rate_brl: resolvedHourlyRate,
           pricing_label: pricingOriginLabel,
@@ -1782,16 +1672,6 @@ export function AdminBookingsTab({
     selectedRoomDetails?.image_url || selectedRoomDetails?.images,
   );
 
-  const specialistBookingsInView = selectedSpecialist
-    ? bookings.filter(
-        (b) => b.user_id === selectedSpecialist.id && b.status !== "cancelled",
-      )
-    : [];
-  const specialistTotalSpentInView = specialistBookingsInView.reduce(
-    (acc, curr) => acc + curr.gross_value_brl,
-    0,
-  );
-
   const cleanPhoneForWa = (raw?: string | null) => {
     if (!raw) return null;
     const digits = raw.replace(/\D/g, "");
@@ -1815,8 +1695,7 @@ export function AdminBookingsTab({
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-1">
             Gestão operacional e financeira de reservas avulsas, contratos fixos
-            e sublocações de Co-Anfitrião (contabilizadas a partir do início do
-            contrato).
+            e sublocações de Co-Anfitrião.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -2086,7 +1965,7 @@ export function AdminBookingsTab({
         </div>
       </div>
 
-      {/* MODAL 0: FICHA DE PERFIL DO PROFISSIONAL + INJEÇÃO DE CRÉDITOS + ATALHO DOSSIÊ */}
+      {/* MODAL 0: FICHA DE PERFIL DO PROFISSIONAL */}
       <Sheet open={isProfileOpen} onOpenChange={setIsProfileOpen}>
         <SheetContent className="overflow-y-auto w-full sm:max-w-md">
           <SheetHeader>
@@ -2171,7 +2050,7 @@ export function AdminBookingsTab({
                   </div>
                   <div className="bg-slate-800 p-2.5 rounded-xl text-center">
                     <p className="text-[10px] font-bold text-amber-300 uppercase">
-                      Master
+                      Premium
                     </p>
                     <p className="text-base font-black text-amber-300 mt-0.5">
                       {selectedSpecialist.wallet_master}h
@@ -2215,9 +2094,9 @@ export function AdminBookingsTab({
                       }
                       className="mt-1 w-full h-9 rounded-md border border-slate-200 bg-white px-2 text-xs font-bold text-slate-800"
                     >
-                      <option value="start">Basic / Start</option>
+                      <option value="start">Basic</option>
                       <option value="vip">VIP</option>
-                      <option value="master">Master</option>
+                      <option value="master">Premium</option>
                     </select>
                   </div>
 
@@ -2382,7 +2261,7 @@ export function AdminBookingsTab({
         </SheetContent>
       </Sheet>
 
-      {/* MODAL 1: VISUALIZAR DETALHES, CONTRATO E REPASSES */}
+      {/* MODAL 1: VISUALIZAR DETALHES */}
       <Sheet open={isViewOpen} onOpenChange={setIsViewOpen}>
         <SheetContent className="overflow-y-auto w-full sm:max-w-md">
           <SheetHeader>

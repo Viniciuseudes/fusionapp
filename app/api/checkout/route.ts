@@ -7,8 +7,6 @@ import {
   sendPaymentNotificationEmails,
 } from "@/app/actions/send-email";
 
-const ASAAS_API_URL = process.env.ASAAS_API_URL || "https://api.asaas.com/v3";
-const ASAAS_API_KEY = process.env.ASAAS_API_KEY!;
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
@@ -20,7 +18,58 @@ const supabaseAdmin = createAdminClient(
   },
 );
 
-// Helper idempotente: Ativa a assinatura e injeta as horas na carteira sem duplicar
+// ============================================================================
+// RESOLVEDOR INTELIGENTE DE CREDENCIAIS E AMBIENTE DO ASAAS
+// ============================================================================
+function getAsaasConfig() {
+  const rawKey =
+    process.env.ASAAS_API_KEY ||
+    process.env.ASAAS_ACCESS_TOKEN ||
+    process.env.ASAAS_TOKEN ||
+    "";
+
+  let apiKey = rawKey.trim().replace(/^["']|["']$/g, "");
+
+  if (!apiKey) {
+    throw new Error(
+      "A variável ASAAS_API_KEY está vazia no seu ficheiro .env. Adicione ASAAS_API_KEY='$aact_...' e reinicie o servidor.",
+    );
+  }
+
+  if (apiKey.startsWith("::") || apiKey.startsWith(":")) {
+    throw new Error(
+      "O Next.js cortou o início '$aact' da sua chave no .env! Coloque a chave entre ASPAS SIMPLES no .env (ex: ASAAS_API_KEY='$aact_...') e reinicie o terminal.",
+    );
+  }
+
+  if (apiKey.startsWith("\\$")) {
+    apiKey = apiKey.slice(1);
+  }
+
+  const isSandboxKey = apiKey.toLowerCase().includes("hmlg");
+  const envUrl = (process.env.ASAAS_API_URL || "").trim().replace(/\/+$/, "");
+
+  let apiUrl = envUrl;
+  if (!apiUrl) {
+    apiUrl = isSandboxKey
+      ? "https://sandbox.asaas.com/api/v3"
+      : "https://api.asaas.com/v3";
+  } else if (isSandboxKey && !apiUrl.includes("sandbox")) {
+    apiUrl = "https://sandbox.asaas.com/api/v3";
+  } else if (
+    !isSandboxKey &&
+    apiUrl.includes("sandbox") &&
+    apiKey.includes("prod")
+  ) {
+    apiUrl = "https://api.asaas.com/v3";
+  }
+
+  return { apiKey, apiUrl };
+}
+
+// ============================================================================
+// Helper Idempotente: Ativa a assinatura e injeta as horas com [Rate:XX.XX]
+// ============================================================================
 async function activateSubscriptionAndCreditWallet(params: {
   userId: string;
   tier: string;
@@ -42,9 +91,15 @@ async function activateSubscriptionAndCreditWallet(params: {
   } = params;
 
   const normalizedTier = String(tier || "start").toLowerCase().trim();
-  const idempotencyTag = `[Asaas:${paymentId}]`;
+  const numHours = Math.max(1, Number(hours || 1));
+  const numPrice = Number(priceBrl || 0);
+  const unitHourlyRate =
+    numPrice > 0 ? (numPrice / numHours).toFixed(2) : "0.00";
 
-  // 1. Verifica se este pagamento já foi creditado anteriormente
+  const idempotencyTag = `[Asaas:${paymentId}]`;
+  const rateTag = Number(unitHourlyRate) > 0 ? `[Rate:${unitHourlyRate}]` : "";
+
+  // 1. Trava de Idempotência: Verifica se este pagamento já gerou créditos
   const { data: existingTx } = await supabaseAdmin
     .from("wallet_transactions")
     .select("id")
@@ -56,7 +111,7 @@ async function activateSubscriptionAndCreditWallet(params: {
     return { alreadyCredited: true };
   }
 
-  // 2. Atualiza assinaturas anteriores do usuário para INACTIVE e insere a nova ACTIVE
+  // 2. Desativa assinaturas antigas e ativa a nova na tabela `subscriptions`
   await supabaseAdmin
     .from("subscriptions")
     .update({ status: "INACTIVE" })
@@ -66,22 +121,22 @@ async function activateSubscriptionAndCreditWallet(params: {
   await supabaseAdmin.from("subscriptions").insert({
     user_id: userId,
     tier: normalizedTier,
-    hours: Number(hours),
+    hours: numHours,
     status: "ACTIVE",
   });
 
-  // 3. Injeta os créditos na carteira com validade de 30 dias
+  // 3. Injeta os créditos na carteira com validade de 30 dias e a tarifa por hora gravada
   const expiresAt = new Date(
     Date.now() + 30 * 24 * 60 * 60 * 1000,
   ).toISOString();
 
-  const description = `Assinatura ${packageName || `Fusion Pass (${normalizedTier.toUpperCase()})`} - +${hours}h ${idempotencyTag}`;
+  const description = `Assinatura ${packageName || `Fusion Pass (${normalizedTier.toUpperCase()})`} - +${numHours}h ${rateTag} ${idempotencyTag}`;
 
   const { error: walletErr } = await supabaseAdmin
     .from("wallet_transactions")
     .insert({
       user_id: userId,
-      amount: Number(hours),
+      amount: numHours,
       type: "credit",
       tier: normalizedTier,
       description,
@@ -92,13 +147,13 @@ async function activateSubscriptionAndCreditWallet(params: {
     throw new Error(`Erro ao creditar carteira: ${walletErr.message}`);
   }
 
-  // 4. Notifica o profissional no sino do app e por e-mail
+  // 4. Notifica o profissional no sino e por e-mail
   try {
     await supabaseAdmin.from("notifications").insert({
       user_id: userId,
       type: "subscription_active",
       title: "Seu Fusion Pass+ está Ativo!",
-      content: `Foram liberadas +${hours}h (${normalizedTier.toUpperCase()}) na sua carteira digital.`,
+      content: `Foram liberadas +${numHours}h (${normalizedTier.toUpperCase()}) na sua carteira digital.`,
       link: "/dashboard",
       is_read: false,
     });
@@ -106,11 +161,11 @@ async function activateSubscriptionAndCreditWallet(params: {
 
   sendPaymentNotificationEmails({
     userId,
-    amountBrl: Number(priceBrl),
-    creditsAdded: Number(hours),
+    amountBrl: numPrice,
+    creditsAdded: numHours,
     tier: normalizedTier,
     paymentMethod,
-    description: `${packageName || "Fusion Pass+"} (${hours}h/mês)`,
+    description: `${packageName || "Fusion Pass+"} (${numHours}h/mês)`,
   }).catch(console.error);
 
   return { alreadyCredited: false };
@@ -121,14 +176,13 @@ async function activateSubscriptionAndCreditWallet(params: {
 // ============================================================================
 export async function GET(request: Request) {
   try {
+    const { apiKey, apiUrl } = getAsaasConfig();
     const { searchParams } = new URL(request.url);
     const checkoutType = searchParams.get("checkoutType");
     const bookingId = searchParams.get("bookingId");
     const paymentId = searchParams.get("paymentId");
 
-    // ------------------------------------------------------------------------
     // FLUXO A: POLLING DE ASSINATURA / PACOTE (FUSION PASS+)
-    // ------------------------------------------------------------------------
     if (checkoutType === "package" && paymentId) {
       const supabase = await createClient();
       const {
@@ -144,8 +198,11 @@ export async function GET(request: Request) {
       const price = Number(searchParams.get("price") || 0);
       const packageName = searchParams.get("packageName") || "Fusion Pass+";
 
-      const asaasRes = await fetch(`${ASAAS_API_URL}/payments/${paymentId}`, {
-        headers: { access_token: ASAAS_API_KEY },
+      const asaasRes = await fetch(`${apiUrl}/payments/${paymentId}`, {
+        headers: {
+          access_token: apiKey,
+          "User-Agent": "FusionClinic/1.0",
+        },
         cache: "no-store",
       });
 
@@ -176,9 +233,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ confirmed: false, status: "pending" });
     }
 
-    // ------------------------------------------------------------------------
     // FLUXO B: POLLING DE RESERVA DE SALA
-    // ------------------------------------------------------------------------
     if (!bookingId) {
       return NextResponse.json(
         { error: "bookingId ou paymentId é obrigatório." },
@@ -208,9 +263,12 @@ export async function GET(request: Request) {
 
     if (booking.asaas_payment_id) {
       const asaasRes = await fetch(
-        `${ASAAS_API_URL}/payments/${booking.asaas_payment_id}`,
+        `${apiUrl}/payments/${booking.asaas_payment_id}`,
         {
-          headers: { access_token: ASAAS_API_KEY },
+          headers: {
+            access_token: apiKey,
+            "User-Agent": "FusionClinic/1.0",
+          },
           cache: "no-store",
         },
       );
@@ -249,13 +307,23 @@ export async function GET(request: Request) {
 // Helper: Busca ou Cria Cliente no Asaas garantindo CPF válido
 // ============================================================================
 async function getOrCreateAsaasCustomer(params: {
+  apiKey: string;
+  apiUrl: string;
   userId: string;
   userEmail: string;
   profile: any;
   fallbackCpf?: string;
   fallbackCep?: string;
 }) {
-  const { userId, userEmail, profile, fallbackCpf, fallbackCep } = params;
+  const {
+    apiKey,
+    apiUrl,
+    userId,
+    userEmail,
+    profile,
+    fallbackCpf,
+    fallbackCep,
+  } = params;
 
   const cleanCpf = (fallbackCpf || profile?.cpf || "").replace(/\D/g, "");
   const cleanCep = (fallbackCep || profile?.cep || "").replace(/\D/g, "");
@@ -266,7 +334,6 @@ async function getOrCreateAsaasCustomer(params: {
     );
   }
 
-  // Se o CPF ou CEP veio preenchido agora no checkout e não estava salvo no perfil, atualiza o perfil
   const profileUpdates: Record<string, any> = {};
   if (!profile?.cpf && cleanCpf) profileUpdates.cpf = cleanCpf;
   if (!profile?.cep && cleanCep) profileUpdates.cep = cleanCep;
@@ -279,26 +346,35 @@ async function getOrCreateAsaasCustomer(params: {
 
   let asaasCustomerId = "";
 
-  const searchRes = await fetch(
-    `${ASAAS_API_URL}/customers?cpfCnpj=${cleanCpf}`,
-    {
-      headers: { access_token: ASAAS_API_KEY },
+  const searchRes = await fetch(`${apiUrl}/customers?cpfCnpj=${cleanCpf}`, {
+    headers: {
+      access_token: apiKey,
+      "User-Agent": "FusionClinic/1.0",
     },
-  );
+  });
 
   if (searchRes.ok) {
     const searchData = await searchRes.json();
     if (searchData.data && searchData.data.length > 0) {
       asaasCustomerId = searchData.data[0].id;
     }
+  } else {
+    const errJson = await searchRes.json().catch(() => ({}));
+    const asaasMsg = errJson?.errors?.[0]?.description || "";
+    if (searchRes.status === 401 || asaasMsg.toLowerCase().includes("chave")) {
+      throw new Error(
+        `Chave Asaas recusada (${apiUrl.includes("sandbox") ? "Ambiente Sandbox" : "Ambiente Produção"}). Verifique no seu .env se ASAAS_API_KEY está entre aspas simples: ASAAS_API_KEY='$aact_...' e reinicie o servidor.`,
+      );
+    }
   }
 
   if (!asaasCustomerId) {
-    const createCustomerRes = await fetch(`${ASAAS_API_URL}/customers`, {
+    const createCustomerRes = await fetch(`${apiUrl}/customers`, {
       method: "POST",
       headers: {
-        access_token: ASAAS_API_KEY,
+        access_token: apiKey,
         "Content-Type": "application/json",
+        "User-Agent": "FusionClinic/1.0",
       },
       body: JSON.stringify({
         name:
@@ -315,7 +391,7 @@ async function getOrCreateAsaasCustomer(params: {
     if (!createCustomerRes.ok) {
       throw new Error(
         customerResult.errors?.[0]?.description ||
-          "Erro ao registrar cliente no Asaas.",
+          "Erro ao registar cliente no Asaas.",
       );
     }
     asaasCustomerId = customerResult.id;
@@ -329,6 +405,8 @@ async function getOrCreateAsaasCustomer(params: {
 // ============================================================================
 export async function POST(request: Request) {
   try {
+    const { apiKey, apiUrl } = getAsaasConfig();
+
     const supabase = await createClient();
     const {
       data: { user },
@@ -337,7 +415,7 @@ export async function POST(request: Request) {
 
     if (authError || !user) {
       return NextResponse.json(
-        { error: "Usuário não autenticado." },
+        { error: "Utilizador não autenticado." },
         { status: 401 },
       );
     }
@@ -358,7 +436,6 @@ export async function POST(request: Request) {
       customerCep,
     } = body;
 
-    // Busca perfil completo do profissional logado
     const { data: profile } = await supabaseAdmin
       .from("profiles")
       .select(
@@ -385,6 +462,8 @@ export async function POST(request: Request) {
 
       const { asaasCustomerId, cleanCpf, cleanCep } =
         await getOrCreateAsaasCustomer({
+          apiKey,
+          apiUrl,
           userId: user.id,
           userEmail: user.email || profile?.email || "",
           profile,
@@ -393,6 +472,7 @@ export async function POST(request: Request) {
         });
 
       const todayIso = new Date().toISOString().split("T")[0];
+      // Todas as faturas futuras geradas pelo Asaas herdam este externalReference!
       const externalRef = `sub_${user.id}_${selectedTier}_${numHours}h_${Date.now()}`;
 
       const subscriptionPayload: Record<string, any> = {
@@ -405,7 +485,6 @@ export async function POST(request: Request) {
         externalReference: externalRef,
       };
 
-      // Configuração de Cartão de Crédito para Assinatura Recorrente
       if (method === "CREDIT_CARD") {
         if (cardData?.useSavedCard && profile?.cc_token) {
           subscriptionPayload.creditCardToken = profile.cc_token;
@@ -447,11 +526,12 @@ export async function POST(request: Request) {
       }
 
       // 1. Cria a Assinatura Recorrente no Asaas (/v3/subscriptions)
-      const subRes = await fetch(`${ASAAS_API_URL}/subscriptions`, {
+      const subRes = await fetch(`${apiUrl}/subscriptions`, {
         method: "POST",
         headers: {
-          access_token: ASAAS_API_KEY,
+          access_token: apiKey,
           "Content-Type": "application/json",
+          "User-Agent": "FusionClinic/1.0",
         },
         body: JSON.stringify(subscriptionPayload),
       });
@@ -464,7 +544,6 @@ export async function POST(request: Request) {
         );
       }
 
-      // Salva o token do cartão caso o usuário tenha marcado para salvar
       if (
         method === "CREDIT_CARD" &&
         cardData?.saveCard &&
@@ -482,16 +561,18 @@ export async function POST(request: Request) {
 
       // 2. Busca a primeira cobrança gerada pela assinatura no Asaas
       const subPaymentsRes = await fetch(
-        `${ASAAS_API_URL}/subscriptions/${subResult.id}/payments`,
+        `${apiUrl}/subscriptions/${subResult.id}/payments`,
         {
-          headers: { access_token: ASAAS_API_KEY },
+          headers: {
+            access_token: apiKey,
+            "User-Agent": "FusionClinic/1.0",
+          },
           cache: "no-store",
         },
       );
       const subPaymentsData = await subPaymentsRes.json();
       const firstPayment = subPaymentsData?.data?.[0];
 
-      // 3A. Retorno para PIX: Gera o QR Code da 1ª mensalidade da assinatura
       if (method === "PIX") {
         if (!firstPayment?.id) {
           throw new Error(
@@ -500,9 +581,12 @@ export async function POST(request: Request) {
         }
 
         const pixRes = await fetch(
-          `${ASAAS_API_URL}/payments/${firstPayment.id}/pixQrCode`,
+          `${apiUrl}/payments/${firstPayment.id}/pixQrCode`,
           {
-            headers: { access_token: ASAAS_API_KEY },
+            headers: {
+              access_token: apiKey,
+              "User-Agent": "FusionClinic/1.0",
+            },
           },
         );
         const pixData = await pixRes.json();
@@ -523,12 +607,14 @@ export async function POST(request: Request) {
         });
       }
 
-      // 3B. Retorno para CARTÃO DE CRÉDITO: Verifica aprovação e libera as horas na hora
       if (method === "CREDIT_CARD") {
         if (firstPayment?.status === "REJECTED") {
-          await fetch(`${ASAAS_API_URL}/subscriptions/${subResult.id}`, {
+          await fetch(`${apiUrl}/subscriptions/${subResult.id}`, {
             method: "DELETE",
-            headers: { access_token: ASAAS_API_KEY },
+            headers: {
+              access_token: apiKey,
+              "User-Agent": "FusionClinic/1.0",
+            },
           });
           return NextResponse.json(
             {
@@ -568,7 +654,7 @@ export async function POST(request: Request) {
     }
 
     // ========================================================================
-    // ROTA 2: RESERVA AVULSA DE SALA (checkoutType === "booking" / padrão)
+    // ROTA 2: RESERVA AVULSA DE SALA
     // ========================================================================
     const targetIds: string[] =
       Array.isArray(bookingIds) && bookingIds.length > 0
@@ -680,6 +766,8 @@ export async function POST(request: Request) {
 
     const { asaasCustomerId, cleanCpf, cleanCep } =
       await getOrCreateAsaasCustomer({
+        apiKey,
+        apiUrl,
         userId: user.id,
         userEmail: user.email || profile?.email || "",
         profile,
@@ -747,11 +835,12 @@ export async function POST(request: Request) {
       }
     }
 
-    const createPaymentRes = await fetch(`${ASAAS_API_URL}/payments`, {
+    const createPaymentRes = await fetch(`${apiUrl}/payments`, {
       method: "POST",
       headers: {
-        access_token: ASAAS_API_KEY,
+        access_token: apiKey,
         "Content-Type": "application/json",
+        "User-Agent": "FusionClinic/1.0",
       },
       body: JSON.stringify(paymentPayload),
     });
@@ -774,9 +863,12 @@ export async function POST(request: Request) {
 
     if (billingType === "PIX") {
       const pixRes = await fetch(
-        `${ASAAS_API_URL}/payments/${paymentResult.id}/pixQrCode`,
+        `${apiUrl}/payments/${paymentResult.id}/pixQrCode`,
         {
-          headers: { access_token: ASAAS_API_KEY },
+          headers: {
+            access_token: apiKey,
+            "User-Agent": "FusionClinic/1.0",
+          },
         },
       );
       const pixData = await pixRes.json();

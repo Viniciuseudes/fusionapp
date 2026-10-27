@@ -33,6 +33,12 @@ import {
   Activity,
   X,
   Clock,
+  RefreshCw,
+  XCircle,
+  History,
+  TrendingUp,
+  ArrowDownToLine,
+  ArrowUpFromLine,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -47,7 +53,9 @@ import {
   FusionPassModal,
   BASE_HOURLY_RATES,
   PassTier,
+  normalizePassTier,
 } from "@/components/fusion-pass-modal";
+import { computeWalletBalancesFIFO } from "@/utils/wallet-ledger";
 
 export type RentalType = "hora" | "turno" | "fixo";
 
@@ -160,7 +168,7 @@ export function SearchTab({
     lng: number;
   } | null>(null);
 
-  // Estados de Carteira e do Modal Desacoplado do Fusion Pass+
+  // Estados da Carteira e Histórico
   const [isWalletOpen, setIsWalletOpen] = useState(false);
   const [isPassModalOpen, setIsPassModalOpen] = useState(false);
   const [passPreselect, setPassPreselect] = useState<{
@@ -173,6 +181,11 @@ export function SearchTab({
     vip: 0,
     master: 0,
   });
+  const [activeSub, setActiveSub] = useState<any>(null);
+  const [cancellingSub, setCancellingSub] = useState(false);
+  const [txHistory, setTxHistory] = useState<any[]>([]);
+  const [totalSavings, setTotalSavings] = useState(0);
+
   const [bestHourlyRates, setBestHourlyRates] = useState<
     Record<string, number>
   >({});
@@ -205,60 +218,101 @@ export function SearchTab({
     } = await supabase.auth.getUser();
     if (!user) return;
 
-    const { data: profileData } = await supabase
-      .from("profiles")
-      .select("full_name")
-      .eq("id", user.id)
-      .single();
+    const [profileRes, subRes, txRes, favRes] = await Promise.all([
+      supabase.from("profiles").select("full_name").eq("id", user.id).single(),
+      supabase
+        .from("subscriptions")
+        .select("id, tier, status, hours, created_at")
+        .eq("user_id", user.id)
+        .eq("status", "ACTIVE")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("wallet_transactions")
+        .select("amount, created_at, description, type, tier, expires_at")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false }), // Descendente para o Histórico/Extrato
+      supabase.from("favorites").select("room_id").eq("user_id", user.id),
+    ]);
 
-    const { data: txData } = await supabase
-      .from("wallet_transactions")
-      .select("amount, created_at, description, type, tier, expires_at")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false });
+    setActiveSub(subRes.data || null);
 
-    let bStart = 0,
-      bVip = 0,
-      bMaster = 0;
-    const now = new Date();
+    const allTxs = txRes.data || [];
+    setTxHistory(allTxs);
 
-    if (txData) {
-      txData.forEach((tx: any) => {
-        if (tx.amount > 0 && tx.expires_at && new Date(tx.expires_at) < now)
-          return;
-        const amt = Number(tx.amount);
-        const txTier = tx.tier?.toLowerCase() || "start";
-        if (txTier === "master" || txTier === "premium") bMaster += amt;
-        else if (txTier === "vip") bVip += amt;
-        else bStart += amt;
-      });
+    // Calcula a Economia Total do Profissional
+    let calculatedSavings = 0;
+    allTxs.forEach((tx) => {
+      if (tx.amount > 0 && tx.description) {
+        const rateMatch = tx.description.match(/\[Rate:(\d+(?:\.\d+)?)\]/i);
+        if (rateMatch) {
+          const rate = Number(rateMatch[1]);
+          const tier = normalizePassTier(tx.tier);
+          const base = BASE_HOURLY_RATES[tier] || 40;
+          if (base > rate) {
+            calculatedSavings += (base - rate) * Number(tx.amount);
+          }
+        }
+      }
+    });
+    setTotalSavings(calculatedSavings);
+
+    // O Motor FIFO precisa das transações em ordem crescente (mais antigas primeiro)
+    const fifoTxs = [...allTxs].reverse();
+    const fifoBalances = computeWalletBalancesFIFO(fifoTxs);
+
+    setWalletBalances({
+      start: fifoBalances.start,
+      vip: fifoBalances.vip,
+      master: fifoBalances.master,
+    });
+
+    if (favRes.data) {
+      setFavorites(new Set(favRes.data.map((f: any) => f.room_id)));
     }
-
-    if (bStart < 0) {
-      bVip += bStart;
-      bStart = 0;
-    }
-    if (bVip < 0) {
-      bMaster += bVip;
-      bVip = 0;
-    }
-    bStart = Math.max(0, bStart);
-    bVip = Math.max(0, bVip);
-    bMaster = Math.max(0, bMaster);
-
-    setWalletBalances({ start: bStart, vip: bVip, master: bMaster });
-
-    const { data: favData } = await supabase
-      .from("favorites")
-      .select("room_id")
-      .eq("user_id", user.id);
-    if (favData) setFavorites(new Set(favData.map((f: any) => f.room_id)));
 
     setProfile({
-      name: profileData?.full_name || "Doutor(a)",
-      balance: bStart + bVip + bMaster,
+      name: profileRes.data?.full_name || "Doutor(a)",
+      balance: fifoBalances.total,
     });
   }, [supabase]);
+
+  const handleCancelSubscription = async () => {
+    if (
+      !confirm(
+        "Tem certeza que deseja cancelar a renovação automática do seu Fusion Pass+?\n\nNenhuma nova cobrança será feita no seu cartão de crédito e suas horas atuais continuarão disponíveis na carteira até a data de vencimento.",
+      )
+    ) {
+      return;
+    }
+
+    setCancellingSub(true);
+    try {
+      const res = await fetch("/api/subscriptions/cancel", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(
+          data.error || "Não foi possível cancelar a assinatura.",
+        );
+      }
+
+      toast({
+        title: "Renovação automática cancelada",
+        description: data.message,
+      });
+      setActiveSub(null);
+      await fetchWalletData();
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro ao cancelar assinatura",
+        description: err.message,
+      });
+    } finally {
+      setCancellingSub(false);
+    }
+  };
 
   useEffect(() => {
     async function fetchData() {
@@ -1028,14 +1082,17 @@ export function SearchTab({
         )}
       </header>
 
+      {/* TELA DE CARTEIRA (SALDO FUSION) COMPLETAMENTE DESENHADA */}
       {isWalletOpen ? (
         <div className="mx-auto w-full max-w-5xl px-4 -mt-6 relative z-20 animate-in fade-in slide-in-from-bottom-2 duration-300">
-          <div className="bg-white rounded-3xl p-8 md:p-10 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 relative overflow-hidden mb-10">
+          {/* CARD 1: SALDO, COMPOSIÇÃO E ASSINATURA */}
+          <div className="bg-white rounded-3xl p-8 md:p-10 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 relative overflow-hidden mb-6">
             <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-orange-50 via-transparent to-transparent rounded-full blur-3xl -translate-y-1/2 translate-x-1/3 pointer-events-none" />
+
             <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-8">
               <div>
                 <p className="text-slate-500 font-bold uppercase tracking-wider text-xs mb-2 flex items-center gap-2">
-                  <Wallet className="w-5 h-5" /> Saldo Total
+                  <Wallet className="w-5 h-5" /> Saldo Total Disponível
                 </p>
                 <div className="flex items-baseline gap-2">
                   <span className="text-6xl font-black text-slate-900 tracking-tight">
@@ -1045,9 +1102,13 @@ export function SearchTab({
                     Horas
                   </span>
                 </div>
+                <p className="text-xs text-slate-400 font-medium mt-2 max-w-md">
+                  Créditos Premium podem ser usados em todas as salas. Créditos
+                  VIP nas salas VIP e Basic.
+                </p>
               </div>
 
-              <div className="bg-slate-50 border border-slate-100/80 rounded-2xl p-6 min-w-[240px]">
+              <div className="bg-slate-50 border border-slate-100/80 rounded-2xl p-6 min-w-[250px]">
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4">
                   Composição do Saldo
                 </p>
@@ -1078,6 +1139,200 @@ export function SearchTab({
                   </div>
                 </div>
               </div>
+            </div>
+
+            {/* PAINEL DE GESTÃO DA ASSINATURA RECORRENTE (NOVO) */}
+            <div className="relative z-10 mt-8 pt-6 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              {activeSub ? (
+                <>
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge className="bg-emerald-100 text-emerald-800 border-0 text-xs font-bold flex items-center gap-1">
+                        <RefreshCw className="w-3 h-3" /> Assinatura Mensal
+                        Ativa
+                      </Badge>
+                      <span className="text-sm font-black text-slate-900 uppercase">
+                        Plano{" "}
+                        {activeSub.tier === "master"
+                          ? "Premium"
+                          : activeSub.tier === "vip"
+                            ? "VIP"
+                            : "Basic"}{" "}
+                        ({activeSub.hours}h/mês)
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 font-medium max-w-xl">
+                      Suas horas renovam automaticamente. Se cancelar, o seu
+                      cartão não será mais cobrado e mantém o saldo atual até
+                      expirar.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() =>
+                        handleOpenPassWithTier(
+                          activeSub.tier === "master"
+                            ? "master"
+                            : activeSub.tier === "vip"
+                              ? "vip"
+                              : "start",
+                          activeSub.hours,
+                        )
+                      }
+                      className="rounded-xl border-slate-200 text-slate-700 font-bold text-xs h-10 px-4"
+                    >
+                      Alterar Plano
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={cancellingSub}
+                      onClick={handleCancelSubscription}
+                      className="rounded-xl border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 font-bold text-xs h-10 px-4"
+                    >
+                      {cancellingSub ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />A
+                          cancelar no Asaas...
+                        </>
+                      ) : (
+                        <>
+                          <XCircle className="w-3.5 h-3.5 mr-1.5" />
+                          Cancelar renovação automática
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between w-full gap-3">
+                  <div>
+                    <p className="text-sm font-bold text-slate-900">
+                      Não possui assinatura com renovação automática ativa
+                    </p>
+                    <p className="text-xs text-slate-500 font-medium mt-0.5">
+                      Assine um plano do Fusion Pass+ para receber horas todo
+                      mês com desconto exclusivo.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={() => handleOpenPassWithTier("vip")}
+                    className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold text-xs rounded-xl h-10 px-5 shrink-0"
+                  >
+                    Ver Planos Fusion Pass+
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* CARD 2: EXTRATO DA CARTEIRA E ECONOMIA TOTAL (NOVO) */}
+          <div className="bg-white rounded-3xl p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 mb-10">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 border-b border-slate-100 pb-4 gap-4">
+              <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                <History className="w-5 h-5 text-[#BF4B24]" /> Extrato da
+                Carteira
+              </h3>
+
+              {/* Medidor de Economia */}
+              {totalSavings > 0 && (
+                <div className="bg-emerald-50 border border-emerald-100 px-4 py-2.5 rounded-xl flex items-center gap-2">
+                  <TrendingUp className="w-5 h-5 text-emerald-600" />
+                  <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider">
+                    Economia c/ Pacotes:
+                  </span>
+                  <span className="text-base font-black text-emerald-600">
+                    R${" "}
+                    {totalSavings.toLocaleString("pt-BR", {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Lista Cronológica de Transações */}
+            <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 scrollbar-hide">
+              {txHistory.length === 0 ? (
+                <div className="text-center py-8">
+                  <Wallet className="w-10 h-10 text-slate-200 mx-auto mb-3" />
+                  <p className="text-sm font-bold text-slate-500">
+                    Nenhuma movimentação encontrada.
+                  </p>
+                </div>
+              ) : (
+                txHistory.map((tx: any, idx: number) => {
+                  const isCredit = Number(tx.amount) > 0;
+                  const amt = Math.abs(Number(tx.amount));
+                  const txDate = tx.created_at
+                    ? format(new Date(tx.created_at), "dd/MM/yyyy 'às' HH:mm")
+                    : "Data não disponível";
+
+                  return (
+                    <div
+                      key={tx.id || idx}
+                      className="flex items-start gap-4 p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors"
+                    >
+                      <div
+                        className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                          isCredit
+                            ? "bg-emerald-100 text-emerald-600"
+                            : "bg-orange-100 text-[#BF4B24]"
+                        }`}
+                      >
+                        {isCredit ? (
+                          <ArrowDownToLine className="w-5 h-5" />
+                        ) : (
+                          <ArrowUpFromLine className="w-5 h-5" />
+                        )}
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <p className="text-sm font-bold text-slate-900 truncate">
+                            {tx.description?.replace(/\[Asaas:.*?\]/g, "") ||
+                              (isCredit
+                                ? "Recarga de Créditos"
+                                : "Uso de Créditos")}
+                          </p>
+                          <span
+                            className={`text-sm font-black whitespace-nowrap ${isCredit ? "text-emerald-600" : "text-[#BF4B24]"}`}
+                          >
+                            {isCredit ? "+" : "-"}
+                            {amt}h
+                          </span>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-medium text-slate-500">
+                          <span>{txDate}</span>
+                          <span className="flex items-center gap-1">
+                            {normalizePassTier(tx.tier) === "master" && (
+                              <Crown className="w-3 h-3 text-amber-500" />
+                            )}
+                            {normalizePassTier(tx.tier) === "vip" && (
+                              <Star className="w-3 h-3 text-slate-800" />
+                            )}
+                            {normalizePassTier(tx.tier) === "start" && (
+                              <Shield className="w-3 h-3 text-slate-400" />
+                            )}
+                            {normalizePassTier(tx.tier).toUpperCase()}
+                          </span>
+                          {isCredit && tx.expires_at && (
+                            <span className="text-slate-400">
+                              Válido até{" "}
+                              {format(new Date(tx.expires_at), "dd/MM/yyyy")}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         </div>
