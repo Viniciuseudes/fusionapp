@@ -57,7 +57,7 @@ export async function POST(request: Request) {
       if (isSubscriptionPayment) {
         const idempotencyTag = `[Asaas:${paymentId}]`;
 
-        // 1. Trava de Idempotência: Verifica se esta fatura já foi creditada (pelo polling ou por evento anterior)
+        // 1. Trava de Idempotência: Verifica se esta fatura já foi creditada
         const { data: existingTx } = await supabaseAdmin
           .from("wallet_transactions")
           .select("id")
@@ -121,6 +121,12 @@ export async function POST(request: Request) {
         const rateTag =
           Number(unitHourlyRate) > 0 ? `[Rate:${unitHourlyRate}]` : "";
 
+        // NOVA TAG DE MÉTODO DE PAGAMENTO
+        const viaTag =
+          String(payment.billingType || "").toUpperCase() === "PIX"
+            ? "[Via:PIX]"
+            : "[Via:CARTAO]";
+
         // 4. Atualiza o status da assinatura na tabela `subscriptions` para ACTIVE
         await supabaseAdmin
           .from("subscriptions")
@@ -135,7 +141,7 @@ export async function POST(request: Request) {
           status: "ACTIVE",
         });
 
-        // 5. Injeta as novas horas na carteira com validade de 30 dias e a tarifa [Rate:XX.XX]
+        // 5. Injeta as novas horas na carteira com validade de 30 dias e tags
         const expiresAt = new Date(
           Date.now() + 30 * 24 * 60 * 60 * 1000,
         ).toISOString();
@@ -145,9 +151,9 @@ export async function POST(request: Request) {
           .insert({
             user_id: userId,
             amount: hours,
-            type: "credit",
+            type: "package_purchase",
             tier,
-            description: `Assinatura Fusion Pass (${tier.toUpperCase()}) - +${hours}h ${rateTag} ${idempotencyTag}`,
+            description: `Assinatura Fusion Pass (${tier.toUpperCase()}) - +${hours}h ${viaTag} ${rateTag} ${idempotencyTag}`,
             expires_at: expiresAt,
           });
 
@@ -208,7 +214,7 @@ export async function POST(request: Request) {
       }
 
       if (bookingId) {
-        // Verifica o status antes de atualizar para não enviar e-mails duplicados se já estava confirmada
+        // Verifica o status antes de atualizar para não enviar e-mails duplicados
         const { data: beforeBooking } = await supabaseAdmin
           .from("bookings")
           .select("id, status")
@@ -297,7 +303,7 @@ export async function POST(request: Request) {
       event === "PAYMENT_DELETED" ||
       event === "PAYMENT_REFUNDED"
     ) {
-      // Só cancela na tabela `bookings` se NÃO for uma assinatura (evita erro de UUID com "sub_...")
+      // Só cancela na tabela `bookings` se NÃO for uma assinatura
       if (!isSubscriptionPayment) {
         const query = supabaseAdmin
           .from("bookings")

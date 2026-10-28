@@ -1,7 +1,15 @@
+// components/admin/overview-tab.tsx
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
 import { createClient } from "@/utils/supabase/client";
+import {
+  calculatePackageBookingArbitrage,
+  computeSubscribersBreakageReport,
+  resolveCreditHourlyValueBRL,
+  SubscriberPackageAnalytics,
+  SubscriberProfileInfo,
+} from "@/utils/wallet-ledger";
 import {
   Wallet,
   Activity,
@@ -21,6 +29,11 @@ import {
   Crown,
   Gauge,
   CalendarRange,
+  CreditCard,
+  Users,
+  MessageCircle,
+  QrCode,
+  RotateCcw,
 } from "lucide-react";
 import {
   ComposedChart,
@@ -70,34 +83,44 @@ const shiftLabels = [
 ];
 
 const PIE_COLORS = [
-  "#BF4B24",
-  "#7C3AED",
-  "#10B981",
-  "#F59E0B",
-  "#64748B",
-  "#EC4899",
   "#0F172A",
+  "#BF4B24",
+  "#475569",
+  "#94A3B8",
+  "#10B981",
+  "#D97706",
+  "#CBD5E1",
 ];
+
+export type LedgerSubgroup = "avulso" | "package" | "contract";
 
 interface LedgerEntry {
   id: string;
   booking_id: string;
-  transaction_date: string; // created_at (quando agendou/pagou) ou data da baixa do contrato
+  transaction_date: string;
   created_at: string;
   start_time: string;
   end_time: string;
   status: string;
+  subgroup: LedgerSubgroup;
   room_id: string;
   room_name: string;
+  room_tier: "start" | "vip" | "master";
+  credit_tier: "start" | "vip" | "master";
+  is_downgrade: boolean;
+  downgrade_spread_brl: number;
+  standard_fusion_fee_brl: number;
   clinic_id: string;
   clinic_name: string;
   user_id: string;
   specialist_name: string;
   specialty: string;
   is_contract: boolean;
+  is_package: boolean;
   modality_label: string;
   duration_hours: number;
   gross_brl: number;
+  room_base_brl: number;
   fusion_fee_brl: number;
   fusion_fee_pct: number;
   cohost_name: string | null;
@@ -111,20 +134,20 @@ interface RoomCapacityMetric {
   host_name: string;
   tier: "start" | "vip" | "master";
   hourly_rate: number;
-  // Passado (Período Selecionado)
   past_available_hours: number;
   past_booked_hours: number;
   past_avulso_hours: number;
+  past_package_hours: number;
   past_contract_hours: number;
   past_free_hours: number;
   past_occupancy_pct: number;
   past_potential_revenue: number;
   past_actual_revenue: number;
   past_uncaptured_revenue: number;
-  // Futuro (Próximos N dias)
   future_available_hours: number;
   future_booked_hours: number;
   future_avulso_hours: number;
+  future_package_hours: number;
   future_contract_hours: number;
   future_free_hours: number;
   future_occupancy_pct: number;
@@ -135,13 +158,13 @@ interface RoomCapacityMetric {
 
 function normalizeTier(tier?: string | null): "start" | "vip" | "master" {
   const t = (tier || "start").toLowerCase().trim();
-  if (t.includes("master")) return "master";
+  if (t.includes("master") || t.includes("premium")) return "master";
   if (t.includes("vip")) return "vip";
   return "start";
 }
 
 function formatTierLabel(tier: "start" | "vip" | "master"): string {
-  if (tier === "master") return "Master";
+  if (tier === "master") return "Premium";
   if (tier === "vip") return "VIP";
   return "Basic";
 }
@@ -268,10 +291,9 @@ function computeRoomAvailableHoursInInterval(
   }
 }
 
-// Extrai os eventos de Baixa Integral de um contrato (valor cheio no dia da baixa)
 function extractContractBaixaEvents(contract: any): {
   competence: string;
-  paidDateIso: string; // YYYY-MM-DDTHH:mm:ss
+  paidDateIso: string;
   grossBrl: number;
   fusionFeeBrl: number;
   fusionFeePct: number;
@@ -311,7 +333,6 @@ function extractContractBaixaEvents(contract: any): {
 
   const paidCompetencesMap = new Map<string, string>();
 
-  // 1. Se houver histórico de baixas salvo em schedule_config.paid_dates
   if (sched?.paid_dates && typeof sched.paid_dates === "object") {
     Object.entries(sched.paid_dates).forEach(([comp, dateStr]) => {
       if (comp && typeof dateStr === "string") {
@@ -321,7 +342,6 @@ function extractContractBaixaEvents(contract: any): {
     });
   }
 
-  // 2. Competência marcada como paga em last_paid_competence (quando o gestor dá baixa)
   const lastPaidComp = String(contract?.last_paid_competence || "").trim();
   if (lastPaidComp && /^\d{4}-\d{2}$/.test(lastPaidComp)) {
     if (!paidCompetencesMap.has(lastPaidComp)) {
@@ -365,11 +385,17 @@ const formatBRL = (val: number) =>
     maximumFractionDigits: 2,
   });
 
+const cleanPhoneForWa = (raw?: string | null) => {
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, "");
+  if (!digits) return null;
+  return digits.startsWith("55") ? digits : `55${digits}`;
+};
+
 export function AdminOverviewTab() {
-  const supabase = createClient();
+  const [supabase] = useState(() => createClient());
   const { toast } = useToast();
 
-  // `initialLoading` apenas na primeira montagem; `isRefreshing` evita desmontar a página e perder o scroll!
   const [initialLoading, setInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -385,11 +411,11 @@ export function AdminOverviewTab() {
   );
 
   // Filtro de Série do Gráfico Principal
-  const [chartView, setChartView] = useState<"both" | "avulso" | "contract">(
-    "both",
-  );
+  const [chartView, setChartView] = useState<
+    "all" | "avulso" | "package" | "contract"
+  >("all");
 
-  // Controles do Módulo de Estoque de Horas & Potencial Financeiro (Troca instantânea sem recarregar!)
+  // Controles do Módulo de Estoque de Horas & Potencial Financeiro
   const [inventoryMode, setInventoryMode] = useState<"past" | "future">("past");
   const [futureHorizonDays, setFutureHorizonDays] = useState<15 | 20 | 30>(20);
 
@@ -403,12 +429,68 @@ export function AdminOverviewTab() {
   const [activeContractsCount, setActiveContractsCount] = useState(0);
   const [avgOccupancyRate, setAvgOccupancyRate] = useState(0);
 
-  // Estados Separados: Horas Avulsas vs Contratos
+  // Subgrupo 1: Horas Avulsas
   const [avulsoGmv, setAvulsoGmv] = useState(0);
   const [avulsoTakeRate, setAvulsoTakeRate] = useState(0);
   const [avulsoBookingsCount, setAvulsoBookingsCount] = useState(0);
   const [avulsoHoursCount, setAvulsoHoursCount] = useState(0);
 
+  // Subgrupo 2: Pacotes Fusion Pass+
+  const [packageGmv, setPackageGmv] = useState(0);
+  const [packageStandardFee, setPackageStandardFee] = useState(0);
+  const [packageDowngradeSpread, setPackageDowngradeSpread] = useState(0);
+  const [packageTotalTakeRate, setPackageTotalTakeRate] = useState(0);
+  const [packageHostPayout, setPackageHostPayout] = useState(0);
+  const [packageBookingsCount, setPackageBookingsCount] = useState(0);
+  const [packageHoursCount, setPackageHoursCount] = useState(0);
+  const [packageDowngradeCount, setPackageDowngradeCount] = useState(0);
+  const [packageByTierStats, setPackageByTierStats] = useState({
+    start: { count: 0, hours: 0, gmv: 0 },
+    vip: { count: 0, hours: 0, gmv: 0 },
+    master: { count: 0, hours: 0, gmv: 0 },
+  });
+
+  // Inteligência de Assinantes (Raio-X e Breakage)
+  const [subscribersReport, setSubscribersReport] = useState<
+    SubscriberPackageAnalytics[]
+  >([]);
+  const [breakageTotals, setBreakageTotals] = useState({
+    totalSubscribersCount: 0,
+    activeSubscribersCount: 0,
+    renewedSubscribersCount: 0,
+    reactivatedSubscribersCount: 0,
+    expiringSoonCount: 0,
+    overdueCount: 0,
+    cancelledCount: 0,
+    pixSubscribersCount: 0,
+    cardSubscribersCount: 0,
+    activeMrrBrl: 0,
+    totalPurchasedHours: 0,
+    totalUsedHours: 0,
+    totalExpiredUnusedHours: 0,
+    totalActiveRemainingHours: 0,
+    totalInvestedBrl: 0,
+    totalRealizedBreakageProfitBrl: 0,
+    totalFloatingUnusedValueBrl: 0,
+    totalDowngradeSpreadProfitBrl: 0,
+  });
+
+  const [isSubscribersModalOpen, setIsSubscribersModalOpen] = useState(false);
+  const [subLifecycleFilter, setSubLifecycleFilter] = useState<
+    | "all"
+    | "active"
+    | "renewed"
+    | "reactivated"
+    | "expiring_soon"
+    | "overdue"
+    | "cancelled"
+  >("all");
+  const [subPaymentFilter, setSubPaymentFilter] = useState<
+    "all" | "PIX" | "CREDIT_CARD"
+  >("all");
+  const [subscriberSearch, setSubscriberSearch] = useState("");
+
+  // Subgrupo 3: Contratos Fixos
   const [contractGmv, setContractGmv] = useState(0);
   const [contractTakeRate, setContractTakeRate] = useState(0);
   const [contractBookingsCount, setContractBookingsCount] = useState(0);
@@ -421,16 +503,15 @@ export function AdminOverviewTab() {
   const [topRooms, setTopRooms] = useState<any[]>([]);
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
 
-  // Dados brutos em memória para cálculo instantâneo de 15d / 20d / 30d sem reload
   const [baseRoomsForCapacity, setBaseRoomsForCapacity] = useState<any[]>([]);
   const [futureResolvedEntries, setFutureResolvedEntries] = useState<
     LedgerEntry[]
   >([]);
 
-  // Controles do Modal de Extrato Bancário (Ledger via Dialog Portal)
+  // Controles do Modal de Extrato Bancário (Ledger)
   const [isLedgerOpen, setIsLedgerOpen] = useState(false);
   const [ledgerOriginFilter, setLedgerOriginFilter] = useState<
-    "all" | "avulso" | "contract"
+    "all" | "avulso" | "package" | "contract"
   >("all");
   const [ledgerClinicFilter, setLedgerClinicFilter] = useState<string>("all");
   const [ledgerSearch, setLedgerSearch] = useState("");
@@ -439,6 +520,11 @@ export function AdminOverviewTab() {
     async function fetchRealBI() {
       setIsRefreshing(true);
       try {
+        // Sincroniza automaticamente no banco o valor exato pago no Asaas em assinaturas anteriores
+        await fetch("/api/subscriptions/sync-prices", { method: "POST" }).catch(
+          () => {},
+        );
+
         const now = new Date();
         let startDateObj = startOfDay(subDays(now, 30));
         let endDateObj = endOfDay(now);
@@ -466,7 +552,6 @@ export function AdminOverviewTab() {
           }
         }
 
-        // Busca sempre 30 dias para a frente de uma só vez; os botões +15d, +20d e +30d filtram em memória sem recarregar a página!
         const maxFutureEndObj = endOfDay(addDays(now, 30));
         const daysCount = Math.max(
           1,
@@ -480,6 +565,8 @@ export function AdminOverviewTab() {
           packagesRes,
           categoriesRes,
           contractsRes,
+          allWalletRes,
+          allSubsRes,
         ] = await Promise.all([
           supabase
             .from("bookings")
@@ -507,12 +594,20 @@ export function AdminOverviewTab() {
             .from("room_categories")
             .select("id, name, credit_cost_per_hour, upgrade_fee_per_hour"),
           supabase.from("room_contracts").select("*"),
+          supabase
+            .from("wallet_transactions")
+            .select(
+              "id, user_id, amount, type, description, tier, created_at, expires_at",
+            )
+            .order("created_at", { ascending: true }),
+          supabase
+            .from("subscriptions")
+            .select("id, user_id, tier, hours, status, created_at"),
         ]);
 
         if (bookingsByStartRes.error) throw bookingsByStartRes.error;
         if (roomsRes.error) throw roomsRes.error;
 
-        // Unifica reservas sem duplicidade
         const unifiedBookingsMap = new Map<string, any>();
         (bookingsByStartRes.data || []).forEach((b: any) =>
           unifiedBookingsMap.set(b.id, b),
@@ -524,13 +619,21 @@ export function AdminOverviewTab() {
 
         const roomsData = roomsRes.data || [];
         const contractsData = contractsRes.data || [];
+        const allPackagesData = packagesRes.data || [];
+        const allWalletData = allWalletRes.data || [];
+        const allSubsData = allSubsRes.data || [];
 
         const bookingIds = allFetchedBookings
           .map((b: any) => b.id)
           .filter(Boolean);
+
         const userIds = [
           ...new Set(
-            allFetchedBookings.map((b: any) => b.user_id).filter(Boolean),
+            [
+              ...allFetchedBookings.map((b: any) => b.user_id),
+              ...allWalletData.map((w: any) => w.user_id),
+              ...allSubsData.map((s: any) => s.user_id),
+            ].filter(Boolean),
           ),
         ];
         const contractSpecialistIds = [
@@ -545,40 +648,38 @@ export function AdminOverviewTab() {
           ...new Set([...userIds, ...contractSpecialistIds, ...hostIds]),
         ];
 
-        const [profilesRes, walletRes, subsRes, couponsRes] = await Promise.all(
-          [
-            allProfileIds.length > 0
-              ? supabase
-                  .from("profiles")
-                  .select("id, full_name, specialty")
-                  .in("id", allProfileIds)
-              : Promise.resolve({ data: [] as any[], error: null }),
-            userIds.length > 0
-              ? supabase
-                  .from("wallet_transactions")
-                  .select(
-                    "id, user_id, amount, type, description, tier, created_at, expires_at",
-                  )
-                  .in("user_id", userIds)
-                  .order("created_at", { ascending: true })
-              : Promise.resolve({ data: [] as any[], error: null }),
-            userIds.length > 0
-              ? supabase
-                  .from("subscriptions")
-                  .select("id, user_id, tier, hours, status, created_at")
-                  .in("user_id", userIds)
-              : Promise.resolve({ data: [] as any[], error: null }),
-            bookingIds.length > 0
-              ? supabase
-                  .from("coupon_uses")
-                  .select("booking_id, discount_applied")
-                  .in("booking_id", bookingIds)
-              : Promise.resolve({ data: [] as any[], error: null }),
-          ],
-        );
+        const [profilesRes, couponsRes] = await Promise.all([
+          allProfileIds.length > 0
+            ? supabase
+                .from("profiles")
+                .select(
+                  "id, full_name, email, phone, whatsapp, cc_last4, cc_brand, specialty",
+                )
+                .in("id", allProfileIds)
+            : Promise.resolve({ data: [] as any[], error: null }),
+          bookingIds.length > 0
+            ? supabase
+                .from("coupon_uses")
+                .select("booking_id, discount_applied")
+                .in("booking_id", bookingIds)
+            : Promise.resolve({ data: [] as any[], error: null }),
+        ]);
 
         if (profilesRes.error) throw profilesRes.error;
         const profilesData = profilesRes.data || [];
+
+        const subscriberProfilesMap = new Map<string, SubscriberProfileInfo>();
+        profilesData.forEach((u: any) => {
+          subscriberProfilesMap.set(u.id, {
+            full_name: u.full_name,
+            email: u.email,
+            phone: u.phone,
+            whatsapp: u.whatsapp,
+            cc_last4: u.cc_last4,
+            cc_brand: u.cc_brand,
+          });
+        });
+
         const profilesMap = new Map<string, any>(
           profilesData.map((p: any) => [p.id, p]),
         );
@@ -616,7 +717,7 @@ export function AdminOverviewTab() {
           master: new Map<number, number>(),
         };
 
-        (packagesRes.data || []).forEach((pkg: any) => {
+        allPackagesData.forEach((pkg: any) => {
           const t = normalizeTier(pkg.tier);
           const h = Math.max(1, Number(pkg.hours) || 1);
           const rawPrice = Number(pkg.price) || 0;
@@ -638,14 +739,14 @@ export function AdminOverviewTab() {
         });
 
         const userWalletMap = new Map<string, any[]>();
-        (walletRes.data || []).forEach((tx: any) => {
+        allWalletData.forEach((tx: any) => {
           const list = userWalletMap.get(tx.user_id) || [];
           list.push(tx);
           userWalletMap.set(tx.user_id, list);
         });
 
         const userSubsMap = new Map<string, any[]>();
-        (subsRes.data || []).forEach((sub: any) => {
+        allSubsData.forEach((sub: any) => {
           const list = userSubsMap.get(sub.user_id) || [];
           list.push(sub);
           userSubsMap.set(sub.user_id, list);
@@ -714,6 +815,11 @@ export function AdminOverviewTab() {
           return defaultTierRates[roomTier];
         };
 
+        const downgradeStatsByUser = new Map<
+          string,
+          { count: number; spreadProfitBrl: number }
+        >();
+
         const resolveBookingLedgerEntry = (b: any): LedgerEntry => {
           const room = roomsMap.get(b.room_id);
           const roomTier = normalizeTier(room?.tier);
@@ -740,9 +846,7 @@ export function AdminOverviewTab() {
               String(b.booking_origin).startsWith("contract")),
           );
 
-          // 1. Reserva de CONTRATO:
-          // Conta apenas as HORAS OCUPADAS (duration_hours), mas tem valor R$ 0 na sessão diária,
-          // pois o valor cheio do contrato entra integralmente apenas no dia da BAIXA!
+          // SUBGRUPO 3: CONTRATOS FIXOS
           if (isContractBooking) {
             const feePct = Number(linkedContract?.platform_fee_pct ?? 15);
             const cType =
@@ -763,8 +867,14 @@ export function AdminOverviewTab() {
               start_time: b.start_time,
               end_time: b.end_time,
               status: b.status,
+              subgroup: "contract",
               room_id: b.room_id,
               room_name: room?.name || "Sala Removida",
+              room_tier: roomTier,
+              credit_tier: roomTier,
+              is_downgrade: false,
+              downgrade_spread_brl: 0,
+              standard_fusion_fee_brl: 0,
               clinic_id: room?.host_id || "fusion",
               clinic_name: clinicName,
               user_id: b.user_id,
@@ -772,9 +882,11 @@ export function AdminOverviewTab() {
                 linkedContract?.specialist_name || specialistName,
               specialty,
               is_contract: true,
+              is_package: false,
               modality_label: modalityLabel,
               duration_hours: slotUnits,
               gross_brl: 0,
+              room_base_brl: 0,
               fusion_fee_brl: 0,
               fusion_fee_pct: feePct,
               cohost_name: null,
@@ -783,37 +895,97 @@ export function AdminOverviewTab() {
             };
           }
 
-          // Verifica Co-Anfitrião ativo para sublocação
           const roomCohost = activeCohostByRoomId.get(b.room_id);
           const cohostName = roomCohost?.specialist_name || null;
           const cohostSplitPct = roomCohost
             ? Number(roomCohost.cohost_split_pct || 0)
             : 0;
 
-          const computeAvulsoSplit = (grossVal: number) => {
-            const fusionFee = grossVal * 0.2;
-            const netAfterFusion = Math.max(0, grossVal - fusionFee);
-            const cohostPayout =
-              cohostSplitPct > 0 ? netAfterFusion * (cohostSplitPct / 100) : 0;
-            const hostPayout = Math.max(0, netAfterFusion - cohostPayout);
-            return { fusionFee, cohostPayout, hostPayout };
-          };
-
           const rawTotalCost = Number(b.total_cost || 0);
           const upgradeFee = Number(b.upgrade_fee_amount || 0);
           const discount = couponDiscountMap.get(b.id) || 0;
 
-          // 2. Reserva Avulsa Direta em R$
-          if (
-            Number(b.agreed_value_brl) > 0 ||
-            rawTotalCost >= slotUnits * 20
-          ) {
-            const baseVal =
+          const isExplicitWalletOrigin =
+            b.booking_origin && String(b.booking_origin).startsWith("wallet_");
+          const isLegacyWalletOrigin =
+            !b.booking_origin &&
+            Number(b.agreed_value_brl || 0) === 0 &&
+            rawTotalCost > 0 &&
+            rawTotalCost <= slotUnits * 2;
+
+          const isPackageBooking = Boolean(
+            isExplicitWalletOrigin || isLegacyWalletOrigin,
+          );
+
+          // SUBGRUPO 2: PACOTES FUSION PASS+
+          if (isPackageBooking) {
+            const userTxs = userWalletMap.get(b.user_id) || [];
+            const userSubs = userSubsMap.get(b.user_id) || [];
+            const activeSub =
+              userSubs.find((s: any) => s.status === "ACTIVE") || userSubs[0];
+
+            let creditTierUsed: "start" | "vip" | "master" =
+              isExplicitWalletOrigin
+                ? normalizeTier(String(b.booking_origin).replace("wallet_", ""))
+                : activeSub
+                  ? normalizeTier(activeSub.tier)
+                  : roomTier;
+
+            const bookingTime = b.created_at
+              ? new Date(b.created_at).getTime()
+              : new Date(b.start_time).getTime();
+
+            if (!isExplicitWalletOrigin) {
+              const matchingDebit = userTxs.find((tx: any) => {
+                if (Number(tx.amount) >= 0) return false;
+                const txTime = new Date(tx.created_at).getTime();
+                return Math.abs(txTime - bookingTime) <= 10 * 60 * 1000;
+              });
+              if (matchingDebit?.tier) {
+                creditTierUsed = normalizeTier(matchingDebit.tier);
+              }
+            }
+
+            const detectedPackageHours = Number(activeSub?.hours) || 16;
+
+            // Puxa o valor exato pago na assinatura/renovação ([Paid:XX.XX] / [Rate:XX.XXXX])
+            const { hourlyRateBrl: exactUserCreditRate, matchedHours } =
+              resolveCreditHourlyValueBRL({
+                usedTier: creditTierUsed,
+                userTransactions: userTxs,
+                userSubscriptions: userSubs,
+                packages: allPackagesData,
+                bookingTimestampMs: bookingTime,
+              });
+
+            const creditHourlyRate =
               Number(b.agreed_value_brl) > 0
-                ? Number(b.agreed_value_brl)
-                : rawTotalCost;
-            const rev = Math.max(0, baseVal + upgradeFee - discount);
-            const split = computeAvulsoSplit(rev);
+                ? Number(b.agreed_value_brl) / slotUnits
+                : exactUserCreditRate;
+
+            const arbitrage = calculatePackageBookingArbitrage({
+              creditTierRaw: creditTierUsed,
+              roomTierRaw: roomTier,
+              creditsUsed: slotUnits,
+              creditHourlyRateBrl: creditHourlyRate,
+              matchedPackageHours: matchedHours || detectedPackageHours,
+              packages: allPackagesData,
+              cohostSplitPct: roomCohost ? cohostSplitPct : null,
+            });
+
+            const rev = Math.max(
+              0,
+              arbitrage.grossCreditValueBrl + upgradeFee - discount,
+            );
+
+            const modalityLabel = arbitrage.isDowngrade
+              ? `Pacote ${formatTierLabel(creditTierUsed)} → Sala ${formatTierLabel(roomTier)}`
+              : `Pacote ${formatTierLabel(creditTierUsed)} (${matchedHours || detectedPackageHours}h)`;
+
+            const effectivePct =
+              rev > 0
+                ? Math.round((arbitrage.totalPlatformProfitBrl / rev) * 100)
+                : 20;
 
             return {
               id: b.id,
@@ -823,158 +995,56 @@ export function AdminOverviewTab() {
               start_time: b.start_time,
               end_time: b.end_time,
               status: b.status,
+              subgroup: "package",
               room_id: b.room_id,
               room_name: room?.name || "Sala Removida",
+              room_tier: roomTier,
+              credit_tier: creditTierUsed,
+              is_downgrade: arbitrage.isDowngrade,
+              downgrade_spread_brl: arbitrage.downgradeSpreadProfitBrl,
+              standard_fusion_fee_brl: arbitrage.standardPlatformFeeBrl,
               clinic_id: room?.host_id || "fusion",
               clinic_name: clinicName,
               user_id: b.user_id,
               specialist_name: specialistName,
               specialty,
               is_contract: false,
-              modality_label: `Avulso • ${formatTierLabel(roomTier)} Direto`,
+              is_package: true,
+              modality_label: modalityLabel,
               duration_hours: slotUnits,
               gross_brl: rev,
-              fusion_fee_brl: split.fusionFee,
-              fusion_fee_pct: 20,
+              room_base_brl: arbitrage.roomBaseValueBrl,
+              fusion_fee_brl: arbitrage.totalPlatformProfitBrl,
+              fusion_fee_pct: effectivePct,
               cohost_name: cohostName,
-              cohost_payout_brl: split.cohostPayout,
-              host_payout_brl: split.hostPayout,
+              cohost_payout_brl: arbitrage.cohostPayoutBrl,
+              host_payout_brl: arbitrage.hostPayoutBrl,
             };
           }
 
-          // 3. Reserva Avulsa via Créditos / Pacotes
-          const creditsForThisSlot =
-            rawTotalCost > 0 && rawTotalCost <= slotUnits * 2
-              ? rawTotalCost
-              : slotUnits;
+          // SUBGRUPO 1: HORAS AVULSAS DIRETAS
+          const computeAvulsoSplit = (grossVal: number) => {
+            const fusionFee = grossVal * 0.2;
+            const netAfterFusion = Math.max(0, grossVal - fusionFee);
+            const cohostPayout =
+              cohostSplitPct > 0 ? netAfterFusion * (cohostSplitPct / 100) : 0;
+            const hostPayout = Math.max(0, netAfterFusion - cohostPayout);
+            return { fusionFee, cohostPayout, hostPayout };
+          };
 
-          const userTxs = userWalletMap.get(b.user_id) || [];
-          const bookingTime = b.created_at
-            ? new Date(b.created_at).getTime()
-            : new Date(b.start_time).getTime();
+          const baseAvulsoVal =
+            Number(b.agreed_value_brl) > 0
+              ? Number(b.agreed_value_brl)
+              : rawTotalCost >= slotUnits * 20
+                ? rawTotalCost
+                : (roomTier === "master" ? 80 : roomTier === "vip" ? 45 : 40) *
+                  slotUnits;
 
-          let creditTierUsed: "start" | "vip" | "master" = roomTier;
-          const matchingDebit = userTxs.find((tx: any) => {
-            if (Number(tx.amount) >= 0) return false;
-            const txTime = new Date(tx.created_at).getTime();
-            return Math.abs(txTime - bookingTime) <= 10 * 60 * 1000;
-          });
-          if (matchingDebit?.tier) {
-            creditTierUsed = normalizeTier(matchingDebit.tier);
-          }
-
-          const compatibleTiers: ("start" | "vip" | "master")[] =
-            roomTier === "master"
-              ? ["master"]
-              : roomTier === "vip"
-                ? ["vip", "master"]
-                : ["start", "vip", "master"];
-
-          const purchaseCredits = userTxs.filter(
-            (tx: any) =>
-              Number(tx.amount) > 0 &&
-              !String(tx.description || "")
-                .toLowerCase()
-                .includes("estorno"),
-          );
-
-          const validPriorPurchases = purchaseCredits.filter((tx: any) => {
-            const createdMs = new Date(tx.created_at).getTime();
-            const notAfterBooking = createdMs <= bookingTime + 60 * 1000;
-            const notExpiredAtBooking =
-              !tx.expires_at ||
-              new Date(tx.expires_at).getTime() >= bookingTime;
-            return notAfterBooking && notExpiredAtBooking;
-          });
-
-          const candidateCredits =
-            validPriorPurchases.length > 0
-              ? validPriorPurchases
-              : purchaseCredits;
-
-          const sourceCreditTx =
-            [...candidateCredits]
-              .reverse()
-              .find((tx: any) => normalizeTier(tx.tier) === creditTierUsed) ||
-            [...candidateCredits]
-              .reverse()
-              .find((tx: any) =>
-                compatibleTiers.includes(normalizeTier(tx.tier)),
-              ) ||
-            candidateCredits[candidateCredits.length - 1];
-
-          let detectedPackageHours: number | null = null;
-          if (sourceCreditTx) {
-            creditTierUsed = normalizeTier(sourceCreditTx.tier || roomTier);
-            const txAmt = Math.round(Number(sourceCreditTx.amount));
-            const descMatch = String(sourceCreditTx.description || "").match(
-              /(\d+)\s*(?:h|hora|horas|crédito|credito)/i,
-            );
-            const candidateHours =
-              descMatch && Number(descMatch[1]) > 0
-                ? Number(descMatch[1])
-                : txAmt;
-
-            if (candidateHours > 0 && candidateHours <= 60) {
-              detectedPackageHours = candidateHours;
-            }
-          } else {
-            const userSubs = userSubsMap.get(b.user_id) || [];
-            const activeSub =
-              userSubs.find((s: any) => s.status === "ACTIVE") || userSubs[0];
-            if (activeSub) {
-              creditTierUsed = normalizeTier(activeSub.tier || roomTier);
-              detectedPackageHours = Number(activeSub.hours) || null;
-            }
-          }
-
-          let { rate: resolvedHourlyRate, matchedHours } =
-            getRateFromPackageTable(creditTierUsed, detectedPackageHours);
-
-          if (resolvedHourlyRate === null && creditTierUsed !== roomTier) {
-            const fallbackRoomPkg = getRateFromPackageTable(
-              roomTier,
-              detectedPackageHours,
-            );
-            resolvedHourlyRate = fallbackRoomPkg.rate;
-            matchedHours = fallbackRoomPkg.matchedHours;
-          }
-
-          let modalityLabel = "";
-          if (resolvedHourlyRate !== null) {
-            modalityLabel = matchedHours
-              ? `Avulso • ${formatTierLabel(creditTierUsed)} (${matchedHours}h)`
-              : `Avulso • Crédito ${formatTierLabel(creditTierUsed)}`;
-          } else {
-            const roomModalityRate = extractRoomModalitiesHourlyRate(
-              room?.modalities,
-              room?.address_details,
-            );
-            const categoryObj = room?.category_id
-              ? categoriesMap.get(room.category_id)
-              : null;
-            const categoryRate =
-              categoryObj && Number(categoryObj.credit_cost_per_hour) >= 15
-                ? Number(categoryObj.credit_cost_per_hour)
-                : null;
-
-            const defaultTierRates: Record<"start" | "vip" | "master", number> =
-              {
-                start: 33.38,
-                vip: 41.13,
-                master: 60,
-              };
-
-            resolvedHourlyRate =
-              roomModalityRate || categoryRate || defaultTierRates[roomTier];
-            modalityLabel = `Avulso • Tarifa ${formatTierLabel(roomTier)}`;
-          }
-
-          const rev = Math.max(
+          const finalAvulsoBrl = Math.max(
             0,
-            creditsForThisSlot * resolvedHourlyRate + upgradeFee - discount,
+            baseAvulsoVal + upgradeFee - discount,
           );
-          const split = computeAvulsoSplit(rev);
+          const avulsoSplit = computeAvulsoSplit(finalAvulsoBrl);
 
           return {
             id: b.id,
@@ -984,28 +1054,33 @@ export function AdminOverviewTab() {
             start_time: b.start_time,
             end_time: b.end_time,
             status: b.status,
+            subgroup: "avulso",
             room_id: b.room_id,
             room_name: room?.name || "Sala Removida",
+            room_tier: roomTier,
+            credit_tier: roomTier,
+            is_downgrade: false,
+            downgrade_spread_brl: 0,
+            standard_fusion_fee_brl: avulsoSplit.fusionFee,
             clinic_id: room?.host_id || "fusion",
             clinic_name: clinicName,
             user_id: b.user_id,
             specialist_name: specialistName,
             specialty,
             is_contract: false,
-            modality_label: modalityLabel,
+            is_package: false,
+            modality_label: `Hora Avulsa • Sala ${formatTierLabel(roomTier)}`,
             duration_hours: slotUnits,
-            gross_brl: rev,
-            fusion_fee_brl: split.fusionFee,
+            gross_brl: finalAvulsoBrl,
+            room_base_brl: finalAvulsoBrl,
+            fusion_fee_brl: avulsoSplit.fusionFee,
             fusion_fee_pct: 20,
             cohost_name: cohostName,
-            cohost_payout_brl: split.cohostPayout,
-            host_payout_brl: split.hostPayout,
+            cohost_payout_brl: avulsoSplit.cohostPayout,
+            host_payout_brl: avulsoSplit.hostPayout,
           };
         };
 
-        // ========================================================
-        // SEPARAÇÃO ENTRE PERÍODO ANALISADO E JANELA FUTURA (ATÉ 30d)
-        // ========================================================
         const startMs = startDateObj.getTime();
         const endMs = endDateObj.getTime();
         const tomorrowStartMs = startOfDay(addDays(now, 1)).getTime();
@@ -1040,6 +1115,20 @@ export function AdminOverviewTab() {
         let sumAvulsoTake = 0;
         let countAvulsoBookings = 0;
         let sumAvulsoHours = 0;
+
+        let sumPkgGmv = 0;
+        let sumPkgStandardFee = 0;
+        let sumPkgDowngradeSpread = 0;
+        let sumPkgTotalTake = 0;
+        let sumPkgHostPayout = 0;
+        let countPkgBookings = 0;
+        let sumPkgHours = 0;
+        let countPkgDowngrades = 0;
+        const pkgTierAcc = {
+          start: { count: 0, hours: 0, gmv: 0 },
+          vip: { count: 0, hours: 0, gmv: 0 },
+          master: { count: 0, hours: 0, gmv: 0 },
+        };
 
         let sumContractGmv = 0;
         let sumContractTake = 0;
@@ -1089,12 +1178,14 @@ export function AdminOverviewTab() {
             host_name: hostProfile?.full_name || "Fusion Clinic",
             revenue: 0,
             avulsoRevenue: 0,
+            packageRevenue: 0,
             contractRevenue: 0,
             platformFee: 0,
             hostNet: 0,
             bookings: 0,
             occupiedHours: 0,
             avulsoHours: 0,
+            packageHours: 0,
             contractHours: 0,
             pastAvailHours,
             hasContracts: roomContracts.length > 0,
@@ -1106,7 +1197,6 @@ export function AdminOverviewTab() {
         const useMonthlyGrouping =
           timeFilter === "ytd" || (timeFilter === "custom" && daysCount > 62);
 
-        // 1. Processa reservas (Avulsas somam R$ e horas; Contratos somam APENAS horas ocupadas e mapa de calor)
         periodEntries.forEach((entry) => {
           if (entry.user_id) {
             doctorBookingCounts.set(
@@ -1120,7 +1210,6 @@ export function AdminOverviewTab() {
             ? parseISO(entry.end_time)
             : null;
 
-          // Mapa de calor conta todas as sessões físicas (avulso + contrato)
           const dayOfWeek = getDay(startDateBookingObj);
           const startH = getHours(startDateBookingObj);
           const endH =
@@ -1141,8 +1230,7 @@ export function AdminOverviewTab() {
             }
           });
 
-          if (entry.is_contract) {
-            // Sessão de contrato: contabiliza apenas horas ocupadas e demanda da especialidade (sem diluir valor no gráfico!)
+          if (entry.subgroup === "contract") {
             sumContractHours += entry.duration_hours;
 
             if (!specMap[entry.specialty]) {
@@ -1158,15 +1246,9 @@ export function AdminOverviewTab() {
             return;
           }
 
-          // Sessão Avulsa: contabiliza faturamento, taxas, gráfico e horas
           totalGmv += entry.gross_brl;
           totalTakeRate += entry.fusion_fee_brl;
           totalHostNet += entry.host_payout_brl + entry.cohost_payout_brl;
-
-          sumAvulsoGmv += entry.gross_brl;
-          sumAvulsoTake += entry.fusion_fee_brl;
-          countAvulsoBookings += 1;
-          sumAvulsoHours += entry.duration_hours;
 
           const refDateObj = parseISO(entry.transaction_date);
           const dateKey = useMonthlyGrouping
@@ -1180,6 +1262,8 @@ export function AdminOverviewTab() {
               platformFee: 0,
               avulsoGmv: 0,
               avulsoFee: 0,
+              packageGmv: 0,
+              packageFee: 0,
               contractGmv: 0,
               contractFee: 0,
               order: startOfDay(refDateObj).getTime(),
@@ -1188,34 +1272,79 @@ export function AdminOverviewTab() {
 
           revMap[dateKey].totalGmv += entry.gross_brl;
           revMap[dateKey].platformFee += entry.fusion_fee_brl;
-          revMap[dateKey].avulsoGmv += entry.gross_brl;
-          revMap[dateKey].avulsoFee += entry.fusion_fee_brl;
+
+          if (entry.subgroup === "package") {
+            sumPkgGmv += entry.gross_brl;
+            sumPkgStandardFee += entry.standard_fusion_fee_brl;
+            sumPkgDowngradeSpread += entry.downgrade_spread_brl;
+            sumPkgTotalTake += entry.fusion_fee_brl;
+            sumPkgHostPayout += entry.host_payout_brl + entry.cohost_payout_brl;
+            countPkgBookings += 1;
+            sumPkgHours += entry.duration_hours;
+
+            if (entry.is_downgrade) {
+              countPkgDowngrades += 1;
+              const cur = downgradeStatsByUser.get(entry.user_id) || {
+                count: 0,
+                spreadProfitBrl: 0,
+              };
+              downgradeStatsByUser.set(entry.user_id, {
+                count: cur.count + 1,
+                spreadProfitBrl:
+                  cur.spreadProfitBrl + entry.downgrade_spread_brl,
+              });
+            }
+
+            pkgTierAcc[entry.credit_tier].count += 1;
+            pkgTierAcc[entry.credit_tier].hours += entry.duration_hours;
+            pkgTierAcc[entry.credit_tier].gmv += entry.gross_brl;
+
+            revMap[dateKey].packageGmv += entry.gross_brl;
+            revMap[dateKey].packageFee += entry.fusion_fee_brl;
+
+            if (roomStats[entry.room_id]) {
+              roomStats[entry.room_id].revenue += entry.gross_brl;
+              roomStats[entry.room_id].packageRevenue += entry.gross_brl;
+              roomStats[entry.room_id].platformFee += entry.fusion_fee_brl;
+              roomStats[entry.room_id].hostNet +=
+                entry.host_payout_brl + entry.cohost_payout_brl;
+              roomStats[entry.room_id].bookings += 1;
+              roomStats[entry.room_id].occupiedHours += entry.duration_hours;
+              roomStats[entry.room_id].packageHours += entry.duration_hours;
+            }
+          } else {
+            sumAvulsoGmv += entry.gross_brl;
+            sumAvulsoTake += entry.fusion_fee_brl;
+            countAvulsoBookings += 1;
+            sumAvulsoHours += entry.duration_hours;
+
+            revMap[dateKey].avulsoGmv += entry.gross_brl;
+            revMap[dateKey].avulsoFee += entry.fusion_fee_brl;
+
+            if (roomStats[entry.room_id]) {
+              roomStats[entry.room_id].revenue += entry.gross_brl;
+              roomStats[entry.room_id].avulsoRevenue += entry.gross_brl;
+              roomStats[entry.room_id].platformFee += entry.fusion_fee_brl;
+              roomStats[entry.room_id].hostNet +=
+                entry.host_payout_brl + entry.cohost_payout_brl;
+              roomStats[entry.room_id].bookings += 1;
+              roomStats[entry.room_id].occupiedHours += entry.duration_hours;
+              roomStats[entry.room_id].avulsoHours += entry.duration_hours;
+            }
+          }
 
           if (!specMap[entry.specialty]) {
             specMap[entry.specialty] = { count: 0, revenue: 0 };
           }
           specMap[entry.specialty].count += 1;
           specMap[entry.specialty].revenue += entry.gross_brl;
-
-          if (roomStats[entry.room_id]) {
-            roomStats[entry.room_id].revenue += entry.gross_brl;
-            roomStats[entry.room_id].avulsoRevenue += entry.gross_brl;
-            roomStats[entry.room_id].platformFee += entry.fusion_fee_brl;
-            roomStats[entry.room_id].hostNet +=
-              entry.host_payout_brl + entry.cohost_payout_brl;
-            roomStats[entry.room_id].bookings += 1;
-            roomStats[entry.room_id].occupiedHours += entry.duration_hours;
-            roomStats[entry.room_id].avulsoHours += entry.duration_hours;
-          }
         });
 
-        // =========================================================================
-        // 2. PROCESSA AS BAIXAS INTEGRAIS DE CONTRATOS (VALOR TOTAL NO DIA DA BAIXA)
-        // =========================================================================
         const contractBaixaLedgerEntries: LedgerEntry[] = [];
 
         contractsData.forEach((c: any) => {
           const room = roomsMap.get(c.room_id);
+          const roomTier = normalizeTier(room?.tier);
           const hostProfile = room?.host_id
             ? profilesMap.get(room.host_id)
             : null;
@@ -1244,7 +1373,6 @@ export function AdminOverviewTab() {
             const paidMs = paidDateObj.getTime();
 
             if (paidMs >= startMs && paidMs <= endMs) {
-              // Soma o valor cheio do contrato no faturamento do período!
               totalGmv += ev.grossBrl;
               totalTakeRate += ev.fusionFeeBrl;
               totalHostNet += ev.hostPayoutBrl;
@@ -1253,7 +1381,6 @@ export function AdminOverviewTab() {
               sumContractTake += ev.fusionFeeBrl;
               countContractBookings += 1;
 
-              // Injeta o valor cheio do contrato APENAS no dia exato da baixa no gráfico!
               const dateKey = useMonthlyGrouping
                 ? format(paidDateObj, "MMM/yy", { locale: ptBR })
                 : format(paidDateObj, "dd/MM", { locale: ptBR });
@@ -1265,6 +1392,8 @@ export function AdminOverviewTab() {
                   platformFee: 0,
                   avulsoGmv: 0,
                   avulsoFee: 0,
+                  packageGmv: 0,
+                  packageFee: 0,
                   contractGmv: 0,
                   contractFee: 0,
                   order: startOfDay(paidDateObj).getTime(),
@@ -1288,7 +1417,6 @@ export function AdminOverviewTab() {
                 roomStats[c.room_id].hostNet += ev.hostPayoutBrl;
               }
 
-              // Adiciona o lançamento único da baixa integral no Extrato Bancário
               contractBaixaLedgerEntries.push({
                 id: `baixa_${c.id}_${ev.competence}`,
                 booking_id: c.id,
@@ -1297,17 +1425,25 @@ export function AdminOverviewTab() {
                 start_time: ev.paidDateIso,
                 end_time: ev.paidDateIso,
                 status: "completed",
+                subgroup: "contract",
                 room_id: c.room_id,
                 room_name: room?.name || "Sala",
+                room_tier: roomTier,
+                credit_tier: roomTier,
+                is_downgrade: false,
+                downgrade_spread_brl: 0,
+                standard_fusion_fee_brl: ev.fusionFeeBrl,
                 clinic_id: room?.host_id || "fusion",
                 clinic_name: clinicName,
                 user_id: c.specialist_id || "",
                 specialist_name: c.specialist_name || "Locatário Contrato",
                 specialty,
                 is_contract: true,
+                is_package: false,
                 modality_label: `${modalityLabel} (Baixa ${ev.competence})`,
                 duration_hours: roomContractHoursInPeriod,
                 gross_brl: ev.grossBrl,
+                room_base_brl: ev.grossBrl,
                 fusion_fee_brl: ev.fusionFeeBrl,
                 fusion_fee_pct: ev.fusionFeePct,
                 cohost_name: null,
@@ -1318,6 +1454,18 @@ export function AdminOverviewTab() {
           });
         });
 
+        // 3. Inteligência de Assinantes (Exclusivo Compras Fusion Pass+ via PIX/Cartão)
+        const breakageReport = computeSubscribersBreakageReport({
+          allWalletTransactions: allWalletData,
+          allSubscriptions: allSubsData,
+          allPackages: allPackagesData,
+          profilesMap: subscriberProfilesMap,
+          downgradeStatsByUser,
+        });
+
+        setSubscribersReport(breakageReport.subscribers);
+        setBreakageTotals(breakageReport.totals);
+
         const activeContractsList = contractsData.filter(
           (c: any) => c.status === "active",
         );
@@ -1327,10 +1475,11 @@ export function AdminOverviewTab() {
           if (cnt >= 2) recurringDocs += 1;
         });
 
-        // No Extrato Bancário entram as reservas avulsas + os lançamentos integrais de baixa de contrato
-        const avulsoLedgerEntries = periodEntries.filter((e) => !e.is_contract);
+        const nonContractLedgerEntries = periodEntries.filter(
+          (e) => !e.is_contract,
+        );
         setLedgerEntries([
-          ...avulsoLedgerEntries,
+          ...nonContractLedgerEntries,
           ...contractBaixaLedgerEntries,
         ]);
         setFutureResolvedEntries(futureEntries);
@@ -1343,6 +1492,16 @@ export function AdminOverviewTab() {
         setAvulsoTakeRate(sumAvulsoTake);
         setAvulsoBookingsCount(countAvulsoBookings);
         setAvulsoHoursCount(sumAvulsoHours);
+
+        setPackageGmv(sumPkgGmv);
+        setPackageStandardFee(sumPkgStandardFee);
+        setPackageDowngradeSpread(sumPkgDowngradeSpread);
+        setPackageTotalTakeRate(sumPkgTotalTake);
+        setPackageHostPayout(sumPkgHostPayout);
+        setPackageBookingsCount(countPkgBookings);
+        setPackageHoursCount(sumPkgHours);
+        setPackageDowngradeCount(countPkgDowngrades);
+        setPackageByTierStats(pkgTierAcc);
 
         setContractGmv(sumContractGmv);
         setContractTakeRate(sumContractTake);
@@ -1450,9 +1609,6 @@ export function AdminOverviewTab() {
     fetchRealBI();
   }, [supabase, timeFilter, customStartDate, customEndDate, toast]);
 
-  // =========================================================================
-  // CÁLCULO EM MEMÓRIA DE +15d, +20d E +30d (ZERO RELOAD E ZERO SCROLL JUMP!)
-  // =========================================================================
   const roomCapacityMetrics: RoomCapacityMetric[] = useMemo(() => {
     const now = new Date();
     const futureStartObj = startOfDay(addDays(now, 1));
@@ -1470,7 +1626,6 @@ export function AdminOverviewTab() {
         const pastPotentialRev = Math.max(r.revenue, pastAvail * r.hourlyRate);
         const pastUncapturedRev = Math.max(0, pastPotentialRev - r.revenue);
 
-        // Calcula a capacidade futura desta sala para o horizonte selecionado (15, 20 ou 30 dias)
         const futureAvailHours = computeRoomAvailableHoursInInterval(
           r.rawRoom,
           futureStartObj,
@@ -1485,13 +1640,17 @@ export function AdminOverviewTab() {
 
         let futureBookedHours = 0;
         let futureAvulsoHours = 0;
+        let futurePackageHours = 0;
         let futureContractHours = 0;
         let futureLockedRevenue = 0;
 
         roomFutureBookings.forEach((fe) => {
           futureBookedHours += fe.duration_hours;
           futureLockedRevenue += fe.gross_brl;
-          if (fe.is_contract) futureContractHours += fe.duration_hours;
+          if (fe.subgroup === "contract")
+            futureContractHours += fe.duration_hours;
+          else if (fe.subgroup === "package")
+            futurePackageHours += fe.duration_hours;
           else futureAvulsoHours += fe.duration_hours;
         });
 
@@ -1513,6 +1672,7 @@ export function AdminOverviewTab() {
           past_available_hours: pastAvail,
           past_booked_hours: r.occupiedHours,
           past_avulso_hours: r.avulsoHours,
+          past_package_hours: r.packageHours,
           past_contract_hours: r.contractHours,
           past_free_hours: pastFree,
           past_occupancy_pct: pastOccPct,
@@ -1522,6 +1682,7 @@ export function AdminOverviewTab() {
           future_available_hours: futAvail,
           future_booked_hours: futureBookedHours,
           future_avulso_hours: futureAvulsoHours,
+          future_package_hours: futurePackageHours,
           future_contract_hours: futureContractHours,
           future_free_hours: futFree,
           future_occupancy_pct: futOccPct,
@@ -1534,7 +1695,7 @@ export function AdminOverviewTab() {
   }, [baseRoomsForCapacity, futureResolvedEntries, futureHorizonDays]);
 
   const handleOpenBankStatement = (
-    origin: "all" | "avulso" | "contract" = "all",
+    origin: "all" | "avulso" | "package" | "contract" = "all",
   ) => {
     setLedgerOriginFilter(origin);
     setLedgerClinicFilter("all");
@@ -1550,12 +1711,11 @@ export function AdminOverviewTab() {
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
   }, [ledgerEntries]);
 
-  // Extrato ordenado pela data em que a reserva foi AGENDADA/PAGA ou da BAIXA DO CONTRATO (`transaction_date`)
   const processedLedger = useMemo(() => {
     const q = ledgerSearch.toLowerCase().trim();
     const filtered = ledgerEntries.filter((e) => {
-      if (ledgerOriginFilter === "avulso" && e.is_contract) return false;
-      if (ledgerOriginFilter === "contract" && !e.is_contract) return false;
+      if (ledgerOriginFilter !== "all" && e.subgroup !== ledgerOriginFilter)
+        return false;
       if (ledgerClinicFilter !== "all" && e.clinic_id !== ledgerClinicFilter)
         return false;
       if (!q) return true;
@@ -1637,12 +1797,84 @@ export function AdminOverviewTab() {
     );
   }, [roomCapacityMetrics]);
 
+  const filteredSubscribers = useMemo(() => {
+    return subscribersReport.filter((s) => {
+      if (subLifecycleFilter === "active" && !s.isCurrentlyActive) return false;
+      if (subLifecycleFilter === "renewed" && !s.hasRenewed) return false;
+      if (subLifecycleFilter === "reactivated" && !s.hasReactivated)
+        return false;
+      if (subLifecycleFilter === "expiring_soon" && !s.isExpiringSoon)
+        return false;
+      if (subLifecycleFilter === "overdue" && !s.isOverdue) return false;
+      if (subLifecycleFilter === "cancelled" && !s.isCancelled) return false;
+
+      if (subPaymentFilter === "PIX" && s.paymentMethod === "CREDIT_CARD")
+        return false;
+      if (subPaymentFilter === "CREDIT_CARD" && s.paymentMethod === "PIX")
+        return false;
+
+      if (!subscriberSearch.trim()) return true;
+      const q = subscriberSearch.toLowerCase().trim();
+      return (
+        s.specialistName.toLowerCase().includes(q) ||
+        s.specialistEmail.toLowerCase().includes(q)
+      );
+    });
+  }, [
+    subscribersReport,
+    subLifecycleFilter,
+    subPaymentFilter,
+    subscriberSearch,
+  ]);
+
+  const downloadCSV = (content: string, fileName: string) => {
+    const bom = "\uFEFF";
+    const blob = new Blob([bom + content], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", fileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleExportSubscribersCSV = () => {
+    if (filteredSubscribers.length === 0) {
+      return toast({ title: "Sem assinantes para exportar." });
+    }
+    let csv =
+      "Assinante;E-mail;WhatsApp;Plano;Metodo Pagamento;Ciclo / Status;Meses Assinados;Reativado;Ultimo Pagamento;Vencimento Ciclo;Horas Compradas;Horas Usadas;Saldo Ativo;Breakage Expirado (R$);Ganho Downgrade (R$);Total Pago (R$)\n";
+    filteredSubscribers.forEach((s) => {
+      const tierLbl = s.activePlanTier
+        ? formatTierLabel(s.activePlanTier)
+        : "Basic";
+      const methodLbl =
+        s.paymentMethod === "PIX"
+          ? "PIX"
+          : s.paymentMethod === "MIXED"
+            ? "PIX + Cartao"
+            : `Cartao ${s.cardLast4 ? `final ${s.cardLast4}` : ""}`;
+      const lastDt = s.lastPaymentDate
+        ? format(parseISO(s.lastPaymentDate), "dd/MM/yyyy")
+        : "-";
+      const expDt = s.currentExpiresAt
+        ? format(parseISO(s.currentExpiresAt), "dd/MM/yyyy")
+        : "-";
+      csv += `"${s.specialistName}";"${s.specialistEmail}";"${s.specialistPhone || ""}";"${tierLbl} (${s.activePlanHours || 0}h)";"${methodLbl}";"${s.lifecycleStatus}";${s.monthsSubscribed};${s.hasReactivated ? "SIM" : "NAO"};${lastDt};${expDt};${s.purchasedHoursTotal};${s.usedHoursTotal};${s.activeRemainingHours};${s.realizedBreakageProfitBrl.toFixed(2).replace(".", ",")};${s.downgradeSpreadProfitBrl.toFixed(2).replace(".", ",")};${s.totalInvestedBrl.toFixed(2).replace(".", ",")}\n`;
+    });
+    downloadCSV(
+      csv,
+      `Fusion_Assinantes_${format(new Date(), "yyyy-MM-dd")}.csv`,
+    );
+  };
+
   const handleExportLedgerCSV = () => {
     if (processedLedger.length === 0) {
       return toast({ title: "Sem lançamentos para exportar." });
     }
     let csv =
-      "Data do Agendamento / Baixa;Data da Sessao / Competencia;Codigo Transacao;Clinica;Sala;Profissional;Especialidade;Natureza;Modalidade;Horas;Entrada Bruta GMV (R$);Repasse Clinica/CoHost (R$);Taxa Fusion (%);Credito Liquido Fusion (R$);Saldo Acumulado Fusion (R$)\n";
+      "Data do Agendamento / Baixa;Data da Sessao / Competencia;Codigo Transacao;Subgrupo;Clinica;Sala;Profissional;Especialidade;Modalidade;Horas;Entrada Bruta GMV (R$);Base Sala Entregue (R$);Repasse Clinica/CoHost (R$);Ganho Extra Downgrade (R$);Credito Liquido Total Fusion (R$);Saldo Acumulado Fusion (R$)\n";
 
     [...processedLedger].reverse().forEach((row) => {
       const createdDt = format(
@@ -1652,29 +1884,27 @@ export function AdminOverviewTab() {
       const sessionDt = row.is_contract
         ? `Baixa Integral (${format(parseISO(row.start_time), "dd/MM/yyyy")})`
         : `${format(parseISO(row.start_time), "dd/MM/yyyy HH:mm")}-${format(parseISO(row.end_time), "HH:mm")}`;
-      const nat = row.is_contract ? "CONTRATO FIXO (BAIXA)" : "HORA AVULSA";
+      const nat =
+        row.subgroup === "contract"
+          ? "3. CONTRATO FIXO"
+          : row.subgroup === "package"
+            ? "2. PACOTE FUSION PASS+"
+            : "1. HORA AVULSA";
       const hostTotal = row.host_payout_brl + row.cohost_payout_brl;
 
-      csv += `${createdDt};${sessionDt};#${row.booking_id.slice(0, 8)};"${row.clinic_name}";"${row.room_name}";"${row.specialist_name}";"${row.specialty}";${nat};"${row.modality_label}";${row.duration_hours};${row.gross_brl.toFixed(2).replace(".", ",")};-${hostTotal.toFixed(2).replace(".", ",")};${row.fusion_fee_pct}%;${row.fusion_fee_brl.toFixed(2).replace(".", ",")};${row.running_fusion_balance.toFixed(2).replace(".", ",")}\n`;
+      csv += `${createdDt};${sessionDt};#${row.booking_id.slice(0, 8)};"${nat}";"${row.clinic_name}";"${row.room_name}";"${row.specialist_name}";"${row.specialty}";"${row.modality_label}";${row.duration_hours};${row.gross_brl.toFixed(2).replace(".", ",")};${row.room_base_brl.toFixed(2).replace(".", ",")};-${hostTotal.toFixed(2).replace(".", ",")};${row.downgrade_spread_brl.toFixed(2).replace(".", ",")};${row.fusion_fee_brl.toFixed(2).replace(".", ",")};${row.running_fusion_balance.toFixed(2).replace(".", ",")}\n`;
     });
 
-    const blob = new Blob(["\uFEFF" + csv], {
-      type: "text/csv;charset=utf-8;",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.setAttribute(
-      "download",
+    downloadCSV(
+      csv,
       `Extrato_Contabil_Fusion_${format(new Date(), "yyyy-MM-dd")}.csv`,
     );
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
   };
 
-  const totalBookingsCount = avulsoBookingsCount + contractBookingsCount;
-  const totalHoursOccupied = avulsoHoursCount + contractHoursCount;
+  const totalBookingsCount =
+    avulsoBookingsCount + packageBookingsCount + contractBookingsCount;
+  const totalHoursOccupied =
+    avulsoHoursCount + packageHoursCount + contractHoursCount;
   const avgTicketPerBooking =
     totalBookingsCount > 0 ? gmv / totalBookingsCount : 0;
   const revPerOccupiedHour =
@@ -1684,7 +1914,11 @@ export function AdminOverviewTab() {
       ? Math.round((recurringDoctorsCount / activeDoctors) * 100)
       : 0;
   const avulsoSharePct = gmv > 0 ? Math.round((avulsoGmv / gmv) * 100) : 0;
+  const packageSharePct = gmv > 0 ? Math.round((packageGmv / gmv) * 100) : 0;
   const contractSharePct = gmv > 0 ? Math.round((contractGmv / gmv) * 100) : 0;
+
+  const totalPackageNetProfit =
+    packageTotalTakeRate + breakageTotals.totalRealizedBreakageProfitBrl;
 
   const getHeatmapColor = (intensity: number) => {
     if (intensity === 0) return "bg-slate-50 border-slate-100 text-slate-300";
@@ -1695,6 +1929,49 @@ export function AdminOverviewTab() {
     if (intensity <= 12)
       return "bg-[#BF4B24]/85 border-[#BF4B24] text-white font-black";
     return "bg-[#9A3C1D] border-[#7c2f15] text-white font-black shadow-xs";
+  };
+
+  const getSubscriberLifecycleBadge = (sub: SubscriberPackageAnalytics) => {
+    if (sub.isCancelled) {
+      return (
+        <span className="text-[10px] font-semibold bg-red-50 text-red-700 px-2 py-0.5 rounded">
+          Cancelado
+        </span>
+      );
+    }
+    if (sub.isOverdue) {
+      return (
+        <span className="text-[10px] font-semibold bg-red-100 text-red-800 px-2 py-0.5 rounded">
+          Atrasado ({Math.abs(sub.daysUntilExpiry || 0)}d)
+        </span>
+      );
+    }
+    if (sub.isExpiringSoon) {
+      return (
+        <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 px-2 py-0.5 rounded">
+          Vence em {sub.daysUntilExpiry}d
+        </span>
+      );
+    }
+    if (sub.hasReactivated) {
+      return (
+        <span className="text-[10px] font-semibold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded inline-flex items-center gap-1">
+          <RotateCcw className="w-2.5 h-2.5" /> Reativado (Voltou)
+        </span>
+      );
+    }
+    if (sub.hasRenewed) {
+      return (
+        <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded">
+          Renovado • Ativo
+        </span>
+      );
+    }
+    return (
+      <span className="text-[10px] font-semibold bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
+        Novo (1º Mês)
+      </span>
+    );
   };
 
   if (initialLoading) {
@@ -1708,14 +1985,14 @@ export function AdminOverviewTab() {
   return (
     <div className="p-4 lg:p-8 w-full pb-32 font-sans text-slate-900 bg-[#F8FAFC] print:p-0">
       {/* ==================================================================== */}
-      {/* HEADER BI EXECUTIVO + FILTROS DE DATA + BOTÃO DO EXTRATO BANCÁRIO */}
+      {/* HEADER BI EXECUTIVO E FILTROS DE DATA                                */}
       {/* ==================================================================== */}
       <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 pb-6 mb-6 border-b border-slate-200 print:mb-4">
         <div>
           <div className="flex items-center gap-2">
-            <Badge className="bg-orange-100 text-[#BF4B24] border-0 font-black text-[10px] uppercase tracking-wider px-2.5 py-0.5">
-              Business Intelligence & Yield
-            </Badge>
+            <span className="text-[11px] font-bold uppercase tracking-widest text-slate-400">
+              Visão Geral Executiva
+            </span>
             {isRefreshing && (
               <span className="inline-flex items-center gap-1 text-xs font-bold text-[#BF4B24]">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1723,18 +2000,18 @@ export function AdminOverviewTab() {
               </span>
             )}
           </div>
-          <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-2.5 mt-1.5">
-            <Crown className="w-7 h-7 text-amber-500" />
+          <h1 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight flex items-center gap-2 mt-1">
+            <Crown className="w-6 h-6 text-amber-500" />
             Centro de Comando Fusion
           </h1>
-          <p className="text-sm text-slate-500 font-medium mt-0.5">
-            Análise executiva de faturamento (Avulso vs. Contratos na Baixa),
-            auditoria de extrato e inteligência de estoque de horas das salas.
+          <p className="text-sm text-slate-500 mt-0.5">
+            Faturamento por canal (Horas Avulsas, Pacotes e Contratos Fixos) e
+            capacidade instalada.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 print:hidden">
-          <div className="flex items-center bg-white border border-slate-200 p-1 rounded-xl shadow-2xs">
+          <div className="flex items-center bg-white border border-slate-200 p-1 rounded-xl">
             {[
               { id: "7d", label: "7 Dias" },
               { id: "30d", label: "30 Dias" },
@@ -1745,9 +2022,9 @@ export function AdminOverviewTab() {
                 key={filter.id}
                 type="button"
                 onClick={() => setTimeFilter(filter.id as any)}
-                className={`px-3.5 py-2 rounded-lg text-xs font-bold whitespace-nowrap transition-all ${
+                className={`px-3.5 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
                   timeFilter === filter.id
-                    ? "bg-slate-900 text-white shadow-xs"
+                    ? "bg-slate-900 text-white"
                     : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
                 }`}
               >
@@ -1757,40 +2034,48 @@ export function AdminOverviewTab() {
           </div>
 
           {timeFilter === "custom" && (
-            <div className="flex items-center bg-white border-2 border-[#BF4B24]/30 rounded-xl px-3 py-1.5 shadow-2xs">
-              <CalendarIcon className="w-4 h-4 text-[#BF4B24] mr-2 shrink-0" />
+            <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5">
+              <CalendarIcon className="w-4 h-4 text-slate-400 mr-2 shrink-0" />
               <input
                 type="date"
                 value={customStartDate}
                 onChange={(e) => setCustomStartDate(e.target.value)}
-                className="bg-transparent border-0 text-xs font-black text-slate-800 outline-none w-28 tabular-nums"
+                className="bg-transparent border-0 text-xs font-semibold text-slate-800 outline-none w-28 tabular-nums"
               />
-              <span className="text-slate-400 font-bold px-1.5 text-xs">
-                até
-              </span>
+              <span className="text-slate-400 px-1.5 text-xs">até</span>
               <input
                 type="date"
                 value={customEndDate}
                 onChange={(e) => setCustomEndDate(e.target.value)}
-                className="bg-transparent border-0 text-xs font-black text-slate-800 outline-none w-28 tabular-nums"
+                className="bg-transparent border-0 text-xs font-semibold text-slate-800 outline-none w-28 tabular-nums"
               />
             </div>
           )}
 
           <Button
             type="button"
+            variant="outline"
+            onClick={() => setIsSubscribersModalOpen(true)}
+            className="h-10 rounded-xl border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-semibold text-xs px-4 shadow-2xs"
+          >
+            <Users className="w-4 h-4 mr-2 text-[#BF4B24]" />
+            Assinantes ({breakageTotals.totalSubscribersCount})
+          </Button>
+
+          <Button
+            type="button"
             onClick={() => handleOpenBankStatement("all")}
-            className="h-10 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black text-xs px-4 shadow-sm"
+            className="h-10 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs px-4 shadow-2xs"
           >
             <FileText className="w-4 h-4 mr-2" />
-            Abrir Extrato Bancário ({ledgerEntries.length})
+            Extrato Contábil ({ledgerEntries.length})
           </Button>
 
           <Button
             type="button"
             onClick={() => window.print()}
             variant="outline"
-            className="hidden md:flex h-10 rounded-xl border-slate-200 bg-white font-bold text-xs text-slate-700 hover:bg-slate-50"
+            className="hidden md:flex h-10 rounded-xl border-slate-200 bg-white font-semibold text-xs text-slate-700 hover:bg-slate-50 shadow-2xs"
           >
             <Download className="w-4 h-4 mr-1.5" /> PDF
           </Button>
@@ -1798,279 +2083,401 @@ export function AdminOverviewTab() {
       </div>
 
       {/* ==================================================================== */}
-      {/* LINHA 1: 4 KPIS EXECUTIVOS (CLICÁVEIS PARA ABRIR EXTRATO NO CENTRO) */}
+      {/* LINHA 1: 4 KPIS GLOBAIS                                              */}
       {/* ==================================================================== */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 print:grid-cols-4">
-        {/* KPI 1: GMV Total */}
         <div
           onClick={() => handleOpenBankStatement("all")}
-          className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs hover:border-[#BF4B24] transition-all cursor-pointer group"
+          className="bg-white p-6 rounded-2xl border border-slate-200/90 hover:border-slate-300 transition-all cursor-pointer group"
         >
-          <div className="flex justify-between items-start mb-4">
-            <div className="w-10 h-10 rounded-xl bg-orange-50 flex items-center justify-center text-[#BF4B24]">
-              <Activity className="w-5 h-5" />
-            </div>
-            <Badge className="bg-slate-100 text-slate-700 group-hover:bg-[#BF4B24] group-hover:text-white transition-colors border-0 text-[10px] font-bold flex items-center gap-1">
-              Abrir Extrato <ArrowUpRight className="w-3 h-3" />
-            </Badge>
+          <div className="flex justify-between items-center mb-3">
+            <span className="text-xs font-semibold text-slate-500">
+              Volume Transacionado (GMV)
+            </span>
+            <Activity className="w-4 h-4 text-slate-400 group-hover:text-slate-700 transition-colors" />
           </div>
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
-            Volume Transacionado (GMV)
-          </p>
-          <h3 className="text-3xl font-black text-slate-900 tabular-nums">
-            <span className="text-base text-slate-400 font-bold mr-1">R$</span>
-            {formatBRL(gmv)}
+          <h3 className="text-2xl md:text-3xl font-bold text-slate-900 tabular-nums tracking-tight">
+            R$ {formatBRL(gmv)}
           </h3>
-          <p className="text-[11px] font-semibold text-slate-500 mt-2 tabular-nums">
-            {totalBookingsCount} lançamentos • Ticket médio: R${" "}
+          <p className="text-xs text-slate-500 mt-2 tabular-nums">
+            {totalBookingsCount} lançamentos • Ticket médio R${" "}
             {formatBRL(avgTicketPerBooking)}
           </p>
         </div>
 
-        {/* KPI 2: Receita Líquida Fusion */}
         <div
           onClick={() => handleOpenBankStatement("all")}
-          className="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 p-6 rounded-2xl shadow-lg relative overflow-hidden cursor-pointer group"
+          className="bg-slate-900 p-6 rounded-2xl text-white cursor-pointer group relative overflow-hidden"
         >
-          <div className="absolute top-0 right-0 w-32 h-32 bg-[#BF4B24]/25 rounded-full blur-2xl -mr-8 -mt-8 transition-transform group-hover:scale-150" />
+          <div className="absolute top-0 right-0 w-32 h-32 bg-slate-700/30 rounded-full blur-2xl -mr-8 -mt-8 transition-transform group-hover:scale-150" />
           <div className="relative z-10">
-            <div className="flex justify-between items-start mb-4">
-              <div className="w-10 h-10 rounded-xl bg-[#BF4B24]/20 flex items-center justify-center text-[#BF4B24]">
-                <Wallet className="w-5 h-5" />
-              </div>
-              <Badge className="bg-emerald-500/20 text-emerald-300 border-0 text-[10px] font-bold">
-                Margem: {gmv > 0 ? ((takeRate / gmv) * 100).toFixed(1) : "0.0"}%
-              </Badge>
-            </div>
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
-              Receita Líquida Fusion (Take Rate)
-            </p>
-            <h3 className="text-3xl font-black text-white tabular-nums">
-              <span className="text-base text-emerald-400 font-bold mr-1">
-                R$
+            <div className="flex justify-between items-center mb-3">
+              <span className="text-xs font-medium text-slate-400">
+                Receita Líquida Fusion
               </span>
-              {formatBRL(takeRate)}
+              <span className="text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md">
+                {gmv > 0
+                  ? (
+                      ((takeRate +
+                        breakageTotals.totalRealizedBreakageProfitBrl) /
+                        Math.max(
+                          1,
+                          gmv + breakageTotals.totalRealizedBreakageProfitBrl,
+                        )) *
+                      100
+                    ).toFixed(1)
+                  : "0.0"}
+                % margem
+              </span>
+            </div>
+            <h3 className="text-2xl md:text-3xl font-bold text-white tabular-nums tracking-tight">
+              R${" "}
+              {formatBRL(
+                takeRate + breakageTotals.totalRealizedBreakageProfitBrl,
+              )}
             </h3>
-            <p className="text-[11px] font-semibold text-slate-400 mt-2 tabular-nums">
-              Repasse Clínicas:{" "}
-              <span className="text-slate-200">
-                R$ {formatBRL(hostPayoutTotal)}
-              </span>
+            <p className="text-xs text-slate-400 mt-2 tabular-nums">
+              Repasse Clínicas: R$ {formatBRL(hostPayoutTotal)}
             </p>
           </div>
         </div>
 
-        {/* KPI 3: Profissionais & Recorrência */}
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
-          <div className="flex justify-between items-start mb-4">
-            <div className="w-10 h-10 rounded-xl bg-[#FAF7F5] border border-orange-200/60 flex items-center justify-center text-[#BF4B24]">
-              <Stethoscope className="w-5 h-5" />
-            </div>
-            <Badge className="bg-orange-50 text-[#BF4B24] border-0 text-[10px] font-bold">
-              Recorrência: {retentionRatePct}%
-            </Badge>
-          </div>
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
-            Profissionais Ativos no Período
-          </p>
-          <h3 className="text-3xl font-black text-slate-900 tabular-nums">
-            {activeDoctors}{" "}
-            <span className="text-sm text-slate-400 font-medium">
-              especialistas
+        <div className="bg-white p-6 rounded-2xl border border-slate-200/90">
+          <div className="flex justify-between items-center mb-3">
+            <span className="text-xs font-semibold text-slate-500">
+              Profissionais Ativos
             </span>
+            <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+              {retentionRatePct}% recorrentes
+            </span>
+          </div>
+          <h3 className="text-2xl md:text-3xl font-bold text-slate-900 tabular-nums tracking-tight">
+            {activeDoctors}
           </h3>
-          <p className="text-[11px] font-semibold text-slate-500 mt-2">
-            {recurringDoctorsCount} profissionais alugaram 2x ou mais
+          <p className="text-xs text-slate-500 mt-2">
+            {breakageTotals.activeSubscribersCount} assinantes Fusion Pass+
+            ativos
           </p>
         </div>
 
-        {/* KPI 4: Ocupação Real do Estoque de Horas */}
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
-          <div className="flex justify-between items-start mb-4">
-            <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600">
-              <Building2 className="w-5 h-5" />
-            </div>
-            <Badge className="bg-amber-100 text-amber-800 border-0 text-[10px] font-bold">
-              Ocupação: {avgOccupancyRate}%
-            </Badge>
+        <div className="bg-white p-6 rounded-2xl border border-slate-200/90">
+          <div className="flex justify-between items-center mb-3">
+            <span className="text-xs font-semibold text-slate-500">
+              Salas Ativas & Ocupação
+            </span>
+            <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+              {avgOccupancyRate}% uso
+            </span>
           </div>
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
-            Salas Ativas & RevPAH
-          </p>
-          <h3 className="text-3xl font-black text-slate-900 tabular-nums">
+          <h3 className="text-2xl md:text-3xl font-bold text-slate-900 tabular-nums tracking-tight">
             {activeRooms}{" "}
-            <span className="text-sm text-slate-400 font-medium">espaços</span>
+            <span className="text-sm font-normal text-slate-400">salas</span>
           </h3>
-          <p className="text-[11px] font-semibold text-slate-500 mt-2 tabular-nums">
-            Ticket/Hora: R$ {formatBRL(revPerOccupiedHour)} (
-            {totalHoursOccupied}h utilizadas)
+          <p className="text-xs text-slate-500 mt-2 tabular-nums">
+            R$ {formatBRL(revPerOccupiedHour)}/h • {totalHoursOccupied}h
+            utilizadas
           </p>
         </div>
       </div>
 
       {/* ==================================================================== */}
-      {/* LINHA 2: SEPARAÇÃO VISUAL (HORAS AVULSAS VS. CONTRATOS FIXOS) */}
+      {/* LINHA 2: OS 3 SUBGRUPOS INDEPENDENTES (DESIGN LIMPO E ALINHADO)      */}
       {/* ==================================================================== */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6 print:grid-cols-2">
-        {/* Card 1: Horas Avulsas */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-6 print:grid-cols-3">
+        {/* 1. HORAS AVULSAS */}
         <div
           onClick={() => handleOpenBankStatement("avulso")}
-          className="bg-white rounded-2xl border-2 border-orange-200/80 hover:border-[#BF4B24] shadow-xs p-6 cursor-pointer transition-all group"
+          className="bg-white rounded-2xl border border-slate-200/90 hover:border-slate-300 p-6 cursor-pointer transition-all flex flex-col justify-between"
         >
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-orange-50 text-[#BF4B24] flex items-center justify-center">
-                <Clock className="w-5 h-5" />
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center shrink-0">
+                  <CreditCard className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">
+                    1. Horas Avulsas
+                  </h2>
+                  <p className="text-[11px] text-slate-500">
+                    PIX ou Cartão direto (sem pacote)
+                  </p>
+                </div>
               </div>
-              <div>
-                <h2 className="text-base font-black text-slate-900 uppercase tracking-tight">
-                  1. Operação Horas Avulsas & Pacotes
-                </h2>
-                <p className="text-xs font-medium text-slate-500">
-                  Locações por hora no marketplace (Take Rate Fixo de 20%)
+              <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-md shrink-0 tabular-nums">
+                {avulsoSharePct}% do GMV
+              </span>
+            </div>
+
+            <div className="pb-4 mb-4 border-b border-slate-100 tabular-nums">
+              <p className="text-[11px] font-medium text-slate-400">
+                Volume Bruto no Período
+              </p>
+              <div className="flex items-baseline justify-between gap-2 mt-0.5">
+                <p className="text-2xl font-bold text-slate-900 tracking-tight">
+                  R$ {formatBRL(avulsoGmv)}
                 </p>
+                <span className="text-xs font-medium text-slate-500">
+                  {avulsoBookingsCount} reservas ({avulsoHoursCount}h)
+                </span>
               </div>
             </div>
-            <Badge className="bg-orange-100 text-[#BF4B24] border-0 font-black text-xs">
-              {avulsoSharePct}% do GMV
-            </Badge>
+
+            <div className="space-y-2.5 text-xs tabular-nums">
+              <div className="flex items-center justify-between text-slate-600">
+                <span>Repasse Clínicas (80%)</span>
+                <span className="font-semibold text-slate-900">
+                  R$ {formatBRL(Math.max(0, avulsoGmv - avulsoTakeRate))}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-slate-600">
+                <span>Taxa média aplicada</span>
+                <span className="font-medium text-slate-500">20% fixo</span>
+              </div>
+              <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between">
+                <span className="font-semibold text-slate-900">
+                  Receita Líquida Fusion
+                </span>
+                <span className="text-sm font-bold text-emerald-700">
+                  + R$ {formatBRL(avulsoTakeRate)}
+                </span>
+              </div>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 tabular-nums">
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
-              <p className="text-[10px] font-black text-slate-400 uppercase">
-                GMV Horas Avulsas
-              </p>
-              <p className="text-xl font-black text-slate-900 mt-1">
-                R$ {formatBRL(avulsoGmv)}
-              </p>
-              <p className="text-[11px] font-bold text-slate-400 mt-1">
-                {avulsoBookingsCount} reservas ({avulsoHoursCount}h)
-              </p>
-            </div>
-
-            <div className="p-4 rounded-xl bg-orange-50/70 border border-orange-200/70">
-              <p className="text-[10px] font-black text-[#BF4B24] uppercase">
-                Receita Fusion (20%)
-              </p>
-              <p className="text-xl font-black text-[#BF4B24] mt-1">
-                R$ {formatBRL(avulsoTakeRate)}
-              </p>
-              <p className="text-[11px] font-bold text-orange-800/70 mt-1">
-                Lucro líquido avulso
-              </p>
-            </div>
-
-            <div className="p-4 rounded-xl bg-emerald-50/60 border border-emerald-100">
-              <p className="text-[10px] font-black text-emerald-700 uppercase">
-                Repasse Clínicas (80%)
-              </p>
-              <p className="text-xl font-black text-emerald-700 mt-1">
-                R$ {formatBRL(Math.max(0, avulsoGmv - avulsoTakeRate))}
-              </p>
-              <p className="text-[11px] font-bold text-emerald-700/70 mt-1">
-                Líquido Anfitriões
-              </p>
-            </div>
+          <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-semibold text-slate-600 hover:text-slate-900">
+            <span>Ver extrato de Horas Avulsas</span>
+            <ArrowUpRight className="w-4 h-4 text-slate-400" />
           </div>
         </div>
 
-        {/* Card 2: Contratos Fixos */}
+        {/* 2. PACOTES FUSION PASS+ */}
         <div
-          onClick={() => handleOpenBankStatement("contract")}
-          className="bg-white rounded-2xl border-2 border-purple-200/80 hover:border-purple-600 shadow-xs p-6 cursor-pointer transition-all group"
+          onClick={() => handleOpenBankStatement("package")}
+          className="bg-white rounded-2xl border border-slate-200/90 hover:border-slate-300 p-6 cursor-pointer transition-all flex flex-col justify-between"
         >
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-700 flex items-center justify-center">
-                <FileText className="w-5 h-5" />
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-orange-50 text-[#BF4B24] flex items-center justify-center shrink-0">
+                  <Wallet className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">
+                    2. Pacotes Fusion Pass+
+                  </h2>
+                  <p className="text-[11px] text-slate-500">
+                    PIX ({breakageTotals.pixSubscribersCount}) • Cartão (
+                    {breakageTotals.cardSubscribersCount}) • Sobras & Downgrade
+                  </p>
+                </div>
               </div>
-              <div>
-                <h2 className="text-base font-black text-slate-900 uppercase tracking-tight">
-                  2. Operação de Contratos & Turnos Fixos
-                </h2>
-                <p className="text-xs font-medium text-slate-500">
-                  Valor cheio contabilizado no dia da baixa (
-                  {activeContractsCount} contrato(s) ativo(s))
-                </p>
+              <span className="text-[11px] font-semibold text-[#BF4B24] bg-orange-50 px-2.5 py-1 rounded-md shrink-0 tabular-nums">
+                {packageSharePct}% do GMV
+              </span>
+            </div>
+
+            <div className="pb-3.5 mb-3.5 border-b border-slate-100 tabular-nums">
+              <div className="flex items-baseline justify-between">
+                <div>
+                  <p className="text-[11px] font-medium text-slate-400">
+                    Créditos Consumidos no Período
+                  </p>
+                  <p className="text-2xl font-bold text-slate-900 tracking-tight mt-0.5">
+                    R$ {formatBRL(packageGmv)}
+                  </p>
+                </div>
+                <span className="text-xs font-medium text-slate-500">
+                  {packageBookingsCount} usos ({packageHoursCount}h)
+                </span>
+              </div>
+
+              <div className="mt-2.5 flex items-center justify-between text-[11px] text-slate-500 bg-slate-50 px-3 py-1.5 rounded-lg">
+                <span>
+                  Basic:{" "}
+                  <strong className="text-slate-700">
+                    {packageByTierStats.start.hours}h
+                  </strong>
+                </span>
+                <span className="text-slate-300">•</span>
+                <span>
+                  VIP:{" "}
+                  <strong className="text-slate-700">
+                    {packageByTierStats.vip.hours}h
+                  </strong>
+                </span>
+                <span className="text-slate-300">•</span>
+                <span>
+                  Premium:{" "}
+                  <strong className="text-slate-700">
+                    {packageByTierStats.master.hours}h
+                  </strong>
+                </span>
               </div>
             </div>
-            <Badge className="bg-purple-100 text-purple-800 border-0 font-black text-xs">
-              {contractSharePct}% do GMV
-            </Badge>
+
+            <div className="space-y-2 text-xs tabular-nums">
+              <div className="flex items-center justify-between text-slate-600">
+                <span>Taxa Base (20%) / Repasse</span>
+                <span className="font-semibold text-slate-900">
+                  R$ {formatBRL(packageStandardFee)} / R${" "}
+                  {formatBRL(packageHostPayout)}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between text-slate-600">
+                <span>
+                  Ganho Downgrade ({packageDowngradeCount}x) + Sobras Vencidas
+                </span>
+                <span className="font-semibold text-emerald-700">
+                  + R${" "}
+                  {formatBRL(
+                    packageDowngradeSpread +
+                      breakageTotals.totalRealizedBreakageProfitBrl,
+                  )}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between text-slate-500">
+                <span>
+                  Saldo Ativo em Carteira (
+                  {breakageTotals.totalActiveRemainingHours}h)
+                </span>
+                <span className="font-medium text-slate-700">
+                  R$ {formatBRL(breakageTotals.totalFloatingUnusedValueBrl)}
+                </span>
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                <span className="font-semibold text-slate-900">
+                  Lucro Realizado Fusion
+                </span>
+                <span className="text-sm font-bold text-emerald-700">
+                  + R$ {formatBRL(totalPackageNetProfit)}
+                </span>
+              </div>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 tabular-nums">
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
-              <p className="text-[10px] font-black text-slate-400 uppercase">
-                GMV de Contratos (Baixa)
-              </p>
-              <p className="text-xl font-black text-slate-900 mt-1">
-                R$ {formatBRL(contractGmv)}
-              </p>
-              <p className="text-[11px] font-bold text-slate-400 mt-1">
-                {contractBookingsCount} baixa(s) ({contractHoursCount}h usadas)
-              </p>
+          <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-600 hover:text-slate-900">
+              Extrato de Pacotes
+            </span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsSubscribersModalOpen(true);
+              }}
+              className="text-xs font-semibold text-[#BF4B24] hover:underline flex items-center gap-1"
+            >
+              Ver assinantes ({breakageTotals.totalSubscribersCount})
+              <ArrowUpRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {/* 3. CONTRATOS FIXOS */}
+        <div
+          onClick={() => handleOpenBankStatement("contract")}
+          className="bg-white rounded-2xl border border-slate-200/90 hover:border-slate-300 p-6 cursor-pointer transition-all flex flex-col justify-between"
+        >
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center shrink-0">
+                  <FileText className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">
+                    3. Contratos Fixos
+                  </h2>
+                  <p className="text-[11px] text-slate-500">
+                    Turnos fixos, mensais e sublocações ({activeContractsCount}{" "}
+                    ativos)
+                  </p>
+                </div>
+              </div>
+              <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-md shrink-0 tabular-nums">
+                {contractSharePct}% do GMV
+              </span>
             </div>
 
-            <div className="p-4 rounded-xl bg-purple-50/70 border border-purple-200/70">
-              <p className="text-[10px] font-black text-purple-800 uppercase">
-                Receita Fusion Contratos
+            <div className="pb-4 mb-4 border-b border-slate-100 tabular-nums">
+              <p className="text-[11px] font-medium text-slate-400">
+                Volume de Baixas no Período
               </p>
-              <p className="text-xl font-black text-purple-800 mt-1">
-                R$ {formatBRL(contractTakeRate)}
-              </p>
-              <p className="text-[11px] font-bold text-purple-700/80 mt-1">
-                Taxa média:{" "}
-                {contractGmv > 0
-                  ? ((contractTakeRate / contractGmv) * 100).toFixed(1)
-                  : "0.0"}
-                %
-              </p>
+              <div className="flex items-baseline justify-between gap-2 mt-0.5">
+                <p className="text-2xl font-bold text-slate-900 tracking-tight">
+                  R$ {formatBRL(contractGmv)}
+                </p>
+                <span className="text-xs font-medium text-slate-500">
+                  {contractBookingsCount} baixas ({contractHoursCount}h)
+                </span>
+              </div>
             </div>
 
-            <div className="p-4 rounded-xl bg-emerald-50/60 border border-emerald-100">
-              <p className="text-[10px] font-black text-emerald-700 uppercase">
-                Repasse Clínicas Contratos
-              </p>
-              <p className="text-xl font-black text-emerald-700 mt-1">
-                R$ {formatBRL(Math.max(0, contractGmv - contractTakeRate))}
-              </p>
-              <p className="text-[11px] font-bold text-emerald-700/70 mt-1">
-                Receita recorrente clínica
-              </p>
+            <div className="space-y-2.5 text-xs tabular-nums">
+              <div className="flex items-center justify-between text-slate-600">
+                <span>Repasse Clínicas (Líquido)</span>
+                <span className="font-semibold text-slate-900">
+                  R$ {formatBRL(Math.max(0, contractGmv - contractTakeRate))}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-slate-600">
+                <span>Taxa média de administração</span>
+                <span className="font-medium text-slate-500">
+                  {contractGmv > 0
+                    ? ((contractTakeRate / contractGmv) * 100).toFixed(1)
+                    : "0.0"}
+                  %
+                </span>
+              </div>
+              <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between">
+                <span className="font-semibold text-slate-900">
+                  Receita Líquida Fusion
+                </span>
+                <span className="text-sm font-bold text-emerald-700">
+                  + R$ {formatBRL(contractTakeRate)}
+                </span>
+              </div>
             </div>
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-semibold text-slate-600 hover:text-slate-900">
+            <span>Ver extrato de Contratos Fixos</span>
+            <ArrowUpRight className="w-4 h-4 text-slate-400" />
           </div>
         </div>
       </div>
 
       {/* ==================================================================== */}
-      {/* LINHA 3: GRÁFICO DE EVOLUÇÃO (AVULSO + CONTRATOS + TOTAL) & MIX */}
+      {/* LINHA 3: GRÁFICO DE EVOLUÇÃO & ESPECIALIDADES                        */}
       {/* ==================================================================== */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6 print:grid-cols-3">
-        <div className="xl:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-xs p-6">
+        <div className="xl:col-span-2 bg-white rounded-2xl border border-slate-200/90 p-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
             <div>
-              <h2 className="text-lg font-black text-slate-900">
-                Evolução do Faturamento (Avulso + Contratos + Total)
+              <h2 className="text-base font-bold text-slate-900">
+                Evolução do Faturamento por Canal
               </h2>
-              <p className="text-xs font-medium text-slate-500">
-                Horas Avulsas diárias + Valor Total do Contrato lançado no dia
-                exato da baixa.
+              <p className="text-xs text-slate-500">
+                Comparativo diário entre Horas Avulsas, Pacotes e Contratos
               </p>
             </div>
 
-            <div className="flex items-center bg-slate-100 p-1 rounded-xl self-start sm:self-auto">
+            <div className="flex flex-wrap items-center bg-slate-100 p-1 rounded-xl self-start sm:self-auto">
               {[
-                { id: "both", label: "Total + Divisão" },
-                { id: "avulso", label: "Só Avulso" },
-                { id: "contract", label: "Só Contratos" },
+                { id: "all", label: "Todos" },
+                { id: "avulso", label: "Avulso" },
+                { id: "package", label: "Pacotes" },
+                { id: "contract", label: "Contratos" },
               ].map((tab) => (
                 <button
                   key={tab.id}
                   type="button"
                   onClick={() => setChartView(tab.id as any)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                     chartView === tab.id
                       ? "bg-white text-slate-900 shadow-2xs"
                       : "text-slate-500 hover:text-slate-900"
@@ -2082,28 +2489,30 @@ export function AdminOverviewTab() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-5 mb-4 text-xs font-bold text-slate-600">
-            {(chartView === "both" || chartView === "avulso") && (
+          <div className="flex flex-wrap items-center gap-5 mb-4 text-xs font-medium text-slate-600">
+            {(chartView === "all" || chartView === "avulso") && (
               <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-xs bg-[#BF4B24]" />
+                <span className="w-2.5 h-2.5 rounded-xs bg-slate-400" />
                 <span>Horas Avulsas</span>
               </div>
             )}
-            {(chartView === "both" || chartView === "contract") && (
+            {(chartView === "all" || chartView === "package") && (
               <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-xs bg-[#7C3AED]" />
-                <span>Contratos Fixos (Dia da Baixa)</span>
+                <span className="w-2.5 h-2.5 rounded-xs bg-[#BF4B24]" />
+                <span>Pacotes Fusion Pass+</span>
               </div>
             )}
-            {chartView === "both" && (
+            {(chartView === "all" || chartView === "contract") && (
               <div className="flex items-center gap-1.5">
-                <span className="w-4 h-0.5 bg-slate-900" />
-                <span className="text-slate-900">Linha GMV Total</span>
+                <span className="w-2.5 h-2.5 rounded-xs bg-slate-900" />
+                <span>Contratos Fixos</span>
               </div>
             )}
             <div className="flex items-center gap-1.5">
-              <span className="w-4 h-0.5 bg-emerald-500" />
-              <span className="text-emerald-700">Receita Fusion</span>
+              <span className="w-4 h-0.5 bg-emerald-600" />
+              <span className="text-emerald-700 font-semibold">
+                Receita Fusion
+              </span>
             </div>
           </div>
 
@@ -2122,7 +2531,7 @@ export function AdminOverviewTab() {
                   dataKey="name"
                   axisLine={false}
                   tickLine={false}
-                  tick={{ fontSize: 11, fill: "#64748B", fontWeight: 700 }}
+                  tick={{ fontSize: 11, fill: "#64748B", fontWeight: 600 }}
                   dy={8}
                 />
                 <YAxis
@@ -2141,33 +2550,33 @@ export function AdminOverviewTab() {
                     if (!row) return null;
                     return (
                       <div className="bg-slate-900 text-white p-3.5 rounded-xl shadow-xl border border-slate-800 text-xs space-y-2 min-w-[230px] tabular-nums">
-                        <div className="font-black text-slate-200 border-b border-slate-800 pb-1.5 flex justify-between">
+                        <div className="font-bold text-slate-200 border-b border-slate-800 pb-1.5 flex justify-between">
                           <span>Data: {label}</span>
-                          <span className="text-amber-400">
+                          <span className="text-white">
                             Total: R$ {formatBRL(row.totalGmv)}
                           </span>
                         </div>
                         <div className="space-y-1">
                           <div className="flex justify-between text-slate-300">
-                            <span className="flex items-center gap-1.5">
-                              <span className="w-2.5 h-2.5 rounded-xs bg-[#BF4B24]" />
-                              Horas Avulsas:
-                            </span>
-                            <span className="font-bold text-white">
-                              R$ {formatBRL(row.avulsoGmv)}
+                            <span>Horas Avulsas:</span>
+                            <span className="font-semibold text-white">
+                              R$ {formatBRL(row.avulsoGmv || 0)}
                             </span>
                           </div>
                           <div className="flex justify-between text-slate-300">
-                            <span className="flex items-center gap-1.5">
-                              <span className="w-2.5 h-2.5 rounded-xs bg-[#7C3AED]" />
-                              Contratos Fixos (Baixa):
+                            <span>Pacotes Fusion Pass+:</span>
+                            <span className="font-semibold text-white">
+                              R$ {formatBRL(row.packageGmv || 0)}
                             </span>
-                            <span className="font-bold text-white">
-                              R$ {formatBRL(row.contractGmv)}
+                          </div>
+                          <div className="flex justify-between text-slate-300">
+                            <span>Contratos Fixos:</span>
+                            <span className="font-semibold text-white">
+                              R$ {formatBRL(row.contractGmv || 0)}
                             </span>
                           </div>
                         </div>
-                        <div className="pt-1.5 border-t border-slate-800 flex justify-between text-emerald-400 font-black">
+                        <div className="pt-1.5 border-t border-slate-800 flex justify-between text-emerald-400 font-bold">
                           <span>Receita Líquida Fusion:</span>
                           <span>+ R$ {formatBRL(row.platformFee)}</span>
                         </div>
@@ -2175,40 +2584,42 @@ export function AdminOverviewTab() {
                     );
                   }}
                 />
-                {(chartView === "both" || chartView === "avulso") && (
+                {(chartView === "all" || chartView === "avulso") && (
                   <Bar
                     dataKey="avulsoGmv"
                     stackId="a"
-                    fill="#BF4B24"
+                    fill="#94A3B8"
                     radius={
                       chartView === "avulso" ? [6, 6, 0, 0] : [0, 0, 0, 0]
                     }
                     maxBarSize={38}
                   />
                 )}
-                {(chartView === "both" || chartView === "contract") && (
+                {(chartView === "all" || chartView === "package") && (
                   <Bar
-                    dataKey="contractGmv"
+                    dataKey="packageGmv"
                     stackId="a"
-                    fill="#7C3AED"
-                    radius={[6, 6, 0, 0]}
+                    fill="#BF4B24"
+                    radius={
+                      chartView === "package" ? [6, 6, 0, 0] : [0, 0, 0, 0]
+                    }
                     maxBarSize={38}
                   />
                 )}
-                {chartView === "both" && (
-                  <Line
-                    type="monotone"
-                    dataKey="totalGmv"
-                    stroke="#0F172A"
-                    strokeWidth={2.5}
-                    dot={{ r: 3, fill: "#0F172A" }}
+                {(chartView === "all" || chartView === "contract") && (
+                  <Bar
+                    dataKey="contractGmv"
+                    stackId="a"
+                    fill="#0F172A"
+                    radius={[6, 6, 0, 0]}
+                    maxBarSize={38}
                   />
                 )}
                 <Line
                   type="monotone"
                   dataKey="platformFee"
                   stroke="#10B981"
-                  strokeWidth={2.5}
+                  strokeWidth={2}
                   dot={false}
                 />
               </ComposedChart>
@@ -2216,14 +2627,14 @@ export function AdminOverviewTab() {
           </div>
         </div>
 
-        {/* Demanda & Faturamento por Especialidade */}
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 flex flex-col">
+        {/* Demanda por Especialidade */}
+        <div className="bg-white rounded-2xl border border-slate-200/90 p-6 flex flex-col">
           <div className="mb-2">
-            <h2 className="text-lg font-black text-slate-900">
+            <h2 className="text-base font-bold text-slate-900">
               Demanda por Especialidade
             </h2>
-            <p className="text-xs font-medium text-slate-500">
-              Participação de mercado e volume gerado no período
+            <p className="text-xs text-slate-500">
+              Participação e volume gerado no período
             </p>
           </div>
 
@@ -2251,7 +2662,7 @@ export function AdminOverviewTab() {
                 </PieChart>
               </ResponsiveContainer>
             ) : (
-              <p className="text-slate-400 text-sm font-bold">
+              <p className="text-slate-400 text-sm font-medium">
                 Sem dados no período
               </p>
             )}
@@ -2261,16 +2672,16 @@ export function AdminOverviewTab() {
             {specialtyData.map((spec) => (
               <div
                 key={spec.name}
-                className="flex items-center justify-between text-xs font-bold text-slate-700 tabular-nums"
+                className="flex items-center justify-between text-xs text-slate-600 tabular-nums"
               >
                 <div className="flex items-center gap-2 truncate">
                   <span
                     className="w-2.5 h-2.5 rounded-full shrink-0"
                     style={{ backgroundColor: spec.color }}
                   />
-                  <span className="truncate">{spec.name}</span>
+                  <span className="truncate font-medium">{spec.name}</span>
                 </div>
-                <span className="text-slate-900 font-black">
+                <span className="text-slate-900 font-semibold">
                   R$ {formatBRL(spec.revenue)} ({spec.value}%)
                 </span>
               </div>
@@ -2280,24 +2691,18 @@ export function AdminOverviewTab() {
       </div>
 
       {/* ==================================================================== */}
-      {/* LINHA 4: ESTOQUE DE HORAS & POTENCIAL POR SALA (PALETA LEVE FUSION) */}
+      {/* LINHA 4: ESTOQUE DE HORAS & POTENCIAL POR SALA                       */}
       {/* ==================================================================== */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs mb-8 overflow-hidden print:break-inside-avoid">
-        <div className="p-6 border-b border-orange-200/60 bg-[#FAF7F5] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      <div className="bg-white rounded-2xl border border-slate-200/90 mb-8 overflow-hidden print:break-inside-avoid">
+        <div className="p-6 border-b border-slate-200/80 flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-[#F8FAFC]">
           <div>
-            <div className="flex items-center gap-2">
-              <Badge className="bg-[#BF4B24]/10 text-[#BF4B24] border border-[#BF4B24]/20 text-[10px] font-black uppercase">
-                Yield Management & Capacidade Instalada
-              </Badge>
-            </div>
-            <h2 className="text-xl font-black text-slate-900 flex items-center gap-2 mt-1.5">
-              <Gauge className="w-6 h-6 text-[#BF4B24]" />
-              Análise de Estoque de Horas & Potencial Financeiro por Sala
+            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <Gauge className="w-5 h-5 text-slate-700" />
+              Estoque de Horas & Potencial Financeiro por Sala
             </h2>
-            <p className="text-xs text-slate-600 font-medium mt-0.5">
-              Compare a capacidade total de horas disponíveis de cada sala com
-              as horas efetivamente alugadas, o potencial máximo de faturamento
-              e o estoque livre para os próximos dias.
+            <p className="text-xs text-slate-500 mt-0.5">
+              Compare a capacidade total disponível com as horas alugadas
+              (Avulso, Pacotes e Contratos).
             </p>
           </div>
 
@@ -2306,26 +2711,26 @@ export function AdminOverviewTab() {
               <button
                 type="button"
                 onClick={() => setInventoryMode("past")}
-                className={`px-3.5 py-2 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 ${
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
                   inventoryMode === "past"
-                    ? "bg-[#BF4B24] text-white shadow-xs"
+                    ? "bg-slate-900 text-white shadow-xs"
                     : "text-slate-600 hover:text-slate-900"
                 }`}
               >
                 <Clock className="w-3.5 h-3.5" />
-                Desempenho no Período
+                No Período
               </button>
               <button
                 type="button"
                 onClick={() => setInventoryMode("future")}
-                className={`px-3.5 py-2 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 ${
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
                   inventoryMode === "future"
                     ? "bg-slate-900 text-white shadow-xs"
                     : "text-slate-600 hover:text-slate-900"
                 }`}
               >
                 <CalendarRange className="w-3.5 h-3.5" />
-                Estoque Futuro ({futureHorizonDays} Dias)
+                Próximos {futureHorizonDays} Dias
               </button>
             </div>
 
@@ -2336,9 +2741,9 @@ export function AdminOverviewTab() {
                     key={d}
                     type="button"
                     onClick={() => setFutureHorizonDays(d)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                       futureHorizonDays === d
-                        ? "bg-[#BF4B24] text-white"
+                        ? "bg-slate-900 text-white"
                         : "text-slate-500 hover:text-slate-900"
                     }`}
                   >
@@ -2350,178 +2755,133 @@ export function AdminOverviewTab() {
           </div>
         </div>
 
-        {/* 4 Cartões de Resumo do Estoque */}
         {inventoryMode === "past" ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 p-6 bg-slate-50/50 border-b border-slate-100 tabular-nums">
-            <div className="bg-white p-4 rounded-xl border border-slate-200">
-              <p className="text-[10px] font-black text-slate-400 uppercase">
+            <div className="bg-white p-4 rounded-xl border border-slate-200/80">
+              <p className="text-[11px] font-medium text-slate-500">
                 Estoque Total no Período
               </p>
-              <p className="text-2xl font-black text-slate-900 mt-1">
+              <p className="text-xl font-bold text-slate-900 mt-1">
                 {capacityTotals.pastAvail}h{" "}
-                <span className="text-xs font-bold text-slate-400">
+                <span className="text-xs font-normal text-slate-400">
                   disponíveis
                 </span>
               </p>
-              <p className="text-[11px] font-bold text-slate-500 mt-1">
-                Soma da capacidade das salas
-              </p>
             </div>
 
-            <div className="bg-white p-4 rounded-xl border border-emerald-200">
-              <p className="text-[10px] font-black text-emerald-700 uppercase">
+            <div className="bg-white p-4 rounded-xl border border-slate-200/80">
+              <p className="text-[11px] font-medium text-slate-500">
                 Horas Alugadas vs. Ociosas
               </p>
-              <p className="text-2xl font-black text-emerald-700 mt-1">
+              <p className="text-xl font-bold text-slate-900 mt-1">
                 {capacityTotals.pastBooked}h{" "}
-                <span className="text-xs font-bold text-slate-400">
+                <span className="text-xs font-normal text-slate-400">
                   / {capacityTotals.pastFree}h livres
                 </span>
               </p>
-              <p className="text-[11px] font-bold text-emerald-700/80 mt-1">
-                Taxa de aproveitamento:{" "}
-                {capacityTotals.pastAvail > 0
-                  ? Math.round(
-                      (capacityTotals.pastBooked / capacityTotals.pastAvail) *
-                        100,
-                    )
-                  : 0}
-                %
-              </p>
             </div>
 
-            <div className="bg-white p-4 rounded-xl border border-slate-200">
-              <p className="text-[10px] font-black text-slate-500 uppercase">
-                Potencial Máximo (100% Ocupado)
+            <div className="bg-white p-4 rounded-xl border border-slate-200/80">
+              <p className="text-[11px] font-medium text-slate-500">
+                Potencial Máximo (100%)
               </p>
-              <p className="text-2xl font-black text-slate-900 mt-1">
+              <p className="text-xl font-bold text-slate-900 mt-1">
                 R$ {formatBRL(capacityTotals.pastPotentialRev)}
               </p>
-              <p className="text-[11px] font-bold text-slate-400 mt-1">
-                Se 100% do estoque fosse vendido
-              </p>
             </div>
 
-            <div className="bg-white p-4 rounded-xl border border-orange-200">
-              <p className="text-[10px] font-black text-[#BF4B24] uppercase">
-                Faturado Real vs. Ocioso
+            <div className="bg-white p-4 rounded-xl border border-slate-200/80">
+              <p className="text-[11px] font-medium text-slate-500">
+                Faturado Realizado
               </p>
-              <p className="text-2xl font-black text-[#BF4B24] mt-1">
+              <p className="text-xl font-bold text-emerald-700 mt-1">
                 R$ {formatBRL(capacityTotals.pastActualRev)}
-              </p>
-              <p className="text-[11px] font-bold text-slate-500 mt-1">
-                Potencial ocioso: R${" "}
-                {formatBRL(capacityTotals.pastUncapturedRev)}
               </p>
             </div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 p-6 bg-[#FAF7F5]/60 border-b border-orange-100 tabular-nums">
-            <div className="bg-white p-4 rounded-xl border border-slate-200">
-              <p className="text-[10px] font-black text-slate-500 uppercase">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 p-6 bg-slate-50/50 border-b border-slate-100 tabular-nums">
+            <div className="bg-white p-4 rounded-xl border border-slate-200/80">
+              <p className="text-[11px] font-medium text-slate-500">
                 Capacidade Próximos {futureHorizonDays} Dias
               </p>
-              <p className="text-2xl font-black text-slate-900 mt-1">
+              <p className="text-xl font-bold text-slate-900 mt-1">
                 {capacityTotals.futureAvail}h{" "}
-                <span className="text-xs font-bold text-slate-400">totais</span>
-              </p>
-              <p className="text-[11px] font-bold text-slate-500 mt-1">
-                Estoque instalado nas salas ativas
+                <span className="text-xs font-normal text-slate-400">
+                  totais
+                </span>
               </p>
             </div>
 
-            <div className="bg-white p-4 rounded-xl border border-orange-200">
-              <p className="text-[10px] font-black text-[#BF4B24] uppercase">
-                Horas Já Reservadas / Contratadas
+            <div className="bg-white p-4 rounded-xl border border-slate-200/80">
+              <p className="text-[11px] font-medium text-slate-500">
+                Horas Já Reservadas
               </p>
-              <p className="text-2xl font-black text-[#BF4B24] mt-1">
+              <p className="text-xl font-bold text-slate-900 mt-1">
                 {capacityTotals.futureBooked}h{" "}
-                <span className="text-xs font-bold text-orange-700">
+                <span className="text-xs font-normal text-slate-500">
                   (R$ {formatBRL(capacityTotals.futureLockedRev)})
                 </span>
               </p>
-              <p className="text-[11px] font-bold text-slate-500 mt-1">
-                Receita futura avulsa já garantida
-              </p>
             </div>
 
-            <div className="bg-white p-4 rounded-xl border border-emerald-200">
-              <p className="text-[10px] font-black text-emerald-700 uppercase">
-                Estoque Livre p/ Venda ({futureHorizonDays}d)
+            <div className="bg-white p-4 rounded-xl border border-slate-200/80">
+              <p className="text-[11px] font-medium text-slate-500">
+                Estoque Livre p/ Venda
               </p>
-              <p className="text-2xl font-black text-emerald-700 mt-1">
+              <p className="text-xl font-bold text-emerald-700 mt-1">
                 {capacityTotals.futureFree}h{" "}
-                <span className="text-xs font-bold text-emerald-600">
+                <span className="text-xs font-normal text-slate-400">
                   disponíveis
                 </span>
               </p>
-              <p className="text-[11px] font-bold text-emerald-700/80 mt-1">
-                Prontas para locação imediata
-              </p>
             </div>
 
-            <div className="bg-white p-4 rounded-xl border border-amber-200">
-              <p className="text-[10px] font-black text-amber-800 uppercase">
-                Potencial Financeiro em Aberto
+            <div className="bg-white p-4 rounded-xl border border-slate-200/80">
+              <p className="text-[11px] font-medium text-slate-500">
+                Potencial em Aberto
               </p>
-              <p className="text-2xl font-black text-amber-700 mt-1">
+              <p className="text-xl font-bold text-slate-900 mt-1">
                 R$ {formatBRL(capacityTotals.futureOpenRev)}
-              </p>
-              <p className="text-[11px] font-bold text-slate-500 mt-1">
-                Potencial Total: R${" "}
-                {formatBRL(capacityTotals.futurePotentialRev)}
               </p>
             </div>
           </div>
         )}
 
-        {/* Tabela Detalhada de Estoque de Horas e Potencial por Sala */}
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs whitespace-nowrap tabular-nums">
-            <thead className="bg-slate-50 text-slate-500 font-bold text-[10px] uppercase tracking-wider border-b border-slate-200">
+            <thead className="bg-slate-50 text-slate-500 font-semibold text-[11px] border-b border-slate-200">
               {inventoryMode === "past" ? (
                 <tr>
-                  <th className="px-6 py-4">Espaço / Sala</th>
-                  <th className="px-6 py-4 text-center">Tarifa Base</th>
-                  <th className="px-6 py-4 text-center">Estoque Disponível</th>
-                  <th className="px-6 py-4 text-center">
-                    Horas Alugadas (Avulso / Contrato)
+                  <th className="px-6 py-3.5">Espaço / Sala</th>
+                  <th className="px-6 py-3.5 text-center">Tarifa Base</th>
+                  <th className="px-6 py-3.5 text-center">Estoque</th>
+                  <th className="px-6 py-3.5 text-center">
+                    Horas Alugadas (Avulso / Pacote / Contrato)
                   </th>
-                  <th className="px-6 py-4 text-center">Horas Ociosas</th>
-                  <th className="px-6 py-4 text-center">Taxa de Uso</th>
-                  <th className="px-6 py-4 text-right text-slate-700">
-                    Potencial Máximo (100%)
-                  </th>
-                  <th className="px-6 py-4 text-right text-emerald-700">
-                    Faturamento Realizado
-                  </th>
-                  <th className="px-6 py-4 text-right text-[#BF4B24]">
-                    Gap Ocioso (Não Capturado)
-                  </th>
+                  <th className="px-6 py-3.5 text-center">Ociosas</th>
+                  <th className="px-6 py-3.5 text-center">Ocupação</th>
+                  <th className="px-6 py-3.5 text-right">Potencial (100%)</th>
+                  <th className="px-6 py-3.5 text-right">Faturado Real</th>
+                  <th className="px-6 py-3.5 text-right">Gap Ocioso</th>
                 </tr>
               ) : (
                 <tr>
-                  <th className="px-6 py-4">Espaço / Sala</th>
-                  <th className="px-6 py-4 text-center">Tarifa Base</th>
-                  <th className="px-6 py-4 text-center">
+                  <th className="px-6 py-3.5">Espaço / Sala</th>
+                  <th className="px-6 py-3.5 text-center">Tarifa Base</th>
+                  <th className="px-6 py-3.5 text-center">
                     Capacidade ({futureHorizonDays}d)
                   </th>
-                  <th className="px-6 py-4 text-center">
-                    Já Ocupadas (Avulso / Contrato)
+                  <th className="px-6 py-3.5 text-center">
+                    Já Ocupadas (Avulso / Pacote / Contrato)
                   </th>
-                  <th className="px-6 py-4 text-center text-emerald-700">
-                    Estoque Livre p/ Venda
+                  <th className="px-6 py-3.5 text-center">Estoque Livre</th>
+                  <th className="px-6 py-3.5 text-center">Ocupação Futura</th>
+                  <th className="px-6 py-3.5 text-right">Receita Garantida</th>
+                  <th className="px-6 py-3.5 text-right">
+                    Potencial em Aberto
                   </th>
-                  <th className="px-6 py-4 text-center">Ocupação Futura</th>
-                  <th className="px-6 py-4 text-right text-[#BF4B24]">
-                    Receita Já Garantida
-                  </th>
-                  <th className="px-6 py-4 text-right text-amber-700">
-                    Potencial em Aberto (Estoque Livre)
-                  </th>
-                  <th className="px-6 py-4 text-right text-slate-800">
-                    Teto Potencial ({futureHorizonDays}d)
-                  </th>
+                  <th className="px-6 py-3.5 text-right">Teto Potencial</th>
                 </tr>
               )}
             </thead>
@@ -2537,6 +2897,9 @@ export function AdminOverviewTab() {
                 const avulsoH = isPast
                   ? rm.past_avulso_hours
                   : rm.future_avulso_hours;
+                const pkgH = isPast
+                  ? rm.past_package_hours
+                  : rm.future_package_hours;
                 const contractH = isPast
                   ? rm.past_contract_hours
                   : rm.future_contract_hours;
@@ -2548,85 +2911,72 @@ export function AdminOverviewTab() {
                 return (
                   <tr
                     key={rm.room_id}
-                    className="hover:bg-orange-50/20 transition-colors"
+                    className="hover:bg-slate-50/80 transition-colors"
                   >
-                    <td className="px-6 py-4">
-                      <p className="font-black text-slate-900">
-                        {rm.room_name}
-                      </p>
-                      <p className="text-[11px] font-bold text-slate-400">
+                    <td className="px-6 py-3.5">
+                      <p className="font-bold text-slate-900">{rm.room_name}</p>
+                      <p className="text-[11px] text-slate-400">
                         {rm.host_name} • {formatTierLabel(rm.tier)}
                       </p>
                     </td>
 
-                    <td className="px-6 py-4 text-center font-bold text-slate-600">
+                    <td className="px-6 py-3.5 text-center text-slate-600">
                       R$ {formatBRL(rm.hourly_rate)}/h
                     </td>
 
-                    <td className="px-6 py-4 text-center">
-                      <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 font-black">
-                        {avail}h
-                      </span>
+                    <td className="px-6 py-3.5 text-center font-semibold text-slate-700">
+                      {avail}h
                     </td>
 
-                    <td className="px-6 py-4 text-center">
-                      <span className="font-black text-slate-900">
+                    <td className="px-6 py-3.5 text-center">
+                      <span className="font-bold text-slate-900">
                         {booked}h
                       </span>
-                      <span className="block text-[10px] font-bold text-slate-400">
-                        {avulsoH}h avulso • {contractH}h contrato
+                      <span className="block text-[10px] text-slate-400">
+                        {avulsoH}h avulso • {pkgH}h pacote • {contractH}h
+                        contrato
                       </span>
                     </td>
 
-                    <td className="px-6 py-4 text-center">
-                      <Badge
-                        className={
-                          isPast
-                            ? "bg-slate-100 text-slate-700 border-0 font-black"
-                            : "bg-emerald-100 text-emerald-800 border-0 font-black"
-                        }
-                      >
-                        {free}h livres
-                      </Badge>
+                    <td className="px-6 py-3.5 text-center text-slate-600 font-medium">
+                      {free}h
                     </td>
 
-                    <td className="px-6 py-4 text-center">
-                      <div className="flex flex-col items-center gap-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-black text-slate-800 w-9 text-right">
-                            {occPct}%
-                          </span>
-                          <div className="w-20 h-2 bg-slate-100 rounded-full overflow-hidden">
-                            <div
-                              className="h-full rounded-full bg-[#BF4B24]"
-                              style={{ width: `${occPct}%` }}
-                            />
-                          </div>
+                    <td className="px-6 py-3.5 text-center">
+                      <div className="inline-flex items-center gap-2">
+                        <span className="font-semibold text-slate-700 w-8 text-right">
+                          {occPct}%
+                        </span>
+                        <div className="w-16 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-slate-900"
+                            style={{ width: `${occPct}%` }}
+                          />
                         </div>
                       </div>
                     </td>
 
                     {isPast ? (
                       <>
-                        <td className="px-6 py-4 text-right font-bold text-slate-800 bg-slate-50/60">
+                        <td className="px-6 py-3.5 text-right text-slate-600">
                           R$ {formatBRL(rm.past_potential_revenue)}
                         </td>
-                        <td className="px-6 py-4 text-right font-black text-emerald-700 bg-emerald-50/30">
+                        <td className="px-6 py-3.5 text-right font-bold text-slate-900">
                           R$ {formatBRL(rm.past_actual_revenue)}
                         </td>
-                        <td className="px-6 py-4 text-right font-bold text-[#BF4B24] bg-orange-50/20">
+                        <td className="px-6 py-3.5 text-right text-slate-500">
                           R$ {formatBRL(rm.past_uncaptured_revenue)}
                         </td>
                       </>
                     ) : (
                       <>
-                        <td className="px-6 py-4 text-right font-black text-[#BF4B24] bg-orange-50/20">
+                        <td className="px-6 py-3.5 text-right font-bold text-slate-900">
                           R$ {formatBRL(rm.future_locked_revenue)}
                         </td>
-                        <td className="px-6 py-4 text-right font-black text-amber-700 bg-amber-50/30">
+                        <td className="px-6 py-3.5 text-right text-emerald-700 font-semibold">
                           + R$ {formatBRL(rm.future_open_opportunity_revenue)}
                         </td>
-                        <td className="px-6 py-4 text-right font-bold text-slate-900 bg-slate-50/60">
+                        <td className="px-6 py-3.5 text-right text-slate-600">
                           R$ {formatBRL(rm.future_potential_revenue)}
                         </td>
                       </>
@@ -2640,29 +2990,30 @@ export function AdminOverviewTab() {
       </div>
 
       {/* ==================================================================== */}
-      {/* LINHA 5: MAPA DE CALOR GLOBAL (ZONAS QUENTES E FRIAS) */}
+      {/* LINHA 5: MAPA DE CALOR GLOBAL                                        */}
       {/* ==================================================================== */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 mb-8 overflow-hidden print:break-inside-avoid">
+      <div className="bg-white rounded-2xl border border-slate-200/90 p-6 mb-8 overflow-hidden print:break-inside-avoid">
         <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
+            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
               <Flame className="w-5 h-5 text-[#BF4B24]" /> Zonas Quentes e Frias
               por Turno
             </h2>
-            <p className="text-xs font-medium text-slate-500 mt-0.5">
-              Concentração de ocupação somando horas avulsas e contratos fixos.
+            <p className="text-xs text-slate-500 mt-0.5">
+              Concentração de ocupação somando horas avulsas, pacotes e
+              contratos fixos.
             </p>
           </div>
           <div className="flex gap-2">
             <Badge
               variant="outline"
-              className="bg-slate-50 text-slate-600 border-slate-200 font-bold"
+              className="bg-slate-50 text-slate-600 border-slate-200 font-medium"
             >
               <Snowflake className="w-3 h-3 mr-1" /> Baixa Demanda
             </Badge>
             <Badge
               variant="outline"
-              className="bg-orange-50 text-[#BF4B24] border-orange-200 font-bold"
+              className="bg-orange-50 text-[#BF4B24] border-orange-200 font-medium"
             >
               <Flame className="w-3 h-3 mr-1" /> Alta Demanda
             </Badge>
@@ -2676,7 +3027,7 @@ export function AdminOverviewTab() {
               {shiftLabels.map((label) => (
                 <div
                   key={label}
-                  className="col-span-1 text-center text-[10px] font-bold text-slate-500 uppercase"
+                  className="col-span-1 text-center text-[10px] font-semibold text-slate-500 uppercase"
                 >
                   {label}
                 </div>
@@ -2689,13 +3040,13 @@ export function AdminOverviewTab() {
                   key={row.day}
                   className="grid grid-cols-5 gap-2 items-center"
                 >
-                  <div className="col-span-1 text-sm font-black text-slate-700 text-right pr-4">
+                  <div className="col-span-1 text-xs font-bold text-slate-700 text-right pr-4">
                     {row.day}
                   </div>
                   {row.shifts.map((intensity: number, idx: number) => (
                     <div
                       key={idx}
-                      className={`col-span-1 h-11 rounded-xl border flex items-center justify-center text-xs tabular-nums transition-all hover:scale-[1.02] ${getHeatmapColor(intensity)}`}
+                      className={`col-span-1 h-10 rounded-xl border flex items-center justify-center text-xs tabular-nums transition-all ${getHeatmapColor(intensity)}`}
                       title={`${row.day} - ${shiftLabels[idx]}: ${intensity} turno(s) ocupado(s)`}
                     >
                       {intensity > 0 ? `${intensity} loc.` : "–"}
@@ -2709,43 +3060,46 @@ export function AdminOverviewTab() {
       </div>
 
       {/* ==================================================================== */}
-      {/* LINHA 6: RANKING TOP 10 SALAS (ABERTURA HORAS AVULSAS VS CONTRATOS) */}
+      {/* LINHA 6: RANKING TOP 10 SALAS (ABERTURA NOS 3 SUBGRUPOS)             */}
       {/* ==================================================================== */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden print:break-inside-avoid">
+      <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden print:break-inside-avoid">
         <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <h2 className="text-lg font-black text-slate-900">
-              Top 10 Salas (Performance Financeira: Avulso vs. Contratos)
+            <h2 className="text-base font-bold text-slate-900">
+              Top 10 Salas (Performance nos 3 Subgrupos)
             </h2>
-            <p className="text-xs font-medium text-slate-500">
-              Abertura contábil de cada espaço mostrando o que veio de horas
-              avulsas, baixas de contratos fixos e margem retida pela Fusion.
+            <p className="text-xs text-slate-500">
+              Abertura contábil mostrando o que veio de Horas Avulsas, Pacotes,
+              Baixas de Contratos Fixos e a Margem retida pela Fusion.
             </p>
           </div>
         </div>
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs whitespace-nowrap tabular-nums">
-            <thead className="bg-slate-50 text-slate-500 font-bold text-[10px] uppercase tracking-wider border-b border-slate-100">
+            <thead className="bg-slate-50 text-slate-500 font-semibold text-[11px] border-b border-slate-200">
               <tr>
-                <th className="px-6 py-4">Posição / Sala</th>
-                <th className="px-6 py-4">Anfitrião & Co-Anfitrião</th>
-                <th className="px-6 py-4 text-center">Ocupação</th>
-                <th className="px-6 py-4 text-right text-[#BF4B24]">
-                  GMV Horas Avulsas
+                <th className="px-6 py-3.5">Posição / Sala</th>
+                <th className="px-6 py-3.5">Anfitrião & Co-Anfitrião</th>
+                <th className="px-6 py-3.5 text-center">Ocupação</th>
+                <th className="px-6 py-3.5 text-right text-slate-600">
+                  1. GMV Avulso
                 </th>
-                <th className="px-6 py-4 text-right text-purple-700">
-                  GMV Contratos (Baixa)
+                <th className="px-6 py-3.5 text-right text-slate-600">
+                  2. GMV Pacotes
                 </th>
-                <th className="px-6 py-4 text-right">Volume Total (R$)</th>
-                <th className="px-6 py-4 text-right">Receita Fusion</th>
+                <th className="px-6 py-3.5 text-right text-slate-600">
+                  3. GMV Contratos
+                </th>
+                <th className="px-6 py-3.5 text-right">Volume Total (R$)</th>
+                <th className="px-6 py-3.5 text-right">Receita Fusion</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {topRooms.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     className="px-6 py-10 text-center text-slate-500 font-medium"
                   >
                     Nenhuma reserva ou contrato ativo no período selecionado.
@@ -2757,79 +3111,79 @@ export function AdminOverviewTab() {
                     key={room.id}
                     className="hover:bg-slate-50/80 transition-colors"
                   >
-                    <td className="px-6 py-4">
+                    <td className="px-6 py-3.5">
                       <div className="flex items-center gap-3">
                         <div
-                          className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black shrink-0 ${
+                          className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${
                             index === 0
-                              ? "bg-amber-100 text-amber-700"
-                              : index === 1
-                                ? "bg-slate-200 text-slate-700"
-                                : index === 2
-                                  ? "bg-orange-100 text-orange-700"
-                                  : "bg-slate-100 text-slate-500"
+                              ? "bg-slate-900 text-white"
+                              : "bg-slate-100 text-slate-500"
                           }`}
                         >
                           {index + 1}
                         </div>
                         <div>
                           <div className="flex items-center gap-1.5">
-                            <p className="font-black text-slate-900 truncate max-w-[180px]">
+                            <p className="font-bold text-slate-900 truncate max-w-[180px]">
                               {room.name}
                             </p>
                             {room.hasContracts && (
-                              <Badge className="bg-purple-100 text-purple-800 border-0 text-[9px] px-1.5 py-0 font-black">
+                              <span className="bg-slate-100 text-slate-700 text-[9px] px-1.5 py-0.5 rounded font-semibold">
                                 CONTRATO
-                              </Badge>
+                              </span>
                             )}
                           </div>
-                          <p className="text-[10px] font-bold text-slate-400 uppercase mt-0.5">
-                            {room.avulsoHours}h avulsas • {room.contractHours}h
-                            contrato
+                          <p className="text-[10px] text-slate-400 mt-0.5">
+                            {room.avulsoHours}h avulso • {room.packageHours}h
+                            pacote • {room.contractHours}h contrato
                           </p>
                         </div>
                       </div>
                     </td>
 
-                    <td className="px-6 py-4">
-                      <p className="font-bold text-slate-700 truncate max-w-[160px]">
+                    <td className="px-6 py-3.5">
+                      <p className="font-medium text-slate-700 truncate max-w-[160px]">
                         {room.host}
                       </p>
                       {room.cohostName && (
-                        <p className="text-[10px] font-bold text-purple-700 flex items-center gap-1 mt-0.5">
-                          <Sparkles className="w-3 h-3" /> Co-Anfitrião:{" "}
-                          {room.cohostName}
+                        <p className="text-[10px] text-slate-500 flex items-center gap-1 mt-0.5">
+                          <Sparkles className="w-3 h-3 text-[#BF4B24]" />{" "}
+                          Co-Host: {room.cohostName}
                         </p>
                       )}
                     </td>
 
-                    <td className="px-6 py-4 text-center">
+                    <td className="px-6 py-3.5 text-center">
                       <div className="inline-flex items-center gap-2">
-                        <span className="font-bold text-slate-700 w-9 text-right">
+                        <span className="font-semibold text-slate-700 w-8 text-right">
                           {room.occupancy}%
                         </span>
-                        <div className="w-20 h-2 bg-slate-100 rounded-full overflow-hidden">
+                        <div className="w-16 h-1.5 bg-slate-100 rounded-full overflow-hidden">
                           <div
-                            className="h-full rounded-full bg-[#BF4B24]"
+                            className="h-full rounded-full bg-slate-900"
                             style={{ width: `${room.occupancy}%` }}
                           />
                         </div>
                       </div>
                     </td>
 
-                    <td className="px-6 py-4 text-right font-bold text-[#BF4B24] bg-orange-50/20">
+                    <td className="px-6 py-3.5 text-right font-medium text-slate-600">
                       R$ {formatBRL(room.avulsoRevenue)}
                     </td>
 
-                    <td className="px-6 py-4 text-right font-bold text-purple-700 bg-purple-50/20">
+                    <td className="px-6 py-3.5 text-right font-medium text-slate-600">
+                      R$ {formatBRL(room.packageRevenue)}
+                    </td>
+
+                    <td className="px-6 py-3.5 text-right font-medium text-slate-600">
                       R$ {formatBRL(room.contractRevenue)}
                     </td>
 
-                    <td className="px-6 py-4 text-right font-black text-slate-900">
+                    <td className="px-6 py-3.5 text-right font-bold text-slate-900">
                       R$ {formatBRL(room.revenue)}
                     </td>
 
-                    <td className="px-6 py-4 text-right font-black text-emerald-700 bg-emerald-50/30">
+                    <td className="px-6 py-3.5 text-right font-bold text-emerald-700">
                       + R$ {formatBRL(room.platformFee)}
                     </td>
                   </tr>
@@ -2841,28 +3195,377 @@ export function AdminOverviewTab() {
       </div>
 
       {/* ==================================================================== */}
-      {/* MODAL DE EXTRATO BANCÁRIO (ORDENADO PELA DATA DE AGENDAMENTO / BAIXA) */}
+      {/* MODAL 1: INTELIGÊNCIA DE ASSINANTES FUSION PASS+                     */}
+      {/* ==================================================================== */}
+      <Dialog
+        open={isSubscribersModalOpen}
+        onOpenChange={setIsSubscribersModalOpen}
+      >
+        <DialogContent className="max-w-[95vw] sm:max-w-6xl h-[88vh] p-0 gap-0 overflow-hidden flex flex-col bg-white border-slate-200 shadow-2xl rounded-2xl">
+          <DialogHeader className="px-6 py-4 bg-slate-900 text-white shrink-0">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pr-6">
+              <div>
+                <DialogTitle className="text-base font-bold text-white">
+                  Inteligência de Assinaturas Fusion Pass+ (
+                  {breakageTotals.totalSubscribersCount})
+                </DialogTitle>
+                <DialogDescription className="text-xs text-slate-400">
+                  Acompanhe quem assinou via PIX ou Cartão, quem renovou, quem
+                  cancelou e voltou, vencimentos e lucro de sobras (breakage).
+                </DialogDescription>
+              </div>
+              <Button
+                type="button"
+                onClick={handleExportSubscribersCSV}
+                size="sm"
+                className="bg-white hover:bg-slate-100 text-slate-900 font-semibold text-xs h-9 shrink-0"
+              >
+                <FileSpreadsheet className="w-4 h-4 mr-1.5" />
+                Exportar CSV
+              </Button>
+            </div>
+          </DialogHeader>
+
+          {/* Resumo de Topo do Modal de Assinantes */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-slate-200 border-b border-slate-200 bg-slate-50 shrink-0 tabular-nums">
+            <div className="px-6 py-3">
+              <p className="text-[11px] font-medium text-slate-500">
+                Ativos & Método (MRR: R${" "}
+                {formatBRL(breakageTotals.activeMrrBrl)})
+              </p>
+              <p className="text-lg font-bold text-slate-900 mt-0.5">
+                {breakageTotals.activeSubscribersCount} ativos{" "}
+                <span className="text-xs font-normal text-slate-500">
+                  (PIX: {breakageTotals.pixSubscribersCount} • Cartão:{" "}
+                  {breakageTotals.cardSubscribersCount})
+                </span>
+              </p>
+            </div>
+            <div className="px-6 py-3">
+              <p className="text-[11px] font-medium text-slate-500">
+                Renovações, Reativações & Cancelados
+              </p>
+              <p className="text-lg font-bold text-slate-900 mt-0.5">
+                {breakageTotals.renewedSubscribersCount} renovados{" "}
+                <span className="text-xs font-normal text-slate-500">
+                  ({breakageTotals.reactivatedSubscribersCount} voltaram •{" "}
+                  {breakageTotals.cancelledCount} canc.)
+                </span>
+              </p>
+            </div>
+            <div className="px-6 py-3">
+              <p className="text-[11px] font-medium text-slate-500">
+                Radar de Vencimento & Atraso
+              </p>
+              <p className="text-lg font-bold text-amber-700 mt-0.5">
+                {breakageTotals.expiringSoonCount} vencendo{" "}
+                <span className="text-xs font-semibold text-red-600">
+                  • {breakageTotals.overdueCount} atrasados
+                </span>
+              </p>
+            </div>
+            <div className="px-6 py-3 bg-emerald-50/50">
+              <p className="text-[11px] font-medium text-emerald-800">
+                Lucro Extra (Breakage + Downgrade)
+              </p>
+              <p className="text-lg font-bold text-emerald-700 mt-0.5">
+                + R${" "}
+                {formatBRL(
+                  breakageTotals.totalRealizedBreakageProfitBrl +
+                    breakageTotals.totalDowngradeSpreadProfitBrl,
+                )}
+              </p>
+            </div>
+          </div>
+
+          {/* Barra de Filtros do Ciclo de Vida e Pagamento */}
+          <div className="px-6 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-white shrink-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center bg-slate-100 p-1 rounded-xl">
+                {[
+                  {
+                    id: "all",
+                    label: `Todos (${breakageTotals.totalSubscribersCount})`,
+                  },
+                  {
+                    id: "active",
+                    label: `Ativos (${breakageTotals.activeSubscribersCount})`,
+                  },
+                  {
+                    id: "renewed",
+                    label: `Renovados ≥ 2m (${breakageTotals.renewedSubscribersCount})`,
+                  },
+                  {
+                    id: "reactivated",
+                    label: `Reativados ↺ (${breakageTotals.reactivatedSubscribersCount})`,
+                  },
+                  {
+                    id: "expiring_soon",
+                    label: `Perto de Vencer (${breakageTotals.expiringSoonCount})`,
+                  },
+                  {
+                    id: "overdue",
+                    label: `Atrasados (${breakageTotals.overdueCount})`,
+                  },
+                  {
+                    id: "cancelled",
+                    label: `Cancelados (${breakageTotals.cancelledCount})`,
+                  },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setSubLifecycleFilter(tab.id as any)}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      subLifecycleFilter === tab.id
+                        ? "bg-white text-slate-900 shadow-2xs"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <select
+                value={subPaymentFilter}
+                onChange={(e) =>
+                  setSubPaymentFilter(
+                    e.target.value as "all" | "PIX" | "CREDIT_CARD",
+                  )
+                }
+                className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none"
+              >
+                <option value="all">
+                  Método: PIX + Cartão ({breakageTotals.totalSubscribersCount})
+                </option>
+                <option value="PIX">
+                  Assinantes via PIX ({breakageTotals.pixSubscribersCount})
+                </option>
+                <option value="CREDIT_CARD">
+                  Assinantes via Cartão ({breakageTotals.cardSubscribersCount})
+                </option>
+              </select>
+            </div>
+
+            <div className="relative w-full sm:w-64">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <Input
+                placeholder="Buscar assinante por nome ou e-mail..."
+                value={subscriberSearch}
+                onChange={(e) => setSubscriberSearch(e.target.value)}
+                className="pl-8 h-9 text-xs rounded-xl border-slate-200"
+              />
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto">
+            <table className="w-full text-left text-xs whitespace-nowrap tabular-nums">
+              <thead className="bg-slate-50 text-slate-500 font-semibold text-[11px] sticky top-0 z-10 border-b border-slate-200">
+                <tr>
+                  <th className="px-6 py-3.5">Assinante</th>
+                  <th className="px-6 py-3.5">Plano & Pagamento</th>
+                  <th className="px-6 py-3.5">Status & Vencimento</th>
+                  <th className="px-6 py-3.5">Tempo de Casa (Meses)</th>
+                  <th className="px-6 py-3.5">Consumo (Usadas / Compradas)</th>
+                  <th className="px-6 py-3.5 text-right">
+                    Breakage & Downgrade
+                  </th>
+                  <th className="px-6 py-3.5 text-center">Contato</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredSubscribers.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={7}
+                      className="px-6 py-16 text-center text-slate-400 font-medium"
+                    >
+                      Nenhum assinante encontrado no filtro atual.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredSubscribers.map((sub) => {
+                    const tierLabel = sub.activePlanTier
+                      ? formatTierLabel(sub.activePlanTier)
+                      : "Basic";
+                    const waPhone = cleanPhoneForWa(sub.specialistPhone);
+
+                    return (
+                      <tr
+                        key={sub.userId}
+                        className="hover:bg-slate-50 transition-colors"
+                      >
+                        <td className="px-6 py-3.5">
+                          <p className="font-bold text-slate-900">
+                            {sub.specialistName}
+                          </p>
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            {sub.specialistEmail}
+                          </p>
+                        </td>
+
+                        <td className="px-6 py-3.5">
+                          <div className="font-semibold text-slate-900">
+                            Plano {tierLabel}{" "}
+                            {sub.activePlanHours
+                              ? `(${sub.activePlanHours}h/mês)`
+                              : ""}
+                          </div>
+                          <div className="flex items-center gap-1.5 mt-1">
+                            {sub.paymentMethod === "PIX" ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
+                                <QrCode className="w-3 h-3 text-[#BF4B24]" />
+                                Via PIX
+                              </span>
+                            ) : sub.paymentMethod === "CREDIT_CARD" ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
+                                <CreditCard className="w-3 h-3 text-slate-600" />
+                                Cartão{" "}
+                                {sub.cardLast4 ? `•••• ${sub.cardLast4}` : ""}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
+                                PIX + Cartão
+                              </span>
+                            )}
+                            <span className="text-[10px] text-slate-400">
+                              Pago: R$ {formatBRL(sub.totalInvestedBrl)}
+                            </span>
+                          </div>
+                        </td>
+
+                        <td className="px-6 py-3.5">
+                          <div className="flex flex-col items-start gap-1">
+                            {getSubscriberLifecycleBadge(sub)}
+                            <span className="text-[10px] text-slate-500">
+                              {sub.currentExpiresAt
+                                ? sub.daysUntilExpiry !== null &&
+                                  sub.daysUntilExpiry >= 0
+                                  ? `Vence em ${format(parseISO(sub.currentExpiresAt), "dd/MM/yyyy")} (${sub.daysUntilExpiry}d)`
+                                  : `Venceu em ${format(parseISO(sub.currentExpiresAt), "dd/MM/yyyy")}`
+                                : "Sem vencimento"}
+                            </span>
+                          </div>
+                        </td>
+
+                        <td className="px-6 py-3.5">
+                          <p className="font-bold text-slate-900">
+                            {sub.monthsSubscribed}{" "}
+                            {sub.monthsSubscribed === 1
+                              ? "mês assinado"
+                              : "meses assinados"}
+                          </p>
+                          <p className="text-[10px] text-slate-500 mt-0.5">
+                            {sub.renewalsCount > 0
+                              ? `${sub.renewalsCount} renovação(ões)`
+                              : "1º ciclo"}
+                            {sub.firstSubscriptionDate
+                              ? ` • Desde ${format(parseISO(sub.firstSubscriptionDate), "dd/MM/yy")}`
+                              : ""}
+                          </p>
+                          {sub.hasReactivated && (
+                            <span className="text-[10px] font-semibold text-emerald-700 block mt-0.5">
+                              Cancelou antes e voltou a assinar
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="px-6 py-3.5 min-w-[190px]">
+                          <div className="flex justify-between font-medium text-xs mb-1">
+                            <span className="text-slate-700">
+                              Usou {sub.usedHoursTotal}h de{" "}
+                              {sub.purchasedHoursTotal}h
+                            </span>
+                            <span className="text-slate-500">
+                              {sub.utilizationPct}%
+                            </span>
+                          </div>
+                          <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-slate-900 rounded-full"
+                              style={{ width: `${sub.utilizationPct}%` }}
+                            />
+                          </div>
+                          <span className="block text-[10px] text-slate-400 mt-1">
+                            Saldo livre hoje:{" "}
+                            <strong className="text-slate-700">
+                              {sub.activeRemainingHours}h
+                            </strong>{" "}
+                            (R$ {formatBRL(sub.floatingUnusedValueBrl)})
+                          </span>
+                        </td>
+
+                        <td className="px-6 py-3.5 text-right">
+                          {sub.realizedBreakageProfitBrl +
+                            sub.downgradeSpreadProfitBrl >
+                          0 ? (
+                            <div>
+                              <span className="font-bold text-emerald-700">
+                                + R${" "}
+                                {formatBRL(
+                                  sub.realizedBreakageProfitBrl +
+                                    sub.downgradeSpreadProfitBrl,
+                                )}
+                              </span>
+                              <span className="block text-[10px] text-slate-400">
+                                {sub.expiredUnusedHours}h vencidas •{" "}
+                                {sub.downgradeBookingsCount}x downgrade
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400">R$ 0,00</span>
+                          )}
+                        </td>
+
+                        <td className="px-6 py-3.5 text-center">
+                          {waPhone ? (
+                            <a
+                              href={`https://wa.me/${waPhone}?text=${encodeURIComponent(
+                                sub.isOverdue
+                                  ? `Olá Dr(a). ${sub.specialistName.split(" ")[0]}, tudo bem? Notamos que o ciclo do seu Fusion Pass+ venceu. Gostaria de renovar suas horas com desconto?`
+                                  : sub.isExpiringSoon
+                                    ? `Olá Dr(a). ${sub.specialistName.split(" ")[0]}, tudo bem? Seu ciclo do Fusion Pass+ vence em ${sub.daysUntilExpiry} dia(s).`
+                                    : `Olá Dr(a). ${sub.specialistName.split(" ")[0]}, tudo bem?`,
+                              )}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Chamar no WhatsApp"
+                              className="h-8 px-3 rounded-lg border border-slate-200 text-emerald-700 hover:bg-emerald-50 inline-flex items-center justify-center gap-1.5 text-xs font-semibold"
+                            >
+                              <MessageCircle className="w-3.5 h-3.5" />
+                              WhatsApp
+                            </a>
+                          ) : (
+                            <span className="text-[11px] text-slate-400">
+                              Sem telefone
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ==================================================================== */}
+      {/* MODAL 2: EXTRATO BANCÁRIO FUSION (LEDGER COMPLETO)                   */}
       {/* ==================================================================== */}
       <Dialog open={isLedgerOpen} onOpenChange={setIsLedgerOpen}>
         <DialogContent className="max-w-[95vw] sm:max-w-6xl h-[88vh] p-0 gap-0 overflow-hidden flex flex-col bg-white border-slate-200 shadow-2xl rounded-2xl">
-          <DialogHeader className="px-6 py-4 bg-slate-950 text-white shrink-0">
+          <DialogHeader className="px-6 py-4 bg-slate-900 text-white shrink-0">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pr-6">
               <div>
-                <div className="flex items-center gap-2">
-                  <Badge className="bg-[#BF4B24] text-white border-0 text-[10px] font-black uppercase">
-                    Extrato Bancário Fusion
-                  </Badge>
-                  <span className="text-xs text-slate-400 font-bold tabular-nums">
-                    • {processedLedger.length} lançamento(s) no período
-                  </span>
-                </div>
-                <DialogTitle className="text-lg font-black text-white mt-1">
-                  Demonstrativo Contábil por Data de Agendamento / Baixa de
-                  Contrato
+                <DialogTitle className="text-base font-bold text-white">
+                  Extrato Contábil Fusion ({processedLedger.length} lançamentos)
                 </DialogTitle>
                 <DialogDescription className="text-xs text-slate-400">
-                  Exibe as reservas avulsas pela data de pagamento e os
-                  contratos pelo valor integral no dia exato da baixa.
+                  Horas Avulsas, Pacotes Fusion Pass+ e Contratos Fixos (pelo
+                  valor integral no dia da baixa).
                 </DialogDescription>
               </div>
 
@@ -2870,26 +3573,25 @@ export function AdminOverviewTab() {
                 type="button"
                 onClick={handleExportLedgerCSV}
                 size="sm"
-                className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs h-9 shrink-0"
+                className="bg-white hover:bg-slate-100 text-slate-900 font-semibold text-xs h-9 shrink-0"
               >
                 <FileSpreadsheet className="w-4 h-4 mr-1.5" />
-                Baixar Extrato (CSV)
+                Exportar CSV
               </Button>
             </div>
           </DialogHeader>
 
-          {/* Resumo de Topo do Extrato */}
           <div className="grid grid-cols-2 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-slate-200 border-b border-slate-200 bg-slate-50 shrink-0 tabular-nums">
             <div className="px-6 py-3">
-              <p className="text-[10px] font-black uppercase text-slate-400">
+              <p className="text-[11px] font-medium text-slate-500">
                 Entradas Brutas (GMV)
               </p>
-              <p className="text-lg font-black text-slate-900 mt-0.5">
+              <p className="text-lg font-bold text-slate-900 mt-0.5">
                 R$ {formatBRL(ledgerTotals.gmv)}
               </p>
             </div>
             <div className="px-6 py-3">
-              <p className="text-[10px] font-black uppercase text-slate-400">
+              <p className="text-[11px] font-medium text-slate-500">
                 Repasse Clínicas / Co-Hosts
               </p>
               <p className="text-lg font-bold text-slate-700 mt-0.5">
@@ -2897,39 +3599,39 @@ export function AdminOverviewTab() {
               </p>
             </div>
             <div className="px-6 py-3">
-              <p className="text-[10px] font-black uppercase text-slate-400">
-                Volume de Horas Auditadas
+              <p className="text-[11px] font-medium text-slate-500">
+                Horas Auditadas
               </p>
-              <p className="text-lg font-black text-slate-900 mt-0.5">
+              <p className="text-lg font-bold text-slate-900 mt-0.5">
                 {ledgerTotals.hours}h utilizadas
               </p>
             </div>
-            <div className="px-6 py-3 bg-emerald-50/70">
-              <p className="text-[10px] font-black uppercase text-emerald-800">
-                Saldo Líquido Fusion
+            <div className="px-6 py-3 bg-emerald-50/60">
+              <p className="text-[11px] font-medium text-emerald-800">
+                Receita Líquida Fusion
               </p>
-              <p className="text-lg font-black text-emerald-700 mt-0.5">
+              <p className="text-lg font-bold text-emerald-700 mt-0.5">
                 + R$ {formatBRL(ledgerTotals.fusionNet)}
               </p>
             </div>
           </div>
 
-          {/* Filtros Internos do Extrato */}
           <div className="px-6 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-white shrink-0">
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center bg-slate-100 p-1 rounded-xl">
+              <div className="flex flex-wrap items-center bg-slate-100 p-1 rounded-xl">
                 {[
                   { id: "all", label: "Todos" },
-                  { id: "avulso", label: "Horas Avulsas (20%)" },
-                  { id: "contract", label: "Contratos Fixos (Baixa)" },
+                  { id: "avulso", label: "1. Horas Avulsas" },
+                  { id: "package", label: "2. Pacotes" },
+                  { id: "contract", label: "3. Contratos" },
                 ].map((tab) => (
                   <button
                     key={tab.id}
                     type="button"
                     onClick={() => setLedgerOriginFilter(tab.id as any)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                       ledgerOriginFilter === tab.id
-                        ? "bg-slate-900 text-white"
+                        ? "bg-white text-slate-900 shadow-2xs"
                         : "text-slate-600 hover:text-slate-900"
                     }`}
                   >
@@ -2941,7 +3643,7 @@ export function AdminOverviewTab() {
               <select
                 value={ledgerClinicFilter}
                 onChange={(e) => setLedgerClinicFilter(e.target.value)}
-                className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 outline-none"
+                className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none"
               >
                 <option value="all">Todas as Clínicas</option>
                 {availableClinics.map((c) => (
@@ -2963,22 +3665,19 @@ export function AdminOverviewTab() {
             </div>
           </div>
 
-          {/* Tabela Rolável do Extrato */}
           <div className="flex-1 overflow-y-auto">
             <table className="w-full text-left text-xs whitespace-nowrap tabular-nums">
-              <thead className="bg-slate-50 text-slate-500 font-bold text-[10px] uppercase tracking-wider sticky top-0 z-10 border-b border-slate-200">
+              <thead className="bg-slate-50 text-slate-500 font-semibold text-[11px] sticky top-0 z-10 border-b border-slate-200">
                 <tr>
-                  <th className="px-6 py-3">
-                    Data do Pagamento / Baixa • Uso da Sala
-                  </th>
+                  <th className="px-6 py-3">Data / Sessão</th>
                   <th className="px-6 py-3">Cód.</th>
-                  <th className="px-6 py-3">Histórico / Locatário</th>
-                  <th className="px-6 py-3">Natureza</th>
-                  <th className="px-6 py-3 text-right">Entrada Bruta (GMV)</th>
+                  <th className="px-6 py-3">Locatário / Sala</th>
+                  <th className="px-6 py-3">Canal</th>
+                  <th className="px-6 py-3 text-right">Valor Bruto</th>
                   <th className="px-6 py-3 text-right">Repasse Clínica</th>
-                  <th className="px-6 py-3 text-right">Crédito Fusion</th>
-                  <th className="px-6 py-3 text-right bg-slate-100">
-                    Saldo Acumulado Fusion
+                  <th className="px-6 py-3 text-right">Receita Fusion</th>
+                  <th className="px-6 py-3 text-right bg-slate-50">
+                    Saldo Acumulado
                   </th>
                 </tr>
               </thead>
@@ -2987,7 +3686,7 @@ export function AdminOverviewTab() {
                   <tr>
                     <td
                       colSpan={8}
-                      className="px-6 py-16 text-center text-slate-400 font-bold"
+                      className="px-6 py-16 text-center text-slate-400"
                     >
                       Nenhum lançamento encontrado para este filtro.
                     </td>
@@ -3002,40 +3701,27 @@ export function AdminOverviewTab() {
                         className="hover:bg-slate-50 transition-colors"
                       >
                         <td className="px-6 py-3">
-                          <p className="font-black text-slate-900">
+                          <p className="font-bold text-slate-900">
                             {item.is_contract
-                              ? `Baixa em ${format(parseISO(item.transaction_date), "dd/MM/yyyy")}`
+                              ? `Baixa ${format(parseISO(item.transaction_date), "dd/MM/yyyy")}`
                               : format(
                                   parseISO(item.transaction_date),
-                                  "dd/MM/yyyy 'às' HH:mm",
+                                  "dd/MM/yyyy HH:mm",
                                 )}
                           </p>
-                          <p className="text-[11px] text-emerald-700 font-bold">
-                            {item.is_contract ? (
-                              <>
-                                Valor Integral do Contrato (
-                                {item.duration_hours}h no período)
-                              </>
-                            ) : (
-                              <>
-                                Uso da sala:{" "}
-                                {format(
-                                  parseISO(item.start_time),
-                                  "dd/MM/yyyy",
-                                )}{" "}
-                                ({format(parseISO(item.start_time), "HH:mm")}–
-                                {format(parseISO(item.end_time), "HH:mm")})
-                              </>
-                            )}
+                          <p className="text-[11px] text-slate-500">
+                            {item.is_contract
+                              ? `Contrato (${item.duration_hours}h no período)`
+                              : `Sessão: ${format(parseISO(item.start_time), "dd/MM HH:mm")}`}
                           </p>
                         </td>
 
-                        <td className="px-6 py-3 font-mono text-[11px] text-slate-500">
+                        <td className="px-6 py-3 font-mono text-[11px] text-slate-400">
                           #{item.booking_id.slice(0, 8)}
                         </td>
 
                         <td className="px-6 py-3">
-                          <p className="font-bold text-slate-900">
+                          <p className="font-semibold text-slate-900">
                             {item.specialist_name}
                           </p>
                           <p className="text-[11px] text-slate-500">
@@ -3044,35 +3730,30 @@ export function AdminOverviewTab() {
                         </td>
 
                         <td className="px-6 py-3">
-                          <Badge
-                            className={
-                              item.is_contract
-                                ? "bg-purple-100 text-purple-800 border-0 text-[10px] font-bold"
-                                : "bg-orange-50 text-[#BF4B24] border-0 text-[10px] font-bold"
-                            }
-                          >
+                          <span className="text-xs font-medium text-slate-700">
                             {item.modality_label}
-                          </Badge>
+                          </span>
+                          {item.is_downgrade && (
+                            <span className="block text-[10px] font-semibold text-emerald-700">
+                              + R$ {formatBRL(item.downgrade_spread_brl)}{" "}
+                              downgrade
+                            </span>
+                          )}
                         </td>
 
-                        <td className="px-6 py-3 text-right font-bold text-slate-900">
+                        <td className="px-6 py-3 text-right font-semibold text-slate-900">
                           R$ {formatBRL(item.gross_brl)}
                         </td>
 
-                        <td className="px-6 py-3 text-right font-medium text-slate-500">
+                        <td className="px-6 py-3 text-right text-slate-500">
                           - R$ {formatBRL(hostTotal)}
                         </td>
 
-                        <td className="px-6 py-3 text-right">
-                          <span className="font-black text-emerald-700">
-                            + R$ {formatBRL(item.fusion_fee_brl)}
-                          </span>
-                          <span className="block text-[10px] text-slate-400 font-bold">
-                            Taxa: {item.fusion_fee_pct}%
-                          </span>
+                        <td className="px-6 py-3 text-right font-bold text-emerald-700">
+                          + R$ {formatBRL(item.fusion_fee_brl)}
                         </td>
 
-                        <td className="px-6 py-3 text-right font-black text-slate-950 bg-slate-50">
+                        <td className="px-6 py-3 text-right font-bold text-slate-900 bg-slate-50/60">
                           R$ {formatBRL(item.running_fusion_balance)}
                         </td>
                       </tr>

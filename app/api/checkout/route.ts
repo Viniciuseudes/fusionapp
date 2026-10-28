@@ -68,8 +68,9 @@ function getAsaasConfig() {
 }
 
 // ============================================================================
-// Helper Idempotente: Ativa a assinatura e injeta as horas com [Rate:XX.XX]
+// Helper Idempotente: Ativa a assinatura e injeta as horas
 // ============================================================================
+
 async function activateSubscriptionAndCreditWallet(params: {
   userId: string;
   tier: string;
@@ -94,12 +95,15 @@ async function activateSubscriptionAndCreditWallet(params: {
   const numHours = Math.max(1, Number(hours || 1));
   const numPrice = Number(priceBrl || 0);
   const unitHourlyRate =
-    numPrice > 0 ? (numPrice / numHours).toFixed(2) : "0.00";
+    numPrice > 0 ? (numPrice / numHours).toFixed(4) : "0.0000";
 
   const idempotencyTag = `[Asaas:${paymentId}]`;
+  const paidTag = numPrice > 0 ? `[Paid:${numPrice.toFixed(2)}]` : "";
   const rateTag = Number(unitHourlyRate) > 0 ? `[Rate:${unitHourlyRate}]` : "";
+  const viaTag = paymentMethod.toUpperCase().includes("PIX")
+    ? "[Via:PIX]"
+    : "[Via:CARTAO]";
 
-  // 1. Trava de Idempotência: Verifica se este pagamento já gerou créditos
   const { data: existingTx } = await supabaseAdmin
     .from("wallet_transactions")
     .select("id")
@@ -111,7 +115,6 @@ async function activateSubscriptionAndCreditWallet(params: {
     return { alreadyCredited: true };
   }
 
-  // 2. Desativa assinaturas antigas e ativa a nova na tabela `subscriptions`
   await supabaseAdmin
     .from("subscriptions")
     .update({ status: "INACTIVE" })
@@ -125,19 +128,18 @@ async function activateSubscriptionAndCreditWallet(params: {
     status: "ACTIVE",
   });
 
-  // 3. Injeta os créditos na carteira com validade de 30 dias e a tarifa por hora gravada
   const expiresAt = new Date(
     Date.now() + 30 * 24 * 60 * 60 * 1000,
   ).toISOString();
 
-  const description = `Assinatura ${packageName || `Fusion Pass (${normalizedTier.toUpperCase()})`} - +${numHours}h ${rateTag} ${idempotencyTag}`;
+  const description = `Assinatura ${packageName || `Fusion Pass (${normalizedTier.toUpperCase()})`} - +${numHours}h ${viaTag} ${paidTag} ${rateTag} ${idempotencyTag}`;
 
   const { error: walletErr } = await supabaseAdmin
     .from("wallet_transactions")
     .insert({
       user_id: userId,
       amount: numHours,
-      type: "credit",
+      type: "package_purchase",
       tier: normalizedTier,
       description,
       expires_at: expiresAt,
@@ -147,7 +149,6 @@ async function activateSubscriptionAndCreditWallet(params: {
     throw new Error(`Erro ao creditar carteira: ${walletErr.message}`);
   }
 
-  // 4. Notifica o profissional no sino e por e-mail
   try {
     await supabaseAdmin.from("notifications").insert({
       user_id: userId,
@@ -219,7 +220,7 @@ export async function GET(request: Request) {
             hours,
             priceBrl: price || Number(paymentData.value || 0),
             paymentId,
-            paymentMethod: "PIX (Assinatura)",
+            paymentMethod: "PIX",
             packageName,
           });
 
@@ -634,7 +635,7 @@ export async function POST(request: Request) {
           priceBrl: numPrice,
           paymentId: paymentIdForRecord,
           subscriptionId: subResult.id,
-          paymentMethod: "Cartão de Crédito (Assinatura)",
+          paymentMethod: "CREDIT_CARD",
           packageName: packageName || "Fusion Pass+",
         });
 
