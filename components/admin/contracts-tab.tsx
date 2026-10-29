@@ -25,6 +25,10 @@ import {
   CalendarClock,
   Layers,
   Lock,
+  QrCode,
+  Barcode,
+  CreditCard,
+  Copy,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -45,6 +49,8 @@ import {
   eachDayOfInterval,
   getDay,
   differenceInDays,
+  differenceInCalendarDays,
+  getDaysInMonth,
 } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -63,6 +69,11 @@ interface ContractScheduleConfig {
   startHour: number;
   endHour: number;
   pricingTiers?: ContractPricingTier[];
+  fine_pct?: number;
+  interest_pct?: number;
+  paid_dates?: Record<string, string>;
+  last_paid_date?: string | null;
+  invoices?: Record<string, any>;
 }
 
 interface RoomContract {
@@ -124,6 +135,12 @@ const SHIFT_OPTIONS = [
   { id: "night", label: "Noite (18h às 22h)", start: 18, end: 22 },
 ];
 
+const formatBRL = (val: number) =>
+  val.toLocaleString("pt-BR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
 export function AdminContractsTab({
   mode = "admin",
   preselectedRoomId,
@@ -163,6 +180,28 @@ export function AdminContractsTab({
     }[]
   >([]);
 
+  // Estados do Modal de Pagamento / Cobrança Asaas (PIX, Boleto, Cartão)
+  const [payModalOpen, setPayModalOpen] = useState(false);
+  const [payContract, setPayContract] = useState<RoomContract | null>(null);
+  const [payMethod, setPayMethod] = useState<"PIX" | "BOLETO" | "CREDIT_CARD">(
+    "PIX",
+  );
+  const [payProcessing, setPayProcessing] = useState(false);
+  const [generatedPaymentId, setGeneratedPaymentId] = useState<string | null>(
+    null,
+  );
+  const [pixQrCode, setPixQrCode] = useState<string | null>(null);
+  const [pixCopyPaste, setPixCopyPaste] = useState<string | null>(null);
+  const [boletoLine, setBoletoLine] = useState<string | null>(null);
+  const [boletoUrl, setBoletoUrl] = useState<string | null>(null);
+  const [payCpf, setPayCpf] = useState("");
+  const [payCep, setPayCep] = useState("");
+  const [cardHolder, setCardHolder] = useState("");
+  const [cardNumber, setCardNumber] = useState("");
+  const [cardExpMonth, setCardExpMonth] = useState("");
+  const [cardExpYear, setCardExpYear] = useState("");
+  const [cardCcv, setCardCcv] = useState("");
+
   const currentCompetence = format(new Date(), "yyyy-MM");
   const currentMonthLabel = format(new Date(), "MMM/yyyy", { locale: ptBR });
   const todayIsoDate = format(new Date(), "yyyy-MM-dd");
@@ -185,6 +224,8 @@ export function AdminContractsTab({
     ),
     billing_cycle: "monthly" as "monthly" | "upfront" | "weekly",
     due_day: "8",
+    fine_pct: "2",
+    interest_pct: "1",
     contract_value: "",
     session_value: "",
     platform_fee_pct: "15",
@@ -201,6 +242,34 @@ export function AdminContractsTab({
   useEffect(() => {
     loadInitialData();
   }, [preselectedRoomId]);
+
+  // Polling automático quando um QR Code PIX de contrato estiver aberto
+  useEffect(() => {
+    if (!payModalOpen || !generatedPaymentId || !payContract) return;
+
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch(
+          `/api/contracts/payment?contractId=${payContract.id}&competence=${currentCompetence}&paymentId=${generatedPaymentId}`,
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data.confirmed) {
+            clearInterval(timer);
+            toast({
+              title: "Mensalidade Confirmada pelo Asaas!",
+              description: `Baixa automática aplicada ao contrato de ${payContract.specialist_name}.`,
+            });
+            setPayModalOpen(false);
+            setGeneratedPaymentId(null);
+            loadInitialData();
+          }
+        }
+      } catch {}
+    }, 4000);
+
+    return () => clearInterval(timer);
+  }, [payModalOpen, generatedPaymentId, payContract, currentCompetence, toast]);
 
   const loadInitialData = async () => {
     setLoading(true);
@@ -242,7 +311,7 @@ export function AdminContractsTab({
 
       const { data: profilesData } = await supabase
         .from("profiles")
-        .select("id, full_name, cpf, email, phone, whatsapp, role")
+        .select("id, full_name, cpf, cep, email, phone, whatsapp, role")
         .order("full_name");
 
       const allProfiles = profilesData || [];
@@ -289,6 +358,17 @@ export function AdminContractsTab({
               ? Number(c.host_split_pct)
               : Math.max(0, 100 - fusionPct);
 
+          const rawSched =
+            typeof c.schedule_config === "string"
+              ? (() => {
+                  try {
+                    return JSON.parse(c.schedule_config);
+                  } catch {
+                    return {};
+                  }
+                })()
+              : c.schedule_config || {};
+
           return {
             ...c,
             due_day: Math.min(31, Math.max(1, Number(c.due_day || 8))),
@@ -300,12 +380,15 @@ export function AdminContractsTab({
             cohost_split_pct: Number(c.cohost_split_pct ?? 80),
             room_name: roomObj?.name || "Sala Removida",
             clinic_name: hostName || "Fusion Clinic",
-            schedule_config: c.schedule_config || {
+            schedule_config: {
               daysOfWeek: [1],
               shifts: ["fullday"],
               startHour: 8,
               endHour: 20,
               pricingTiers: [],
+              fine_pct: 2,
+              interest_pct: 1,
+              ...rawSched,
             },
           };
         },
@@ -854,13 +937,33 @@ export function AdminContractsTab({
     setTogglingPaymentId(contract.id);
     try {
       const isPaidThisMonth =
-        contract.last_paid_competence === currentCompetence;
+        contract.last_paid_competence === currentCompetence ||
+        Boolean(contract.schedule_config?.paid_dates?.[currentCompetence]);
+
       const newCompetence = isPaidThisMonth ? null : currentCompetence;
+      const existingSched = contract.schedule_config || {
+        daysOfWeek: [1],
+        shifts: ["fullday"],
+        startHour: 8,
+        endHour: 20,
+      };
+      const paidDates = { ...(existingSched.paid_dates || {}) };
+
+      if (newCompetence) {
+        paidDates[currentCompetence] = todayIsoDate;
+      } else {
+        delete paidDates[currentCompetence];
+      }
 
       const { error } = await supabase
         .from("room_contracts")
         .update({
           last_paid_competence: newCompetence,
+          schedule_config: {
+            ...existingSched,
+            paid_dates: paidDates,
+            last_paid_date: newCompetence ? todayIsoDate : null,
+          },
           updated_at: new Date().toISOString(),
         })
         .eq("id", contract.id);
@@ -885,6 +988,107 @@ export function AdminContractsTab({
       });
     } finally {
       setTogglingPaymentId(null);
+    }
+  };
+
+  const openAsaasPayModal = (
+    c: RoomContract,
+    initialMethod: "PIX" | "BOLETO" | "CREDIT_CARD" = "PIX",
+  ) => {
+    setPayContract(c);
+    setPayMethod(initialMethod);
+    setGeneratedPaymentId(null);
+    setPixQrCode(null);
+    setPixCopyPaste(null);
+    setBoletoLine(null);
+    setBoletoUrl(null);
+
+    const matchedProfile = specialists.find((s) => s.id === c.specialist_id);
+    setPayCpf(c.specialist_document || matchedProfile?.cpf || "");
+    setPayCep(matchedProfile?.cep || "");
+    setCardHolder(c.specialist_name || matchedProfile?.full_name || "");
+    setCardNumber("");
+    setCardExpMonth("");
+    setCardExpYear("");
+    setCardCcv("");
+    setPayModalOpen(true);
+  };
+
+  const handleExecuteAsaasContractCharge = async () => {
+    if (!payContract) return;
+    setPayProcessing(true);
+
+    try {
+      const payload: Record<string, any> = {
+        contractId: payContract.id,
+        competence: currentCompetence,
+        billingType: payMethod,
+        customerCpf: payCpf,
+        customerCep: payCep,
+      };
+
+      if (payMethod === "CREDIT_CARD") {
+        if (
+          !cardNumber ||
+          !cardHolder ||
+          !cardExpMonth ||
+          !cardExpYear ||
+          !cardCcv
+        ) {
+          throw new Error("Preencha todos os dados do cartão de crédito.");
+        }
+        payload.creditCard = {
+          holderName: cardHolder,
+          number: cardNumber.replace(/\D/g, ""),
+          expiryMonth: cardExpMonth.replace(/\D/g, ""),
+          expiryYear:
+            cardExpYear.length === 2 ? `20${cardExpYear}` : cardExpYear,
+          ccv: cardCcv.replace(/\D/g, ""),
+        };
+        payload.cardData = {
+          cpf: payCpf,
+          cep: payCep,
+          saveCard: true,
+        };
+      }
+
+      const res = await fetch("/api/contracts/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Erro ao gerar cobrança no Asaas.");
+      }
+
+      setGeneratedPaymentId(data.paymentId);
+
+      if (payMethod === "PIX") {
+        setPixQrCode(data.pixQrCode);
+        setPixCopyPaste(data.pixCopyPaste);
+      } else if (payMethod === "BOLETO") {
+        setBoletoLine(data.identificationField);
+        setBoletoUrl(data.bankSlipUrl || data.invoiceUrl);
+        setPixQrCode(data.pixQrCode);
+        setPixCopyPaste(data.pixCopyPaste);
+      } else if (payMethod === "CREDIT_CARD") {
+        toast({
+          title: "Pagamento Processado com Sucesso!",
+          description: `A competência ${currentCompetence} foi baixada.`,
+        });
+        setPayModalOpen(false);
+        loadInitialData();
+      }
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro na cobrança Asaas",
+        description: err.message,
+      });
+    } finally {
+      setPayProcessing(false);
     }
   };
 
@@ -913,6 +1117,8 @@ export function AdminContractsTab({
       ),
       billing_cycle: "monthly",
       due_day: "8",
+      fine_pct: "2",
+      interest_pct: "1",
       contract_value: "",
       session_value: "",
       platform_fee_pct: roomHasActiveCohost ? "20" : "15",
@@ -935,7 +1141,6 @@ export function AdminContractsTab({
     const shiftId = (c.schedule_config?.shifts?.[0] || "fullday") as
       "fullday" | "morning" | "afternoon" | "night";
 
-    // Pega as porcentagens originais salvos NO CONTRATO
     const fusionPct = Number(c.platform_fee_pct ?? 15);
     const hostPct =
       c.host_split_pct !== undefined && c.host_split_pct !== null
@@ -966,6 +1171,8 @@ export function AdminContractsTab({
       end_date: c.end_date,
       billing_cycle: c.billing_cycle || "monthly",
       due_day: String(c.due_day || 8),
+      fine_pct: String(c.schedule_config?.fine_pct ?? 2),
+      interest_pct: String(c.schedule_config?.interest_pct ?? 1),
       contract_value: String(c.contract_value || ""),
       session_value: String(c.session_value || ""),
       platform_fee_pct: String(fusionPct),
@@ -1031,6 +1238,8 @@ export function AdminContractsTab({
     }
 
     const parsedDueDay = Math.min(31, Math.max(1, Number(form.due_day) || 8));
+    const parsedFinePct = Math.max(0, Number(form.fine_pct ?? 2));
+    const parsedInterestPct = Math.max(0, Number(form.interest_pct ?? 1));
     const parsedFusionPct = Math.min(
       100,
       Math.max(0, Number(form.platform_fee_pct) || 0),
@@ -1083,7 +1292,9 @@ export function AdminContractsTab({
           ? form.allow_sublease
           : false;
 
+      // Preserva paid_dates, last_paid_date e invoices ao salvar o contrato
       const scheduleConfig: ContractScheduleConfig = {
+        ...(editingContract?.schedule_config || {}),
         daysOfWeek:
           form.contract_type === "monthly_exclusive" && !finalAllowSublease
             ? [1, 2, 3, 4, 5, 6, 0]
@@ -1092,6 +1303,8 @@ export function AdminContractsTab({
         startHour: Number(form.startHour),
         endHour: Number(form.endHour),
         pricingTiers: validTiers,
+        fine_pct: parsedFinePct,
+        interest_pct: parsedInterestPct,
       };
 
       const payload: Record<string, any> = {
@@ -1110,8 +1323,8 @@ export function AdminContractsTab({
         due_day: parsedDueDay,
         contract_value: finalContractValue,
         session_value: Number(computedSessionVal.toFixed(2)),
-        platform_fee_pct: parsedFusionPct, // Salva o percentual personalizado aqui
-        host_split_pct: parsedHostPct, // Salva o percentual personalizado aqui
+        platform_fee_pct: parsedFusionPct,
+        host_split_pct: parsedHostPct,
         allow_sublease: finalAllowSublease,
         cohost_split_pct: finalAllowSublease
           ? Number(form.cohost_split_pct) || 80
@@ -1239,37 +1452,104 @@ export function AdminContractsTab({
   };
 
   const getMonthlyPaymentState = (c: RoomContract) => {
-    const dayStr = String(c.due_day || 8).padStart(2, "0");
+    const dueDayNum = Math.max(1, Math.min(31, Number(c.due_day || 8)));
+    const dayStr = String(dueDayNum).padStart(2, "0");
+    const baseVal = getEffectiveContractPricing(c).contractValue;
+    const finePct = Number(c.schedule_config?.fine_pct ?? 2);
+    const interestPct = Number(c.schedule_config?.interest_pct ?? 1);
+
+    const [yearStr, monthStr] = currentCompetence.split("-");
+    const maxDays = getDaysInMonth(
+      new Date(Number(yearStr), Number(monthStr) - 1, 1),
+    );
+    const safeDay = String(Math.min(dueDayNum, maxDays)).padStart(2, "0");
+    const dueDateIso = `${currentCompetence}-${safeDay}`;
+
+    const isPaid =
+      c.last_paid_competence === currentCompetence ||
+      Boolean(c.schedule_config?.paid_dates?.[currentCompetence]);
+
     if (c.status === "cancelled" || c.status === "expired") {
       return {
         state: "inactive",
         label: `Dia limite: ${dayStr}`,
+        daysLate: 0,
+        fineBrl: 0,
+        interestBrl: 0,
+        totalWithChargesBrl: baseVal,
+        finePct,
+        interestPct,
+        dueDateIso,
       };
     }
 
-    if (c.last_paid_competence === currentCompetence) {
+    if (isPaid) {
       return {
         state: "paid",
         label: `Pago (${currentMonthLabel})`,
+        daysLate: 0,
+        fineBrl: 0,
+        interestBrl: 0,
+        totalWithChargesBrl: baseVal,
+        finePct,
+        interestPct,
+        dueDateIso,
+      };
+    }
+
+    const daysLate = Math.max(
+      0,
+      differenceInCalendarDays(new Date(), parseISO(`${dueDateIso}T23:59:59`)),
+    );
+
+    if (daysLate > 0) {
+      const fineBrl =
+        finePct > 0 ? Number((baseVal * (finePct / 100)).toFixed(2)) : 0;
+      const interestBrl =
+        interestPct > 0
+          ? Number((baseVal * (interestPct / 100 / 30) * daysLate).toFixed(2))
+          : 0;
+      const totalWithChargesBrl = Number(
+        (baseVal + fineBrl + interestBrl).toFixed(2),
+      );
+
+      return {
+        state: "overdue",
+        label: `Atrasado há ${daysLate}d (Venceu dia ${dayStr})`,
+        daysLate,
+        fineBrl,
+        interestBrl,
+        totalWithChargesBrl,
+        finePct,
+        interestPct,
+        dueDateIso,
       };
     }
 
     const currentDay = new Date().getDate();
-    if (currentDay > (c.due_day || 8)) {
-      return {
-        state: "overdue",
-        label: `Em atraso (Venceu dia ${dayStr})`,
-      };
-    }
-    if (currentDay === (c.due_day || 8)) {
+    if (currentDay === dueDayNum) {
       return {
         state: "due_today",
         label: `Vence Hoje (Dia ${dayStr})`,
+        daysLate: 0,
+        fineBrl: 0,
+        interestBrl: 0,
+        totalWithChargesBrl: baseVal,
+        finePct,
+        interestPct,
+        dueDateIso,
       };
     }
     return {
       state: "upcoming",
       label: `Pagar até dia ${dayStr}`,
+      daysLate: 0,
+      fineBrl: 0,
+      interestBrl: 0,
+      totalWithChargesBrl: baseVal,
+      finePct,
+      interestPct,
+      dueDateIso,
     };
   };
 
@@ -1433,6 +1713,15 @@ export function AdminContractsTab({
       : Number(form.contract_value) || 0;
   const previewFusionPct = Number(form.platform_fee_pct) || 0;
   const previewHostPct = Number(form.host_split_pct) || 0;
+  const previewFinePct = Number(form.fine_pct) || 0;
+  const previewInterestPct = Number(form.interest_pct) || 0;
+
+  const activePayPreview = payContract
+    ? getMonthlyPaymentState(payContract)
+    : null;
+  const activePayBaseVal = payContract
+    ? getEffectiveContractPricing(payContract).contractValue
+    : 0;
 
   return (
     <div className="p-4 lg:p-8 w-full pb-32 font-sans">
@@ -1444,8 +1733,8 @@ export function AdminContractsTab({
             Gestão de Contratos, Turnos Fixos & Co-Anfitriões
           </h1>
           <p className="text-xs md:text-sm text-slate-500 font-medium mt-1">
-            Controle de salas fixas mensais, subcontratos dentro de salas de
-            Co-Anfitrião (repasse configurável) e PDFs.
+            Controle de salas fixas mensais, subcontratos de Co-Anfitrião,
+            cobranças via PIX/Boleto/Cartão com multa e juros no Asaas.
           </p>
         </div>
         <Button
@@ -1524,7 +1813,7 @@ export function AdminContractsTab({
             {overdueCount}
           </p>
           <p className="text-[11px] font-medium text-slate-400 mt-1">
-            Contratos que passaram do dia limite no mês
+            Com multa e juros aplicados após vencimento
           </p>
         </div>
       </div>
@@ -1593,7 +1882,7 @@ export function AdminContractsTab({
                   <th className="px-6 py-4">Modalidade & Alocação</th>
                   <th className="px-6 py-4">Vigência (Início → Fim)</th>
                   <th className="px-6 py-4 text-center">
-                    Data Limite de Pagamento
+                    Vencimento, Multa & Juros
                   </th>
                   <th className="px-6 py-4 text-right">Valor Fixo & Divisão</th>
                   <th className="px-6 py-4 text-center">Contrato (PDF)</th>
@@ -1607,7 +1896,6 @@ export function AdminContractsTab({
                   const effectivePricing = getEffectiveContractPricing(c);
                   const parentCohost = getParentCohostForContract(c);
 
-                  // Usa os valores definidos NO CONTRATO ATUAL
                   const fusionPct = Number(c.platform_fee_pct);
                   const recipientPct = Number(c.host_split_pct);
 
@@ -1668,11 +1956,15 @@ export function AdminContractsTab({
                       </td>
 
                       <td className="px-6 py-4 text-center">
-                        <div className="flex flex-col items-center gap-1.5">
+                        <div className="flex flex-col items-center gap-1">
                           <span className="text-xs font-black text-slate-800 flex items-center gap-1">
                             <CalendarClock className="w-3.5 h-3.5 text-[#BF4B24]" />
-                            Até todo dia{" "}
-                            {String(c.due_day || 8).padStart(2, "0")}
+                            Todo dia {String(c.due_day || 8).padStart(2, "0")}
+                          </span>
+
+                          <span className="text-[10px] font-semibold text-slate-400">
+                            Multa {paymentInfo.finePct}% • Juros{" "}
+                            {paymentInfo.interestPct}% a.m.
                           </span>
 
                           {paymentInfo.state === "paid" && (
@@ -1683,10 +1975,16 @@ export function AdminContractsTab({
                           )}
 
                           {paymentInfo.state === "overdue" && (
-                            <Badge className="bg-red-100 text-red-800 border-0 text-[10px] font-black">
-                              <AlertTriangle className="w-3 h-3 mr-1" />
-                              {paymentInfo.label}
-                            </Badge>
+                            <div className="flex flex-col items-center gap-0.5">
+                              <Badge className="bg-red-100 text-red-800 border-0 text-[10px] font-black">
+                                <AlertTriangle className="w-3 h-3 mr-1" />
+                                {paymentInfo.label}
+                              </Badge>
+                              <span className="text-[10px] font-black text-red-600">
+                                Com encargos: R${" "}
+                                {formatBRL(paymentInfo.totalWithChargesBrl)}
+                              </span>
+                            </div>
                           )}
 
                           {paymentInfo.state === "due_today" && (
@@ -1704,22 +2002,33 @@ export function AdminContractsTab({
 
                           {c.status !== "cancelled" &&
                             c.status !== "expired" && (
-                              <button
-                                type="button"
-                                disabled={togglingPaymentId === c.id}
-                                onClick={() => handleToggleMonthPaid(c)}
-                                className={`text-[10px] font-bold underline transition-colors ${
-                                  paymentInfo.state === "paid"
-                                    ? "text-slate-400 hover:text-slate-600"
-                                    : "text-emerald-700 hover:text-emerald-900"
-                                }`}
-                              >
-                                {togglingPaymentId === c.id
-                                  ? "Atualizando..."
-                                  : paymentInfo.state === "paid"
-                                    ? "Desfazer baixa do mês"
-                                    : `Dar baixa (${currentMonthLabel})`}
-                              </button>
+                              <div className="flex items-center gap-2 mt-1">
+                                {paymentInfo.state !== "paid" && (
+                                  <button
+                                    type="button"
+                                    onClick={() => openAsaasPayModal(c, "PIX")}
+                                    className="text-[10px] font-black bg-slate-900 text-white px-2.5 py-1 rounded-md hover:bg-slate-800 transition-colors"
+                                  >
+                                    Pagar / Cobrar Asaas
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  disabled={togglingPaymentId === c.id}
+                                  onClick={() => handleToggleMonthPaid(c)}
+                                  className={`text-[10px] font-bold underline transition-colors ${
+                                    paymentInfo.state === "paid"
+                                      ? "text-slate-400 hover:text-slate-600"
+                                      : "text-emerald-700 hover:text-emerald-900"
+                                  }`}
+                                >
+                                  {togglingPaymentId === c.id
+                                    ? "Atualizando..."
+                                    : paymentInfo.state === "paid"
+                                      ? "Desfazer baixa"
+                                      : `Dar baixa manual`}
+                                </button>
+                              </div>
                             )}
                         </div>
                       </td>
@@ -1853,6 +2162,283 @@ export function AdminContractsTab({
         )}
       </div>
 
+      {/* MODAL DE COBRANÇA / PAGAMENTO ASAAS DO CONTRATO (PIX, BOLETO, CARTÃO) */}
+      <Dialog open={payModalOpen} onOpenChange={setPayModalOpen}>
+        <DialogContent className="sm:max-w-lg bg-white border-slate-200 rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-slate-900">
+              Mensalidade do Contrato ({currentMonthLabel})
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Gere o PIX, Boleto Bancário ou pague via Cartão de Crédito. Se
+              estiver em atraso, a multa e os juros são aplicados
+              automaticamente.
+            </DialogDescription>
+          </DialogHeader>
+
+          {payContract && activePayPreview && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 text-xs tabular-nums">
+                <div className="flex justify-between text-slate-600">
+                  <span>Locatário / Coanfitrião:</span>
+                  <span className="font-bold text-slate-900">
+                    {payContract.specialist_name}
+                  </span>
+                </div>
+                <div className="flex justify-between text-slate-600">
+                  <span>Vencimento da Competência:</span>
+                  <span className="font-semibold text-slate-800">
+                    {format(
+                      parseISO(activePayPreview.dueDateIso),
+                      "dd/MM/yyyy",
+                    )}
+                  </span>
+                </div>
+                <div className="flex justify-between text-slate-600">
+                  <span>Valor base do contrato:</span>
+                  <span className="font-semibold text-slate-900">
+                    R$ {formatBRL(activePayBaseVal)}
+                  </span>
+                </div>
+
+                {activePayPreview.daysLate > 0 && (
+                  <>
+                    <div className="flex justify-between text-red-700">
+                      <span>
+                        Multa por atraso ({activePayPreview.finePct}%):
+                      </span>
+                      <span className="font-semibold">
+                        + R$ {formatBRL(activePayPreview.fineBrl)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-red-700">
+                      <span>
+                        Juros pro-rata ({activePayPreview.daysLate}d •{" "}
+                        {activePayPreview.interestPct}% a.m.):
+                      </span>
+                      <span className="font-semibold">
+                        + R$ {formatBRL(activePayPreview.interestBrl)}
+                      </span>
+                    </div>
+                  </>
+                )}
+
+                <div className="pt-2 border-t border-slate-200 flex justify-between items-center text-sm">
+                  <span className="font-bold text-slate-900">
+                    Total da Cobrança:
+                  </span>
+                  <span className="font-bold text-emerald-700 text-base">
+                    R$ {formatBRL(activePayPreview.totalWithChargesBrl)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 bg-slate-100 p-1 rounded-xl">
+                {(["PIX", "BOLETO", "CREDIT_CARD"] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => {
+                      setPayMethod(m);
+                      setGeneratedPaymentId(null);
+                    }}
+                    className={`py-2 rounded-lg text-xs font-semibold transition-all ${
+                      payMethod === m
+                        ? "bg-white text-slate-900 shadow-2xs"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    {m === "PIX" ? "PIX" : m === "BOLETO" ? "Boleto" : "Cartão"}
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-[11px] font-semibold text-slate-600">
+                    CPF / CNPJ do Locatário *
+                  </Label>
+                  <Input
+                    value={payCpf}
+                    onChange={(e) => setPayCpf(e.target.value)}
+                    placeholder="000.000.000-00"
+                    className="mt-1 h-9 text-xs"
+                  />
+                </div>
+                <div>
+                  <Label className="text-[11px] font-semibold text-slate-600">
+                    CEP
+                  </Label>
+                  <Input
+                    value={payCep}
+                    onChange={(e) => setPayCep(e.target.value)}
+                    placeholder="59000-000"
+                    className="mt-1 h-9 text-xs"
+                  />
+                </div>
+              </div>
+
+              {payMethod === "CREDIT_CARD" && (
+                <div className="space-y-3 pt-1">
+                  <div>
+                    <Label className="text-[11px] font-semibold text-slate-600">
+                      Nome impresso no cartão
+                    </Label>
+                    <Input
+                      value={cardHolder}
+                      onChange={(e) => setCardHolder(e.target.value)}
+                      placeholder="Nome do titular"
+                      className="mt-1 h-9 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[11px] font-semibold text-slate-600">
+                      Número do Cartão
+                    </Label>
+                    <Input
+                      value={cardNumber}
+                      onChange={(e) => setCardNumber(e.target.value)}
+                      placeholder="0000 0000 0000 0000"
+                      className="mt-1 h-9 text-xs"
+                    />
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <Label className="text-[11px] font-semibold text-slate-600">
+                        Mês (MM)
+                      </Label>
+                      <Input
+                        value={cardExpMonth}
+                        onChange={(e) => setCardExpMonth(e.target.value)}
+                        placeholder="08"
+                        maxLength={2}
+                        className="mt-1 h-9 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[11px] font-semibold text-slate-600">
+                        Ano (AAAA)
+                      </Label>
+                      <Input
+                        value={cardExpYear}
+                        onChange={(e) => setCardExpYear(e.target.value)}
+                        placeholder="2029"
+                        maxLength={4}
+                        className="mt-1 h-9 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[11px] font-semibold text-slate-600">
+                        CVV
+                      </Label>
+                      <Input
+                        value={cardCcv}
+                        onChange={(e) => setCardCcv(e.target.value)}
+                        placeholder="123"
+                        maxLength={4}
+                        className="mt-1 h-9 text-xs"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {payMethod === "PIX" && pixQrCode && (
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col items-center text-center space-y-3">
+                  <img
+                    src={`data:image/png;base64,${pixQrCode}`}
+                    alt="QR Code PIX"
+                    className="w-44 h-44 rounded-lg border border-slate-200 bg-white p-2"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      if (pixCopyPaste) {
+                        navigator.clipboard.writeText(pixCopyPaste);
+                        toast({ title: "Código PIX Copia e Cola copiado!" });
+                      }
+                    }}
+                    className="w-full text-xs font-semibold"
+                  >
+                    <Copy className="w-3.5 h-3.5 mr-1.5" />
+                    Copiar Código PIX Copia e Cola
+                  </Button>
+                  <p className="text-[11px] text-emerald-700 font-medium flex items-center gap-1.5">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Aguardando confirmação automática do pagamento...
+                  </p>
+                </div>
+              )}
+
+              {payMethod === "BOLETO" && generatedPaymentId && (
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                  <p className="text-xs font-bold text-slate-900">
+                    Boleto Registrado Emitido no Asaas
+                  </p>
+                  {boletoLine && (
+                    <div className="p-2.5 bg-white rounded-lg border border-slate-200 font-mono text-[11px] break-all text-slate-700">
+                      {boletoLine}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    {boletoLine && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          navigator.clipboard.writeText(boletoLine);
+                          toast({ title: "Linha digitável copiada!" });
+                        }}
+                        className="flex-1 text-xs font-semibold"
+                      >
+                        <Copy className="w-3.5 h-3.5 mr-1.5" />
+                        Copiar Linha Digitável
+                      </Button>
+                    )}
+                    {boletoUrl && (
+                      <a
+                        href={boletoUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1 inline-flex items-center justify-center h-9 px-3 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
+                        Abrir PDF do Boleto
+                      </a>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {!generatedPaymentId && (
+                <Button
+                  type="button"
+                  disabled={payProcessing}
+                  onClick={handleExecuteAsaasContractCharge}
+                  className="w-full h-11 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs"
+                >
+                  {payProcessing ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Comunicando com o Asaas...
+                    </>
+                  ) : payMethod === "PIX" ? (
+                    `Gerar QR Code PIX (R$ ${formatBRL(activePayPreview.totalWithChargesBrl)})`
+                  ) : payMethod === "BOLETO" ? (
+                    `Emitir Boleto Registrado (R$ ${formatBRL(activePayPreview.totalWithChargesBrl)})`
+                  ) : (
+                    `Cobrar no Cartão Agora (R$ ${formatBRL(activePayPreview.totalWithChargesBrl)})`
+                  )}
+                </Button>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* MODAL COMPLETO CRIAR / EDITAR CONTRATO */}
       <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
         <DialogContent className="max-w-[95vw] sm:max-w-3xl max-h-[92vh] overflow-y-auto bg-white">
@@ -1864,9 +2450,8 @@ export function AdminContractsTab({
                 : "Novo Contrato de Sala & Alocação na Agenda"}
             </DialogTitle>
             <DialogDescription>
-              Configure a modalidade contratual, ative o Modo Co-Anfitrião na
-              sala fixa ou adicione Subcontratos Fixos (Turno/Diária) nos dias
-              liberados pelo Co-Anfitrião (com % livremente negociável).
+              Configure a modalidade contratual, vencimento, multa e juros de
+              atraso (estilo Asaas), Modo Co-Anfitrião ou Subcontratos Fixos.
             </DialogDescription>
           </DialogHeader>
 
@@ -1931,7 +2516,6 @@ export function AdminContractsTab({
                           ? "fixed_daily"
                           : form.contract_type,
                       allow_sublease: isSub ? false : form.allow_sublease,
-                      // Define como padrão 20/80, mas destrava a edição
                       platform_fee_pct: isSub ? "20" : form.platform_fee_pct,
                       host_split_pct: isSub ? "80" : form.host_split_pct,
                     });
@@ -2337,14 +2921,14 @@ export function AdminContractsTab({
               )}
             </div>
 
-            {/* 5. VALORES FINANCEIROS E REPASSE PERSONALIZADO (DESTAKED) */}
+            {/* 5. VALORES FINANCEIROS, ENCARGOS DE ATRASO (ASAAS) E REPASSE */}
             <div className="p-4 rounded-2xl bg-slate-900 text-white space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <Label className="text-xs font-black uppercase tracking-wider text-orange-400 flex items-center gap-1.5">
                   <Wallet className="w-4 h-4" />
                   {parentCohostForModalRoom
-                    ? `Valor do Subcontrato e Divisão de Repasses`
-                    : "Valor do Aluguel Fixo (Repasse do Anfitrião Dono)"}
+                    ? `Valor do Subcontrato, Multa/Juros e Divisão de Repasses`
+                    : "Valor do Aluguel Fixo, Multa/Juros Asaas e Repasse"}
                 </Label>
                 <Button
                   type="button"
@@ -2431,6 +3015,70 @@ export function AdminContractsTab({
                     }
                     className="mt-1 font-bold bg-slate-800 border-slate-700 text-emerald-400"
                   />
+                </div>
+              </div>
+
+              {/* MULTA E JUROS POR ATRASO (PADRÃO ASAAS) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-800">
+                <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700">
+                  <Label className="text-xs font-bold text-amber-300 flex items-center justify-between">
+                    <span>Multa por Atraso (%) — Asaas</span>
+                    <span className="text-slate-300 font-mono">
+                      + R${" "}
+                      {((previewContractVal * previewFinePct) / 100).toFixed(2)}
+                    </span>
+                  </Label>
+                  <div className="relative mt-1.5">
+                    <Input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      max="20"
+                      value={form.fine_pct}
+                      onChange={(e) =>
+                        setForm({ ...form, fine_pct: e.target.value })
+                      }
+                      placeholder="Ex: 2"
+                      className="bg-slate-900 border-slate-700 font-black text-white pr-8 h-9"
+                    />
+                    <Percent className="w-3.5 h-3.5 text-amber-400 absolute right-3 top-1/2 -translate-y-1/2" />
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Aplicada automaticamente se pagar após o dia{" "}
+                    {form.due_day || 8}.
+                  </p>
+                </div>
+
+                <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700">
+                  <Label className="text-xs font-bold text-amber-300 flex items-center justify-between">
+                    <span>Juros ao Mês (% a.m.) — Asaas</span>
+                    <span className="text-slate-300 font-mono">
+                      R${" "}
+                      {(
+                        (previewContractVal * (previewInterestPct / 100)) /
+                        30
+                      ).toFixed(2)}
+                      /dia
+                    </span>
+                  </Label>
+                  <div className="relative mt-1.5">
+                    <Input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      max="10"
+                      value={form.interest_pct}
+                      onChange={(e) =>
+                        setForm({ ...form, interest_pct: e.target.value })
+                      }
+                      placeholder="Ex: 1"
+                      className="bg-slate-900 border-slate-700 font-black text-white pr-8 h-9"
+                    />
+                    <Percent className="w-3.5 h-3.5 text-amber-400 absolute right-3 top-1/2 -translate-y-1/2" />
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Calculado pro-rata por cada dia corrido de atraso.
+                  </p>
                 </div>
               </div>
 

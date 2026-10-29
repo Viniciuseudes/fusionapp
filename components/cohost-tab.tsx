@@ -24,9 +24,23 @@ import {
   Filter,
   Repeat,
   Info,
+  QrCode,
+  Barcode,
+  CreditCard,
+  AlertTriangle,
+  Copy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
   format,
@@ -36,6 +50,8 @@ import {
   subMonths,
   startOfDay,
   endOfDay,
+  getDaysInMonth,
+  differenceInCalendarDays,
 } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -72,6 +88,24 @@ function calculateSlotUnits(startIso: string, endIso: string): number {
   return Math.max(1, Math.round(diffMinutes / 55));
 }
 
+function parseScheduleObj(raw: any): Record<string, any> {
+  if (!raw) return {};
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  }
+  return typeof raw === "object" ? { ...raw } : {};
+}
+
+const formatBRL = (val: number) =>
+  val.toLocaleString("pt-BR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
 export function CohostTab() {
   const [supabase] = useState(() => createClient());
   const { toast } = useToast();
@@ -84,6 +118,7 @@ export function CohostTab() {
   const [roomData, setRoomData] = useState<any | null>(null);
   const [subleaseBookings, setSubleaseBookings] = useState<any[]>([]);
   const [secondaryContracts, setSecondaryContracts] = useState<any[]>([]);
+  const [userProfile, setUserProfile] = useState<any | null>(null);
 
   // Filtro de Período (Padrão: Este Mês)
   const [periodPreset, setPeriodPreset] =
@@ -94,6 +129,34 @@ export function CohostTab() {
   const [customEndDate, setCustomEndDate] = useState(
     format(endOfMonth(new Date()), "yyyy-MM-dd"),
   );
+
+  // Competência selecionada para pagamento da mensalidade do contrato (YYYY-MM)
+  const [invoiceCompetence, setInvoiceCompetence] = useState<string>(() =>
+    format(new Date(), "yyyy-MM"),
+  );
+
+  // Estados do Modal de Pagamento da Mensalidade (PIX / Boleto / Cartão)
+  const [isPayModalOpen, setIsPayModalOpen] = useState(false);
+  const [payMethod, setPayMethod] = useState<"PIX" | "BOLETO" | "CREDIT_CARD">(
+    "PIX",
+  );
+  const [payProcessing, setPayProcessing] = useState(false);
+  const [generatedPaymentId, setGeneratedPaymentId] = useState<string | null>(
+    null,
+  );
+  const [pixQrCode, setPixQrCode] = useState<string | null>(null);
+  const [pixCopyPaste, setPixCopyPaste] = useState<string | null>(null);
+  const [boletoLine, setBoletoLine] = useState<string | null>(null);
+  const [boletoUrl, setBoletoUrl] = useState<string | null>(null);
+
+  const [customerCpf, setCustomerCpf] = useState("");
+  const [customerCep, setCustomerCep] = useState("");
+  const [useSavedCard, setUseSavedCard] = useState(false);
+  const [cardHolder, setCardHolder] = useState("");
+  const [cardNumber, setCardNumber] = useState("");
+  const [cardExpMonth, setCardExpMonth] = useState("");
+  const [cardExpYear, setCardExpYear] = useState("");
+  const [cardCcv, setCardCcv] = useState("");
 
   // Separação entre Reservas Futuras e Anteriores
   const [bookingListTab, setBookingListTab] = useState<"upcoming" | "past">(
@@ -190,20 +253,37 @@ export function CohostTab() {
 
       const todayStr = format(new Date(), "yyyy-MM-dd");
 
-      // 1. Busca contratos ativos onde o usuário é Coanfitrião
-      const { data: activeContracts, error: cErr } = await supabase
-        .from("room_contracts")
-        .select("*")
-        .eq("specialist_id", user.id)
-        .eq("status", "active")
-        .eq("allow_sublease", true)
-        .lte("start_date", todayStr)
-        .gte("end_date", todayStr)
-        .order("created_at", { ascending: false });
+      const [profRes, activeContractsRes] = await Promise.all([
+        supabase
+          .from("profiles")
+          .select(
+            "id, full_name, email, cpf, cep, phone, whatsapp, cc_token, cc_last4, cc_brand",
+          )
+          .eq("id", user.id)
+          .maybeSingle(),
+        supabase
+          .from("room_contracts")
+          .select("*")
+          .eq("specialist_id", user.id)
+          .eq("status", "active")
+          .eq("allow_sublease", true)
+          .lte("start_date", todayStr)
+          .gte("end_date", todayStr)
+          .order("created_at", { ascending: false }),
+      ]);
 
-      if (cErr) throw cErr;
+      if (profRes.data) {
+        setUserProfile(profRes.data);
+        setCustomerCpf(profRes.data.cpf || "");
+        setCustomerCep(profRes.data.cep || "");
+        setCardHolder(profRes.data.full_name || "");
+        setUseSavedCard(Boolean(profRes.data.cc_token));
+      }
 
-      if (!activeContracts || activeContracts.length === 0) {
+      if (activeContractsRes.error) throw activeContractsRes.error;
+      const activeContracts = activeContractsRes.data || [];
+
+      if (activeContracts.length === 0) {
         setContracts([]);
         setRoomData(null);
         setLoading(false);
@@ -323,9 +403,6 @@ export function CohostTab() {
                 : hours * roomHourlyRate;
         }
 
-        // NOVO: Cálculo Dinâmico de Split
-        // Se for Subcontrato (Turno), pega a taxa especificada no contrato do Turno.
-        // Se for reserva avulsa, pega a taxa global do Coanfitrião.
         const appliedCohostPct = isSubContractBooking
           ? Number(linkedSubContract?.host_split_pct ?? 80) / 100
           : cohostPctGlobal;
@@ -343,7 +420,7 @@ export function CohostTab() {
           grossBrl,
           cohostNetBrl,
           platformFeeBrl,
-          appliedCohostPct, // Salva para exibição na UI
+          appliedCohostPct,
           isSubContractBooking,
           subContractType: linkedSubContract?.contract_type || null,
           guestName:
@@ -367,6 +444,233 @@ export function CohostTab() {
   useEffect(() => {
     loadCohostData();
   }, [loadCohostData]);
+
+  // Polling automático quando um QR Code PIX ou Boleto com PIX estiver aberto no modal
+  useEffect(() => {
+    if (!isPayModalOpen || !generatedPaymentId || !activeContract) return;
+
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch(
+          `/api/contracts/payment?contractId=${activeContract.id}&competence=${invoiceCompetence}&paymentId=${generatedPaymentId}`,
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data.confirmed) {
+            clearInterval(timer);
+            toast({
+              title: "Mensalidade Confirmada!",
+              description: `O pagamento da competência ${invoiceCompetence} foi confirmado e baixado automaticamente.`,
+            });
+            setIsPayModalOpen(false);
+            setGeneratedPaymentId(null);
+            loadCohostData();
+          }
+        }
+      } catch {}
+    }, 4000);
+
+    return () => clearInterval(timer);
+  }, [
+    isPayModalOpen,
+    generatedPaymentId,
+    activeContract,
+    invoiceCompetence,
+    toast,
+    loadCohostData,
+  ]);
+
+  // Cálculo detalhado da Fatura da Competência Selecionada (Valor Base + Multa + Juros Pro-Rata)
+  const invoiceDetails = useMemo(() => {
+    if (!activeContract) return null;
+
+    const sched = parseScheduleObj(activeContract.schedule_config);
+    const tiers = Array.isArray(sched.pricingTiers) ? sched.pricingTiers : [];
+
+    const dueDayRaw = Math.max(
+      1,
+      Math.min(31, Number(activeContract.due_day) || 8),
+    );
+    const [yearStr, monthStr] = invoiceCompetence.split("-");
+    const maxDays = getDaysInMonth(
+      new Date(Number(yearStr), Number(monthStr) - 1, 1),
+    );
+    const safeDay = String(Math.min(dueDayRaw, maxDays)).padStart(2, "0");
+    const dueDateIso = `${invoiceCompetence}-${safeDay}`;
+
+    // Verifica se há escalonamento de preço para esta competência
+    let baseRent =
+      Number(activeContract.contract_value) > 0
+        ? Number(activeContract.contract_value)
+        : Number(activeContract.session_value || 0);
+
+    if (tiers.length > 0) {
+      const matchedTier = tiers.find(
+        (t: any) => dueDateIso >= t.start_date && dueDateIso <= t.end_date,
+      );
+      if (matchedTier && Number(matchedTier.contract_value) > 0) {
+        baseRent = Number(matchedTier.contract_value);
+      }
+    }
+
+    const finePct = Number(sched.fine_pct ?? activeContract.fine_pct ?? 2);
+    const interestPct = Number(
+      sched.interest_pct ?? activeContract.interest_pct ?? 1,
+    );
+
+    const isPaid =
+      activeContract.last_paid_competence === invoiceCompetence ||
+      Boolean(sched.paid_dates && sched.paid_dates[invoiceCompetence]);
+
+    const paidDateStr =
+      sched.paid_dates && sched.paid_dates[invoiceCompetence]
+        ? sched.paid_dates[invoiceCompetence]
+        : null;
+
+    const daysLate = !isPaid
+      ? Math.max(
+          0,
+          differenceInCalendarDays(
+            new Date(),
+            parseISO(`${dueDateIso}T23:59:59`),
+          ),
+        )
+      : 0;
+
+    let fineBrl = 0;
+    let interestBrl = 0;
+
+    if (!isPaid && daysLate > 0 && baseRent > 0) {
+      if (finePct > 0) {
+        fineBrl = Number((baseRent * (finePct / 100)).toFixed(2));
+      }
+      if (interestPct > 0) {
+        interestBrl = Number(
+          (baseRent * (interestPct / 100 / 30) * daysLate).toFixed(2),
+        );
+      }
+    }
+
+    const totalBrl = Number((baseRent + fineBrl + interestBrl).toFixed(2));
+
+    return {
+      competence: invoiceCompetence,
+      dueDateIso,
+      dueDayRaw,
+      baseRent,
+      finePct,
+      interestPct,
+      isPaid,
+      paidDateStr,
+      daysLate,
+      isOverdue: !isPaid && daysLate > 0,
+      fineBrl,
+      interestBrl,
+      totalBrl,
+    };
+  }, [activeContract, invoiceCompetence]);
+
+  const handleOpenInvoicePayment = (
+    method: "PIX" | "BOLETO" | "CREDIT_CARD",
+  ) => {
+    setPayMethod(method);
+    setGeneratedPaymentId(null);
+    setPixQrCode(null);
+    setPixCopyPaste(null);
+    setBoletoLine(null);
+    setBoletoUrl(null);
+    if (!customerCpf && activeContract?.specialist_document) {
+      setCustomerCpf(activeContract.specialist_document);
+    }
+    setIsPayModalOpen(true);
+  };
+
+  const handleGenerateOrPayContract = async () => {
+    if (!activeContract || !invoiceDetails) return;
+    setPayProcessing(true);
+
+    try {
+      const payload: Record<string, any> = {
+        contractId: activeContract.id,
+        competence: invoiceCompetence,
+        billingType: payMethod,
+        customerCpf,
+        customerCep,
+      };
+
+      if (payMethod === "CREDIT_CARD") {
+        if (useSavedCard && userProfile?.cc_token) {
+          payload.cardData = {
+            useSavedCard: true,
+            cpf: customerCpf,
+            cep: customerCep,
+          };
+        } else {
+          if (
+            !cardNumber ||
+            !cardHolder ||
+            !cardExpMonth ||
+            !cardExpYear ||
+            !cardCcv
+          ) {
+            throw new Error("Preencha todos os dados do cartão de crédito.");
+          }
+          payload.creditCard = {
+            holderName: cardHolder,
+            number: cardNumber.replace(/\D/g, ""),
+            expiryMonth: cardExpMonth.replace(/\D/g, ""),
+            expiryYear:
+              cardExpYear.length === 2 ? `20${cardExpYear}` : cardExpYear,
+            ccv: cardCcv.replace(/\D/g, ""),
+          };
+          payload.cardData = {
+            useSavedCard: false,
+            saveCard: true,
+            cpf: customerCpf,
+            cep: customerCep,
+          };
+        }
+      }
+
+      const res = await fetch("/api/contracts/payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Não foi possível processar a cobrança.");
+      }
+
+      setGeneratedPaymentId(data.paymentId);
+
+      if (payMethod === "PIX") {
+        setPixQrCode(data.pixQrCode);
+        setPixCopyPaste(data.pixCopyPaste);
+      } else if (payMethod === "BOLETO") {
+        setBoletoLine(data.identificationField);
+        setBoletoUrl(data.bankSlipUrl || data.invoiceUrl);
+        setPixQrCode(data.pixQrCode);
+        setPixCopyPaste(data.pixCopyPaste);
+      } else if (payMethod === "CREDIT_CARD") {
+        toast({
+          title: "Mensalidade Paga com Sucesso!",
+          description: `A competência ${invoiceCompetence} do seu contrato foi baixada automaticamente.`,
+        });
+        setIsPayModalOpen(false);
+        loadCohostData();
+      }
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro no pagamento",
+        description: err.message,
+      });
+    } finally {
+      setPayProcessing(false);
+    }
+  };
 
   // Filtra as reservas no período + data de início do contrato
   const bookingsInSelectedPeriod = useMemo(() => {
@@ -570,7 +874,9 @@ export function CohostTab() {
     (acc, b) => acc + b.hours,
     0,
   );
-  const monthlyFixedRent = Number(activeContract.contract_value || 0);
+  const monthlyFixedRent = Number(
+    invoiceDetails?.baseRent || activeContract.contract_value || 0,
+  );
   const rentCoveragePct =
     monthlyFixedRent > 0
       ? Math.min(100, Math.round((totalCohostNet80 / monthlyFixedRent) * 100))
@@ -791,6 +1097,158 @@ export function CohostTab() {
         </div>
       </div>
 
+      {/* 3.1 FATURA MENSAL DO CONTRATO (PAGAMENTO VIA PIX, BOLETO OU CARTÃO COM MULTA/JUROS ASAAS) */}
+      {invoiceDetails && (
+        <div className="bg-white rounded-2xl border border-slate-200/90 p-5 sm:p-6 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-base sm:text-lg font-black text-slate-900 flex items-center gap-2">
+                  <CalendarClock className="w-5 h-5 text-[#BF4B24]" />
+                  Mensalidade do Seu Contrato Fixo
+                </h2>
+                {invoiceDetails.isPaid ? (
+                  <Badge className="bg-emerald-50 text-emerald-700 border-0 text-xs font-bold flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Competência Quitada
+                  </Badge>
+                ) : invoiceDetails.isOverdue ? (
+                  <Badge className="bg-red-50 text-red-700 border-0 text-xs font-bold flex items-center gap-1">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    Vencida há {invoiceDetails.daysLate} dia(s)
+                  </Badge>
+                ) : (
+                  <Badge className="bg-amber-50 text-amber-800 border-0 text-xs font-bold flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5" />
+                    Vence em{" "}
+                    {format(parseISO(invoiceDetails.dueDateIso), "dd/MM/yyyy")}
+                  </Badge>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 font-medium mt-1">
+                Pague até o dia{" "}
+                <strong>
+                  {String(invoiceDetails.dueDayRaw).padStart(2, "0")}
+                </strong>{" "}
+                de cada mês sem encargos. Após o vencimento, incide multa de{" "}
+                <strong>{invoiceDetails.finePct}%</strong> e juros de{" "}
+                <strong>{invoiceDetails.interestPct}% a.m.</strong>
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 self-start sm:self-auto">
+              <span className="text-xs font-bold text-slate-500">Mês:</span>
+              <input
+                type="month"
+                min={activeContract.start_date.slice(0, 7)}
+                max={activeContract.end_date.slice(0, 7)}
+                value={invoiceCompetence}
+                onChange={(e) => setInvoiceCompetence(e.target.value)}
+                className="text-xs font-black text-slate-900 bg-transparent border-0 outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+            <div className="space-y-2 tabular-nums">
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-slate-600">
+                <span>
+                  Valor Base:{" "}
+                  <strong className="text-slate-900">
+                    R$ {formatBRL(invoiceDetails.baseRent)}
+                  </strong>
+                </span>
+                <span>•</span>
+                <span>
+                  Vencimento:{" "}
+                  <strong className="text-slate-900">
+                    {format(parseISO(invoiceDetails.dueDateIso), "dd/MM/yyyy")}
+                  </strong>
+                </span>
+                {invoiceDetails.isOverdue && (
+                  <>
+                    <span>•</span>
+                    <span className="text-red-700 font-semibold">
+                      Multa ({invoiceDetails.finePct}%): + R${" "}
+                      {formatBRL(invoiceDetails.fineBrl)}
+                    </span>
+                    <span>•</span>
+                    <span className="text-red-700 font-semibold">
+                      Juros ({invoiceDetails.daysLate}d): + R${" "}
+                      {formatBRL(invoiceDetails.interestBrl)}
+                    </span>
+                  </>
+                )}
+              </div>
+
+              {invoiceDetails.isPaid && (
+                <p className="text-xs font-semibold text-emerald-700">
+                  Pagamento confirmado para a competência {invoiceCompetence}
+                  {invoiceDetails.paidDateStr
+                    ? ` em ${format(parseISO(invoiceDetails.paidDateStr), "dd/MM/yyyy")}`
+                    : ""}
+                  .
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 shrink-0">
+              <div className="text-left sm:text-right tabular-nums">
+                <span className="text-[11px] font-medium text-slate-400 block">
+                  {invoiceDetails.isPaid
+                    ? "Total Pago"
+                    : invoiceDetails.isOverdue
+                      ? "Total Atualizado c/ Encargos"
+                      : "Valor a Pagar"}
+                </span>
+                <span
+                  className={`text-2xl font-black tracking-tight ${
+                    invoiceDetails.isPaid
+                      ? "text-emerald-700"
+                      : invoiceDetails.isOverdue
+                        ? "text-red-700"
+                        : "text-slate-900"
+                  }`}
+                >
+                  R$ {formatBRL(invoiceDetails.totalBrl)}
+                </span>
+              </div>
+
+              {!invoiceDetails.isPaid && (
+                <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                  <Button
+                    type="button"
+                    onClick={() => handleOpenInvoicePayment("PIX")}
+                    className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs h-10 rounded-xl px-4"
+                  >
+                    <QrCode className="w-4 h-4 mr-1.5 text-[#BF4B24]" />
+                    Pagar c/ PIX
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => handleOpenInvoicePayment("BOLETO")}
+                    className="border-slate-200 text-slate-700 hover:bg-slate-50 font-bold text-xs h-10 rounded-xl px-4"
+                  >
+                    <Barcode className="w-4 h-4 mr-1.5" />
+                    Boleto
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => handleOpenInvoicePayment("CREDIT_CARD")}
+                    className="border-slate-200 text-slate-700 hover:bg-slate-50 font-bold text-xs h-10 rounded-xl px-4"
+                  >
+                    <CreditCard className="w-4 h-4 mr-1.5" />
+                    Cartão
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 4. SUBCONTRATOS FIXOS NA SALA (Usando a % negociada de cada um) */}
       {secondaryContracts.length > 0 && (
         <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/90 shadow-xs space-y-4">
@@ -826,8 +1284,6 @@ export function CohostTab() {
               );
 
               const scGross = Number(sc.contract_value || 0);
-
-              // USA A PORCENTAGEM CUSTOMIZADA SALVA NO PRÓPRIO CONTRATO FIXO
               const scCohostPct = Number(sc.host_split_pct ?? 80);
               const scCohostNet = scGross * (scCohostPct / 100);
 
@@ -1101,6 +1557,308 @@ export function CohostTab() {
           </div>
         )}
       </div>
+
+      {/* MODAL DE CHECKOUT TRANSPARENTE DA MENSALIDADE DO COANFITRIÃO */}
+      <Dialog open={isPayModalOpen} onOpenChange={setIsPayModalOpen}>
+        <DialogContent className="sm:max-w-lg bg-white border-slate-200 rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-slate-900">
+              Pagar Mensalidade do Contrato ({invoiceCompetence})
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Escolha entre PIX, Boleto Bancário ou Cartão de Crédito. A baixa
+              do seu contrato é registrada automaticamente.
+            </DialogDescription>
+          </DialogHeader>
+
+          {invoiceDetails && (
+            <div className="space-y-4">
+              {/* Resumo do Valor + Encargos de Atraso */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 text-xs tabular-nums">
+                <div className="flex justify-between text-slate-600">
+                  <span>Sala Contratada:</span>
+                  <span className="font-bold text-slate-900">
+                    {roomData.name}
+                  </span>
+                </div>
+                <div className="flex justify-between text-slate-600">
+                  <span>Data de Vencimento:</span>
+                  <span className="font-semibold text-slate-800">
+                    {format(parseISO(invoiceDetails.dueDateIso), "dd/MM/yyyy")}
+                  </span>
+                </div>
+                <div className="flex justify-between text-slate-600">
+                  <span>Valor Base Mensal:</span>
+                  <span className="font-semibold text-slate-900">
+                    R$ {formatBRL(invoiceDetails.baseRent)}
+                  </span>
+                </div>
+
+                {invoiceDetails.isOverdue && (
+                  <>
+                    <div className="flex justify-between text-red-700">
+                      <span>Multa por atraso ({invoiceDetails.finePct}%):</span>
+                      <span className="font-semibold">
+                        + R$ {formatBRL(invoiceDetails.fineBrl)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-red-700">
+                      <span>
+                        Juros pro-rata ({invoiceDetails.daysLate}d •{" "}
+                        {invoiceDetails.interestPct}% a.m.):
+                      </span>
+                      <span className="font-semibold">
+                        + R$ {formatBRL(invoiceDetails.interestBrl)}
+                      </span>
+                    </div>
+                  </>
+                )}
+
+                <div className="pt-2 border-t border-slate-200 flex justify-between items-center text-sm">
+                  <span className="font-bold text-slate-900">
+                    Total a Pagar:
+                  </span>
+                  <span className="font-bold text-emerald-700 text-base">
+                    R$ {formatBRL(invoiceDetails.totalBrl)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Abas de Método de Pagamento */}
+              <div className="grid grid-cols-3 gap-2 bg-slate-100 p-1 rounded-xl">
+                {(["PIX", "BOLETO", "CREDIT_CARD"] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => {
+                      setPayMethod(m);
+                      setGeneratedPaymentId(null);
+                    }}
+                    className={`py-2 rounded-lg text-xs font-semibold transition-all ${
+                      payMethod === m
+                        ? "bg-white text-slate-900 shadow-2xs"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    {m === "PIX" ? "PIX" : m === "BOLETO" ? "Boleto" : "Cartão"}
+                  </button>
+                ))}
+              </div>
+
+              {/* CPF e CEP */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-[11px] font-semibold text-slate-600">
+                    CPF / CNPJ *
+                  </Label>
+                  <Input
+                    value={customerCpf}
+                    onChange={(e) => setCustomerCpf(e.target.value)}
+                    placeholder="000.000.000-00"
+                    className="mt-1 h-9 text-xs"
+                  />
+                </div>
+                <div>
+                  <Label className="text-[11px] font-semibold text-slate-600">
+                    CEP
+                  </Label>
+                  <Input
+                    value={customerCep}
+                    onChange={(e) => setCustomerCep(e.target.value)}
+                    placeholder="59000-000"
+                    className="mt-1 h-9 text-xs"
+                  />
+                </div>
+              </div>
+
+              {/* Campos de Cartão de Crédito */}
+              {payMethod === "CREDIT_CARD" && (
+                <div className="space-y-3 pt-1">
+                  {userProfile?.cc_token && (
+                    <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs">
+                      <div>
+                        <span className="font-bold text-slate-900 block">
+                          Cartão Salvo ({userProfile.cc_brand || "Cartão"} ••••{" "}
+                          {userProfile.cc_last4})
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          Pagar em 1 clique com seu cartão cadastrado
+                        </span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={useSavedCard}
+                        onChange={(e) => setUseSavedCard(e.target.checked)}
+                        className="h-4 w-4 accent-slate-900 rounded cursor-pointer"
+                      />
+                    </div>
+                  )}
+
+                  {(!useSavedCard || !userProfile?.cc_token) && (
+                    <>
+                      <div>
+                        <Label className="text-[11px] font-semibold text-slate-600">
+                          Nome impresso no cartão
+                        </Label>
+                        <Input
+                          value={cardHolder}
+                          onChange={(e) => setCardHolder(e.target.value)}
+                          placeholder="Nome do titular"
+                          className="mt-1 h-9 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-[11px] font-semibold text-slate-600">
+                          Número do Cartão
+                        </Label>
+                        <Input
+                          value={cardNumber}
+                          onChange={(e) => setCardNumber(e.target.value)}
+                          placeholder="0000 0000 0000 0000"
+                          className="mt-1 h-9 text-xs"
+                        />
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <Label className="text-[11px] font-semibold text-slate-600">
+                            Mês (MM)
+                          </Label>
+                          <Input
+                            value={cardExpMonth}
+                            onChange={(e) => setCardExpMonth(e.target.value)}
+                            placeholder="08"
+                            maxLength={2}
+                            className="mt-1 h-9 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-[11px] font-semibold text-slate-600">
+                            Ano (AAAA)
+                          </Label>
+                          <Input
+                            value={cardExpYear}
+                            onChange={(e) => setCardExpYear(e.target.value)}
+                            placeholder="2029"
+                            maxLength={4}
+                            className="mt-1 h-9 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-[11px] font-semibold text-slate-600">
+                            CVV
+                          </Label>
+                          <Input
+                            value={cardCcv}
+                            onChange={(e) => setCardCcv(e.target.value)}
+                            placeholder="123"
+                            maxLength={4}
+                            className="mt-1 h-9 text-xs"
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Exibição do QR Code PIX gerado */}
+              {payMethod === "PIX" && pixQrCode && (
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col items-center text-center space-y-3">
+                  <img
+                    src={`data:image/png;base64,${pixQrCode}`}
+                    alt="QR Code PIX"
+                    className="w-44 h-44 rounded-lg border border-slate-200 bg-white p-2"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      if (pixCopyPaste) {
+                        navigator.clipboard.writeText(pixCopyPaste);
+                        toast({ title: "Código PIX Copia e Cola copiado!" });
+                      }
+                    }}
+                    className="w-full text-xs font-semibold"
+                  >
+                    <Copy className="w-3.5 h-3.5 mr-1.5" />
+                    Copiar Código PIX Copia e Cola
+                  </Button>
+                  <p className="text-[11px] text-emerald-700 font-medium flex items-center gap-1.5">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Aguardando confirmação automática do pagamento...
+                  </p>
+                </div>
+              )}
+
+              {/* Exibição do Boleto Bancário gerado */}
+              {payMethod === "BOLETO" && generatedPaymentId && (
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                  <p className="text-xs font-bold text-slate-900">
+                    Boleto Registrado Gerado com Sucesso
+                  </p>
+                  {boletoLine && (
+                    <div className="p-2.5 bg-white rounded-lg border border-slate-200 font-mono text-[11px] break-all text-slate-700">
+                      {boletoLine}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    {boletoLine && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          navigator.clipboard.writeText(boletoLine);
+                          toast({ title: "Linha digitável copiada!" });
+                        }}
+                        className="flex-1 text-xs font-semibold"
+                      >
+                        <Copy className="w-3.5 h-3.5 mr-1.5" />
+                        Copiar Linha Digitável
+                      </Button>
+                    )}
+                    {boletoUrl && (
+                      <a
+                        href={boletoUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1 inline-flex items-center justify-center h-9 px-3 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
+                        Abrir PDF do Boleto
+                      </a>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Botão Principal de Ação */}
+              {!generatedPaymentId && (
+                <Button
+                  type="button"
+                  disabled={payProcessing}
+                  onClick={handleGenerateOrPayContract}
+                  className="w-full h-11 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs"
+                >
+                  {payProcessing ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Processando junto ao Asaas...
+                    </>
+                  ) : payMethod === "PIX" ? (
+                    `Gerar QR Code PIX (R$ ${formatBRL(invoiceDetails.totalBrl)})`
+                  ) : payMethod === "BOLETO" ? (
+                    `Emitir Boleto Registrado (R$ ${formatBRL(invoiceDetails.totalBrl)})`
+                  ) : (
+                    `Pagar Agora no Cartão (R$ ${formatBRL(invoiceDetails.totalBrl)})`
+                  )}
+                </Button>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
