@@ -1732,7 +1732,7 @@ export function SearchTab({
                   <Sparkles className="w-4 h-4 text-white" />
                 </div>
                 <span className="text-white font-black text-sm tracking-wide">
-                  Pague menos no valor da horas
+                  Fusion Pass | +horas +descontos
                 </span>
               </div>
               <ChevronRight className="w-5 h-5 text-white/80" />
