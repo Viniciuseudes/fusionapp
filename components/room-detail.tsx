@@ -46,6 +46,7 @@ import {
   AlertCircle,
   ChevronRight,
   ChevronLeft,
+  ChevronDown,
   Printer,
   Loader2,
   Grid,
@@ -53,6 +54,7 @@ import {
   Shield,
   MessageSquare,
   Lock,
+  Unlock,
   User,
   Check,
   BadgeCheck,
@@ -60,6 +62,9 @@ import {
   Building2,
   ArrowRight,
   TrendingDown,
+  Tag,
+  CalendarClock,
+  ArrowLeftRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -133,6 +138,7 @@ export function RoomDetail(props: RoomDetailProps) {
   const bookingConfirmedRef = useRef<boolean>(false);
 
   const bookingSectionRef = useRef<HTMLDivElement>(null);
+  const fusionPassCardRef = useRef<HTMLDivElement>(null);
   const [highlightSchedule, setHighlightSchedule] = useState(false);
 
   const [selectedShift, setSelectedShift] = useState<
@@ -163,6 +169,7 @@ export function RoomDetail(props: RoomDetailProps) {
 
   const [packages, setPackages] = useState<any[]>([]);
   const [selectedPkgHours, setSelectedPkgHours] = useState<number | null>(null);
+  const [isPassDetailsExpanded, setIsPassDetailsExpanded] = useState(false);
 
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [currentTime, setCurrentTime] = useState<number>(Date.now());
@@ -182,6 +189,16 @@ export function RoomDetail(props: RoomDetailProps) {
       });
       setHighlightSchedule(true);
       setTimeout(() => setHighlightSchedule(false), 1800);
+    }
+  };
+
+  const handleExpandAndScrollToPass = () => {
+    setIsPassDetailsExpanded(true);
+    if (fusionPassCardRef.current) {
+      fusionPassCardRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
     }
   };
 
@@ -214,13 +231,12 @@ export function RoomDetail(props: RoomDetailProps) {
       return;
     }
 
+    // Abre o modal interativo do Fusion Pass+ diretamente por cima da tela atual (sem perder a sala)
     window.dispatchEvent(
-      new CustomEvent("fusion:open-pass", {
-        detail: { tier: targetTier, hours: targetHours },
+      new CustomEvent("open-fusion-pass", {
+        detail: { step: "plans", tier: targetTier, hours: targetHours },
       }),
     );
-
-    onBack();
   };
 
   const fetchRoomBookings = useCallback(async () => {
@@ -308,17 +324,40 @@ export function RoomDetail(props: RoomDetailProps) {
             setActiveTab(mods[0]);
           }
 
-          const roomTier = data.tier || "start";
-          const { data: pkgs } = await supabase
+          const normalizedRoomTier = normalizeCreditTier(data.tier || "start");
+          const { data: allActivePkgs } = await supabase
             .from("packages")
             .select("*")
             .eq("active", true)
-            .eq("tier", roomTier)
             .order("hours", { ascending: true });
 
-          if (pkgs && pkgs.length > 0) {
-            setPackages(pkgs);
-            setSelectedPkgHours(pkgs[1]?.hours || pkgs[0]?.hours);
+          const matchingPkgs = (allActivePkgs || []).filter(
+            (p: any) => normalizeCreditTier(p.tier) === normalizedRoomTier,
+          );
+
+          if (matchingPkgs.length > 0) {
+            setPackages(matchingPkgs);
+            setSelectedPkgHours(
+              matchingPkgs[1]?.hours || matchingPkgs[0]?.hours,
+            );
+          } else {
+            const fallbackByTier =
+              normalizedRoomTier === "master"
+                ? [
+                    { id: "m8", tier: "master", hours: 8, price: 500 },
+                    { id: "m16", tier: "master", hours: 16, price: 848.96 },
+                  ]
+                : normalizedRoomTier === "vip"
+                  ? [
+                      { id: "v8", tier: "vip", hours: 8, price: 340 },
+                      { id: "v16", tier: "vip", hours: 16, price: 658.08 },
+                    ]
+                  : [
+                      { id: "b8", tier: "start", hours: 8, price: 280 },
+                      { id: "b16", tier: "start", hours: 16, price: 534.08 },
+                    ];
+            setPackages(fallbackByTier);
+            setSelectedPkgHours(fallbackByTier[1].hours);
           }
         }
       } catch (err) {
@@ -842,7 +881,6 @@ export function RoomDetail(props: RoomDetailProps) {
           throw new Error(summaryData.error || "Erro ao calcular valores.");
         }
 
-        // PASSO 4.1: Calcula os saldos reais usando o Motor FIFO e aplica a hierarquia Master -> VIP -> Basic
         const { data: txs } = await supabase
           .from("wallet_transactions")
           .select("amount, tier, description, created_at, expires_at")
@@ -958,15 +996,12 @@ export function RoomDetail(props: RoomDetailProps) {
         finalHourlyCost = Math.max(0, finalHourlyCost);
       }
 
-      // PASSO 4.2: Pagamento com Carteira gravando o valor financeiro exato do crédito utilizado
       if (method === "wallet") {
         const creditCostPerHour = finalCreditsRequired / selectedSlots.length;
         const usedTier = normalizeCreditTier(
           checkoutSummary.usedTier || roomData.tier || "start",
         );
 
-        // Busca o histórico e os pacotes para apurar o valor exato em R$ do crédito consumido
-        // (Ex: Se usou crédito Master numa sala VIP, o valor da reserva reflete o custo do crédito Master)
         const [userTxsRes, allPkgsRes, userSubsRes] = await Promise.all([
           supabase
             .from("wallet_transactions")
@@ -1425,6 +1460,43 @@ export function RoomDetail(props: RoomDetailProps) {
 
   const clinicHostName = roomData.profiles?.full_name || "Equipe Fusion Clinic";
 
+  // Cálculos do Fusion Pass+ para o Card Interativo no Topo
+  const baseAvulsoPrice = getBasePrice();
+  const activeSelectedPkg =
+    packages.find((p: any) => Number(p.hours) === Number(selectedPkgHours)) ||
+    packages[1] ||
+    packages[0] ||
+    null;
+
+  const bestHourlyRateInPass =
+    packages.length > 0
+      ? Math.min(
+          ...packages.map((p: any) => {
+            const h = Math.max(1, Number(p.hours) || 1);
+            const pr = Number(p.price) || 0;
+            const total = h > 1 && pr <= 120 ? pr * h : pr;
+            return total / h;
+          }),
+        )
+      : baseAvulsoPrice * 0.7;
+
+  const maxDiscountPct = Math.max(
+    15,
+    Math.min(
+      41,
+      Math.round(
+        ((baseAvulsoPrice - bestHourlyRateInPass) / baseAvulsoPrice) * 100,
+      ),
+    ),
+  );
+
+  const roomTierLabel =
+    normalizeCreditTier(roomData.tier) === "master"
+      ? "Premium"
+      : normalizeCreditTier(roomData.tier) === "vip"
+        ? "VIP"
+        : "Basic";
+
   return (
     <div className="fixed inset-0 z-[100] bg-white flex flex-col animate-in slide-in-from-bottom-4 duration-300">
       {/* TOP BAR LIMPA */}
@@ -1636,9 +1708,9 @@ export function RoomDetail(props: RoomDetailProps) {
         </div>
 
         <div className="px-5 py-6 max-w-5xl mx-auto flex flex-col lg:grid lg:grid-cols-12 gap-10">
-          <div className="order-1 lg:order-1 lg:col-span-7 space-y-8">
+          <div className="order-1 lg:order-1 lg:col-span-7 space-y-7">
             {/* CREDIBILIDADE HUMANA DO ANFITRIÃO */}
-            <div className="flex items-center justify-between pb-6 border-b border-slate-100">
+            <div className="flex items-center justify-between pb-5 border-b border-slate-100">
               <div className="flex items-center gap-3.5">
                 <div className="w-11 h-11 rounded-full bg-stone-100 border border-stone-200 flex items-center justify-center text-slate-700 shrink-0">
                   <Building2 className="w-5 h-5 text-[#BF4B24]" />
@@ -1653,6 +1725,215 @@ export function RoomDetail(props: RoomDetailProps) {
                 </div>
               </div>
             </div>
+
+            {/* ============================================================== */}
+            {/* NOVO COMPONENTE DE ALTA CONVERSÃO FUSION PASS+ (NO TOPO!)      */}
+            {/* ============================================================== */}
+            {packages.length > 0 && activeTab === "hora" && (
+              <div
+                ref={fusionPassCardRef}
+                className="rounded-2xl border border-[#BF4B24]/30 bg-[#FAF7F5] overflow-hidden transition-all duration-300 shadow-2xs"
+              >
+                {/* CABEÇALHO DO CARD (SEMPRE VISÍVEL, LIMPO E DESPERTA CURIOSIDADE) */}
+                <div
+                  onClick={() => setIsPassDetailsExpanded((prev) => !prev)}
+                  className="p-4 sm:p-5 cursor-pointer flex items-center justify-between gap-4 hover:bg-orange-50/40 transition-colors"
+                >
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-[#BF4B24] text-white">
+                        <Tag className="w-3 h-3" />
+                        Fusion Pass+
+                      </span>
+                      <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/70 px-2 py-0.5 rounded-full">
+                        Economize até {maxDiscountPct}% nesta sala
+                      </span>
+                    </div>
+
+                    <h3 className="text-sm sm:text-base font-bold text-stone-900 pt-0.5">
+                      Atenda aqui por{" "}
+                      <span className="text-[#BF4B24] font-black">
+                        R$ {bestHourlyRateInPass.toFixed(2).replace(".", ",")}
+                        /hora
+                      </span>{" "}
+                      <span className="text-xs font-normal text-stone-500">
+                        (em vez de R${" "}
+                        {baseAvulsoPrice.toFixed(2).replace(".", ",")}/h no
+                        avulso)
+                      </span>
+                    </h3>
+
+                    <p className="text-xs text-stone-500">
+                      Toque para simular seu pacote de horas e ver como funciona
+                      o desconto
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="px-3.5 py-2 rounded-xl bg-white border border-stone-200/90 text-xs font-bold text-[#BF4B24] shrink-0 flex items-center gap-1 shadow-2xs"
+                  >
+                    <span className="hidden sm:inline">
+                      {isPassDetailsExpanded ? "Ocultar" : "Ver desconto"}
+                    </span>
+                    <ChevronDown
+                      className={`w-4 h-4 transition-transform duration-200 ${
+                        isPassDetailsExpanded ? "rotate-180" : ""
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* GAVETA DE DETALHES (SÓ ABRE QUANDO O PROFISSIONAL CLICA) */}
+                {isPassDetailsExpanded && activeSelectedPkg && (
+                  <div className="px-4 pb-5 sm:px-5 sm:pb-5 pt-2 border-t border-[#BF4B24]/15 bg-white space-y-4 animate-in fade-in duration-200">
+                    {/* 1. Escolha da quantidade de horas */}
+                    <div>
+                      <p className="text-xs font-bold text-stone-700 mb-2">
+                        1. Escolha quantas horas por mês você costuma atender
+                        (Salas {roomTierLabel}):
+                      </p>
+                      <div className="grid grid-cols-3 gap-2">
+                        {packages.map((pkg: any) => {
+                          const isSelected =
+                            Number(selectedPkgHours) === Number(pkg.hours);
+                          const h = Math.max(1, Number(pkg.hours) || 1);
+                          const pr = Number(pkg.price) || 0;
+                          const total = h > 1 && pr <= 120 ? pr * h : pr;
+                          const hrRate = total / h;
+
+                          return (
+                            <button
+                              key={pkg.id || pkg.hours}
+                              type="button"
+                              onClick={() => setSelectedPkgHours(pkg.hours)}
+                              className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                                isSelected
+                                  ? "border-[#BF4B24] bg-[#FAF7F5] ring-1 ring-[#BF4B24]"
+                                  : "border-stone-200 bg-white hover:border-stone-300"
+                              }`}
+                            >
+                              <span className="text-xs sm:text-sm font-bold text-stone-900 block">
+                                {h} horas
+                              </span>
+                              <span className="text-[11px] font-semibold text-[#BF4B24] block mt-0.5">
+                                R$ {hrRate.toFixed(2).replace(".", ",")}/h
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* 2. Resumo claro da economia do pacote selecionado */}
+                    {(() => {
+                      const pkgHours = Math.max(
+                        1,
+                        Number(activeSelectedPkg.hours || 1),
+                      );
+                      const rawPr = Number(activeSelectedPkg.price || 0);
+                      const pkgTotalBRL =
+                        pkgHours > 1 && rawPr <= 120 ? rawPr * pkgHours : rawPr;
+                      const hourlyRate = pkgTotalBRL / pkgHours;
+                      const avulsoTotalBRL = baseAvulsoPrice * pkgHours;
+                      const savingsBRL = Math.max(
+                        0,
+                        avulsoTotalBRL - pkgTotalBRL,
+                      );
+
+                      return (
+                        <div className="p-3.5 rounded-xl bg-stone-50 border border-stone-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="space-y-0.5">
+                            <span className="text-[11px] font-semibold text-stone-500">
+                              Pacote de {pkgHours} horas (Salas {roomTierLabel})
+                            </span>
+                            <div className="flex items-baseline gap-2">
+                              <span className="text-xl font-black text-stone-900">
+                                R$ {hourlyRate.toFixed(2).replace(".", ",")}/h
+                              </span>
+                              <span className="text-xs text-stone-400 line-through">
+                                R${" "}
+                                {baseAvulsoPrice.toFixed(2).replace(".", ",")}/h
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-stone-500">
+                              Total do pacote: R${" "}
+                              {pkgTotalBRL.toLocaleString("pt-BR", {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </p>
+                          </div>
+
+                          {savingsBRL > 0 && (
+                            <div className="bg-emerald-50 border border-emerald-200/70 px-3 py-2 rounded-xl text-left sm:text-right shrink-0">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 block">
+                                Sua economia imediata
+                              </span>
+                              <span className="text-sm font-black text-emerald-700 flex items-center sm:justify-end gap-1 mt-0.5">
+                                <TrendingDown className="w-4 h-4" />
+                                R${" "}
+                                {savingsBRL.toLocaleString("pt-BR", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}{" "}
+                                no mês
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
+                    {/* 3. Garantias transparentes (Sem letras miúdas) */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 text-[11px] text-stone-600">
+                      <div className="flex items-start gap-2 p-2.5 rounded-xl bg-[#FAF7F5]/60 border border-stone-200/60">
+                        <Unlock className="w-3.5 h-3.5 text-[#BF4B24] shrink-0 mt-0.5" />
+                        <span>
+                          <strong className="text-stone-900 block">
+                            Cancele quando quiser
+                          </strong>
+                          Sem fidelidade e sem multa.
+                        </span>
+                      </div>
+
+                      <div className="flex items-start gap-2 p-2.5 rounded-xl bg-[#FAF7F5]/60 border border-stone-200/60">
+                        <CalendarClock className="w-3.5 h-3.5 text-[#BF4B24] shrink-0 mt-0.5" />
+                        <span>
+                          <strong className="text-stone-900 block">
+                            30 dias para utilizar
+                          </strong>
+                          Créditos liberados na hora na carteira.
+                        </span>
+                      </div>
+
+                      <div className="flex items-start gap-2 p-2.5 rounded-xl bg-[#FAF7F5]/60 border border-stone-200/60">
+                        <ArrowLeftRight className="w-3.5 h-3.5 text-[#BF4B24] shrink-0 mt-0.5" />
+                        <span>
+                          <strong className="text-stone-900 block">
+                            Doe ou negocie horas
+                          </strong>
+                          Não usou tudo? Repasse a outros profissionais.
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* 4. CTA Direto para Assinar */}
+                    <Button
+                      type="button"
+                      onClick={handleGoToFusionPass}
+                      className="w-full h-11 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold text-xs sm:text-sm rounded-xl shadow-xs flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <span>
+                        Assinar pacote de {activeSelectedPkg.hours}h com
+                        desconto
+                      </span>
+                      <ArrowRight className="w-4 h-4" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
 
             <section>
               <h2 className="text-lg font-bold text-slate-900 mb-2.5">
@@ -1735,186 +2016,6 @@ export function RoomDetail(props: RoomDetailProps) {
                 </p>
               </div>
             </section>
-
-            {/* PACOTES DE HORAS (COM VALOR TOTAL DO PACOTE, ECONOMIA TOTAL E REDIRECIONAMENTO AUTOMÁTICO) */}
-            {packages.length > 0 && activeTab === "hora" && (
-              <section className="pt-2">
-                <div className="bg-stone-50 rounded-2xl p-5 md:p-6 border border-stone-200/90">
-                  <div className="flex flex-col md:flex-row gap-6">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded bg-slate-900 text-white">
-                          Fusion Pass
-                        </span>
-                        <span className="text-xs font-bold text-[#BF4B24]">
-                          Mais horas, mais desconto
-                        </span>
-                      </div>
-
-                      <h3 className="text-lg font-bold text-slate-900 mb-1.5">
-                        Pacotes de horas para{" "}
-                        {roomData.tier === "master"
-                          ? "Salas Master"
-                          : roomData.tier === "vip"
-                            ? "Salas VIP"
-                            : "Salas Essencial"}
-                      </h3>
-
-                      <p className="text-xs text-slate-600 mb-4 leading-relaxed">
-                        A hora avulsa nesta sala custa{" "}
-                        <strong className="text-slate-900">
-                          R$ {getBasePrice().toFixed(2).replace(".", ",")}/h
-                        </strong>
-                        . Comprando um pacote de horas, você reduz o custo por
-                        consulta e usa os créditos quando quiser:
-                      </p>
-
-                      <div className="grid grid-cols-3 gap-2">
-                        {packages.map((pkg: any) => {
-                          const isSelected = selectedPkgHours === pkg.hours;
-                          const pkgTotal = Number(pkg.price || 0);
-                          return (
-                            <button
-                              key={pkg.id}
-                              type="button"
-                              onClick={() => setSelectedPkgHours(pkg.hours)}
-                              className={`p-3 rounded-xl transition-all border text-left flex flex-col justify-between ${
-                                isSelected
-                                  ? "bg-slate-900 text-white border-slate-900 shadow-xs"
-                                  : "bg-white text-slate-700 border-stone-200 hover:border-stone-300"
-                              }`}
-                            >
-                              <span className="text-xs font-bold block">
-                                {pkg.hours} horas
-                              </span>
-                              <span
-                                className={`text-[11px] font-semibold mt-0.5 block ${
-                                  isSelected
-                                    ? "text-stone-300"
-                                    : "text-slate-500"
-                                }`}
-                              >
-                                R$ {pkgTotal.toFixed(0)} total
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    <div className="md:w-64 shrink-0 flex flex-col justify-center border-t md:border-t-0 md:border-l border-stone-200 pt-4 md:pt-0 md:pl-6">
-                      {packages
-                        .filter((p: any) => p.hours === selectedPkgHours)
-                        .map((pkg: any) => {
-                          const pkgHours = Number(pkg.hours || 1);
-                          const pkgTotalBRL = Number(pkg.price || 0);
-                          const hourlyRate = pkgTotalBRL / pkgHours;
-                          const basePrice = getBasePrice();
-                          const avulsoTotalBRL = basePrice * pkgHours;
-                          const totalSavingsBRL = Math.max(
-                            0,
-                            avulsoTotalBRL - pkgTotalBRL,
-                          );
-                          const hourlySavingsBRL = Math.max(
-                            0,
-                            basePrice - hourlyRate,
-                          );
-                          const savingsPercent =
-                            avulsoTotalBRL > 0
-                              ? Math.round(
-                                  (totalSavingsBRL / avulsoTotalBRL) * 100,
-                                )
-                              : 0;
-
-                          return (
-                            <div
-                              key={pkg.id}
-                              className="flex flex-col justify-center space-y-3"
-                            >
-                              <div>
-                                <p className="text-[11px] font-semibold text-slate-500 mb-0.5">
-                                  Valor da hora no pacote ({pkgHours}h)
-                                </p>
-                                <div className="flex items-baseline gap-1.5">
-                                  <span className="text-2xl font-bold text-slate-900">
-                                    R$ {hourlyRate.toFixed(2).replace(".", ",")}
-                                  </span>
-                                  <span className="text-xs text-slate-500 font-semibold">
-                                    /hora
-                                  </span>
-                                  {hourlySavingsBRL > 0 && (
-                                    <span className="text-[11px] text-slate-400 line-through ml-1">
-                                      R${" "}
-                                      {basePrice.toFixed(2).replace(".", ",")}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-
-                              {/* COMPARATIVO DO VALOR TOTAL DO PACOTE vs AVULSO */}
-                              <div className="bg-white rounded-xl p-3 border border-stone-200/90 space-y-1.5">
-                                <div className="flex items-center justify-between text-xs">
-                                  <span className="text-slate-500 font-medium">
-                                    Total do pacote ({pkgHours}h):
-                                  </span>
-                                  <span className="font-bold text-slate-900">
-                                    R${" "}
-                                    {pkgTotalBRL.toLocaleString("pt-BR", {
-                                      minimumFractionDigits: 2,
-                                      maximumFractionDigits: 2,
-                                    })}
-                                  </span>
-                                </div>
-
-                                {totalSavingsBRL > 0 && (
-                                  <div className="flex items-center justify-between text-[11px]">
-                                    <span className="text-slate-400">
-                                      {pkgHours}h no avulso sairiam por:
-                                    </span>
-                                    <span className="text-slate-400 line-through font-medium">
-                                      R${" "}
-                                      {avulsoTotalBRL.toLocaleString("pt-BR", {
-                                        minimumFractionDigits: 2,
-                                        maximumFractionDigits: 2,
-                                      })}
-                                    </span>
-                                  </div>
-                                )}
-
-                                {totalSavingsBRL > 0 && (
-                                  <div className="pt-1.5 border-t border-stone-100 flex items-center justify-between">
-                                    <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1">
-                                      <TrendingDown className="w-3.5 h-3.5" />
-                                      Economia total:
-                                    </span>
-                                    <span className="text-xs font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/60">
-                                      R${" "}
-                                      {totalSavingsBRL.toLocaleString("pt-BR", {
-                                        minimumFractionDigits: 2,
-                                        maximumFractionDigits: 2,
-                                      })}{" "}
-                                      (-{savingsPercent}%)
-                                    </span>
-                                  </div>
-                                )}
-                              </div>
-
-                              <Button
-                                type="button"
-                                onClick={handleGoToFusionPass}
-                                className="w-full h-11 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold text-xs rounded-xl shadow-xs flex items-center justify-center gap-1.5"
-                              >
-                                Ver pacotes e assinar ({pkgHours}h)
-                                <ArrowRight className="w-3.5 h-3.5" />
-                              </Button>
-                            </div>
-                          );
-                        })}
-                    </div>
-                  </div>
-                </div>
-              </section>
-            )}
           </div>
 
           {/* COLUNA DE AGENDAMENTO */}
@@ -1972,7 +2073,7 @@ export function RoomDetail(props: RoomDetailProps) {
 
               {activeTab === "hora" && (
                 <section className="animate-in fade-in">
-                  <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center justify-between mb-3">
                     <div>
                       <h2 className="text-base font-bold text-slate-900">
                         Escolha a data e os horários
@@ -1986,10 +2087,35 @@ export function RoomDetail(props: RoomDetailProps) {
                         R$ {getBasePrice()}
                       </span>
                       <span className="text-xs text-slate-500 block">
-                        /hora
+                        /hora avulsa
                       </span>
                     </div>
                   </div>
+
+                  {/* PÍLULA ÂNCORA DE PREÇO NO CARD DE RESERVA (ESTILO MELI+ / IFOOD CLUB) */}
+                  {packages.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleExpandAndScrollToPass}
+                      className="w-full mb-4 px-3 py-2 rounded-xl bg-[#FAF7F5] hover:bg-orange-50/70 border border-[#BF4B24]/25 flex items-center justify-between gap-2 text-left transition-colors cursor-pointer"
+                    >
+                      <span className="text-[11px] font-medium text-stone-700">
+                        No <strong className="text-[#BF4B24]">Pass+</strong> sai
+                        a{" "}
+                        <strong className="text-stone-900">
+                          R$ {bestHourlyRateInPass.toFixed(2).replace(".", ",")}
+                          /h
+                        </strong>{" "}
+                        <span className="text-emerald-700 font-bold">
+                          (-{maxDiscountPct}%)
+                        </span>
+                      </span>
+                      <span className="text-[11px] font-bold text-[#BF4B24] flex items-center shrink-0">
+                        Ver pacote
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </span>
+                    </button>
+                  )}
 
                   {/* CALENDÁRIO */}
                   <div className="w-full bg-stone-50/60 rounded-xl border border-stone-200/80 p-3.5 mb-5">
@@ -2463,7 +2589,7 @@ export function RoomDetail(props: RoomDetailProps) {
 
                       {hasComment && (
                         <p className="text-slate-600 text-sm leading-relaxed">
-                          "{review.comment}"
+                          &ldquo;{review.comment}&rdquo;
                         </p>
                       )}
 
@@ -2516,9 +2642,8 @@ export function RoomDetail(props: RoomDetailProps) {
           </div>
           {activeTab === "hora" && selectedSlots.length === 0 && (
             <span className="text-[11px] font-semibold text-[#BF4B24] underline underline-offset-2 block">
-              {freeSlotsForSelectedDate.length > 0
-                ? `${freeSlotsForSelectedDate.length} horários livres hoje`
-                : "Consultar datas"}
+              No Pass+ sai a R${" "}
+              {bestHourlyRateInPass.toFixed(2).replace(".", ",")}/h
             </span>
           )}
         </div>
