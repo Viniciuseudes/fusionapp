@@ -1,12 +1,13 @@
 // components/fusion-pass-promo-popup.tsx
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import {
   X,
   ChevronRight,
+  ChevronDown,
   ArrowLeft,
   Loader2,
   QrCode,
@@ -14,6 +15,10 @@ import {
   Copy,
   ShieldCheck,
   CheckCircle2,
+  CalendarClock,
+  ArrowLeftRight,
+  Unlock,
+  HelpCircle,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,8 +37,9 @@ const REFERENCE_AVULSO_RATES: Record<TierKey, number> = {
   master: 80,
 };
 
-// Garante que o pop-up automático só abra 1 vez por sessão (não repete ao mudar de aba)
-const POPUP_DISMISSED_KEY = "fusion_pass_promo_dismissed_session_v4";
+// Chaves separadas para Visitante (Deslogado) e Profissional (Logado)
+const VISITOR_SEEN_KEY = "fusion_promo_seen_visitor_v5";
+const AUTH_SEEN_PREFIX = "fusion_promo_seen_auth_v5_";
 
 function normalizeTier(raw?: string | null): TierKey {
   const t = String(raw || "start")
@@ -67,6 +73,7 @@ export function FusionPassPromoPopup({
   const [isOpen, setIsOpen] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
   const [step, setStep] = useState<"banner" | "plans" | "checkout">("banner");
+  const [showRulesDetails, setShowRulesDetails] = useState(false);
 
   const [packages, setPackages] = useState<any[]>([]);
   const [loadingPkgs, setLoadingPkgs] = useState(false);
@@ -74,6 +81,7 @@ export function FusionPassPromoPopup({
   const [selectedPkg, setSelectedPkg] = useState<any | null>(null);
 
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [userProfile, setUserProfile] = useState<any | null>(null);
 
   // Estados do Checkout Integrado
@@ -92,12 +100,20 @@ export function FusionPassPromoPopup({
   const [expiryYear, setExpiryYear] = useState("");
   const [ccv, setCcv] = useState("");
 
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const hasScheduledInThisMountRef = useRef(false);
+
+  const getActiveStorageKey = useCallback((uid?: string | null) => {
+    return uid ? `${AUTH_SEEN_PREFIX}${uid}` : VISITOR_SEEN_KEY;
+  }, []);
+
   const openModal = useCallback(
     (initialStep: "banner" | "plans" = "banner") => {
       setStep(initialStep);
       setPaymentId(null);
       setPixQrCode(null);
       setPixCopyPaste(null);
+      setShowRulesDetails(false);
       setIsClosing(false);
       setIsOpen(true);
 
@@ -113,7 +129,8 @@ export function FusionPassPromoPopup({
 
   const handleClose = useCallback(() => {
     try {
-      sessionStorage.setItem(POPUP_DISMISSED_KEY, "true");
+      const storageKey = getActiveStorageKey(currentUserId);
+      sessionStorage.setItem(storageKey, "true");
     } catch {}
 
     setIsClosing(true);
@@ -122,72 +139,18 @@ export function FusionPassPromoPopup({
       setIsClosing(false);
       setStep("banner");
       setPaymentId(null);
+      setShowRulesDetails(false);
 
-      // Libera avisos secundários (como instalar PWA) 8 segundos após fechar o pop-up
+      // Libera o aviso de instalar app somente 8 segundos após fechar o pop-up
       setTimeout(() => {
         if (typeof document !== "undefined") {
           document.documentElement.removeAttribute("data-fusion-promo-active");
         }
       }, 8000);
     }, 200);
-  }, []);
+  }, [currentUserId, getActiveStorageKey]);
 
-  const loadData = useCallback(async () => {
-    setLoadingPkgs(true);
-    try {
-      const [{ data: sessionData }, { data: pkgsData }] = await Promise.all([
-        supabase.auth.getSession(),
-        supabase
-          .from("packages")
-          .select("id, tier, hours, price, active")
-          .eq("active", true)
-          .order("hours", { ascending: true }),
-      ]);
-
-      const sessionUser = sessionData?.session?.user || null;
-      setIsAuthenticated(Boolean(sessionUser));
-
-      if (sessionUser) {
-        const { data: prof } = await supabase
-          .from("profiles")
-          .select(
-            "id, full_name, email, cpf, cep, cc_token, cc_last4, cc_brand",
-          )
-          .eq("id", sessionUser.id)
-          .maybeSingle();
-
-        if (prof) {
-          setUserProfile(prof);
-          setCustomerCpf(prof.cpf || "");
-          setCustomerCep(prof.cep || "");
-          setHolderName(prof.full_name || "");
-          setUseSavedCard(Boolean(prof.cc_token));
-        }
-      }
-
-      if (pkgsData && pkgsData.length > 0) {
-        setPackages(pkgsData);
-      } else {
-        setPackages([
-          { id: "b8", tier: "start", hours: 8, price: 280 },
-          { id: "b16", tier: "start", hours: 16, price: 534.08 },
-          { id: "v8", tier: "vip", hours: 8, price: 340 },
-          { id: "v16", tier: "vip", hours: 16, price: 658.08 },
-          { id: "m8", tier: "master", hours: 8, price: 500 },
-          { id: "m16", tier: "master", hours: 16, price: 848.96 },
-        ]);
-      }
-    } catch {
-    } finally {
-      setLoadingPkgs(false);
-    }
-  }, [supabase]);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  // Abertura única após 4 segundos (aguarda as salas carregarem primeiro)
+  // 1. Inicialização unificada: verifica autenticação, pacotes e agenda a abertura de 4s
   useEffect(() => {
     if (
       typeof window !== "undefined" &&
@@ -196,39 +159,153 @@ export function FusionPassPromoPopup({
       return;
     }
 
-    const savedIntentRaw =
-      typeof window !== "undefined"
-        ? sessionStorage.getItem("fusion_selected_package_intent")
-        : null;
+    let isMounted = true;
 
-    if (savedIntentRaw && isAuthenticated) {
+    async function initPopupAndSchedule() {
+      setLoadingPkgs(true);
       try {
-        const parsedPkg = JSON.parse(savedIntentRaw);
-        sessionStorage.removeItem("fusion_selected_package_intent");
-        setSelectedPkg(parsedPkg);
-        setSelectedTier(normalizeTier(parsedPkg.tier));
-        setStep("checkout");
-        setIsOpen(true);
-        return;
-      } catch {}
-    }
+        try {
+          const navEntries = performance.getEntriesByType(
+            "navigation",
+          ) as PerformanceNavigationTiming[];
+          if (navEntries.length > 0 && navEntries[0].type === "reload") {
+            sessionStorage.removeItem(VISITOR_SEEN_KEY);
+            Object.keys(sessionStorage).forEach((k) => {
+              if (k.startsWith(AUTH_SEEN_PREFIX)) {
+                sessionStorage.removeItem(k);
+              }
+            });
+          }
+        } catch {}
 
-    const alreadyDismissed = sessionStorage.getItem(POPUP_DISMISSED_KEY);
-    let timer: NodeJS.Timeout | undefined;
+        const [{ data: sessionData }, { data: pkgsData }] = await Promise.all([
+          supabase.auth.getSession(),
+          supabase
+            .from("packages")
+            .select("id, tier, hours, price, active")
+            .eq("active", true)
+            .order("hours", { ascending: true }),
+        ]);
 
-    if (!alreadyDismissed) {
-      document.documentElement.setAttribute("data-fusion-promo-active", "true");
+        if (!isMounted) return;
 
-      timer = setTimeout(() => {
-        const checkAgain = sessionStorage.getItem(POPUP_DISMISSED_KEY);
-        if (!checkAgain) {
-          sessionStorage.setItem(POPUP_DISMISSED_KEY, "true");
-          openModal("banner");
+        const sessionUser = sessionData?.session?.user || null;
+        const uid = sessionUser?.id || null;
+
+        setIsAuthenticated(Boolean(sessionUser));
+        setCurrentUserId(uid);
+
+        if (sessionUser) {
+          const { data: prof } = await supabase
+            .from("profiles")
+            .select(
+              "id, full_name, email, cpf, cep, cc_token, cc_last4, cc_brand",
+            )
+            .eq("id", sessionUser.id)
+            .maybeSingle();
+
+          if (prof && isMounted) {
+            setUserProfile(prof);
+            setCustomerCpf(prof.cpf || "");
+            setCustomerCep(prof.cep || "");
+            setHolderName(prof.full_name || "");
+            setUseSavedCard(Boolean(prof.cc_token));
+          }
         }
-      }, 4000);
+
+        if (pkgsData && pkgsData.length > 0) {
+          setPackages(pkgsData);
+        } else {
+          setPackages([
+            { id: "b8", tier: "start", hours: 8, price: 280 },
+            { id: "b16", tier: "start", hours: 16, price: 534.08 },
+            { id: "v8", tier: "vip", hours: 8, price: 340 },
+            { id: "v16", tier: "vip", hours: 16, price: 658.08 },
+            { id: "m8", tier: "master", hours: 8, price: 500 },
+            { id: "m16", tier: "master", hours: 16, price: 848.96 },
+          ]);
+        }
+
+        const savedIntentRaw = sessionStorage.getItem(
+          "fusion_selected_package_intent",
+        );
+        if (savedIntentRaw && sessionUser) {
+          try {
+            const parsedPkg = JSON.parse(savedIntentRaw);
+            sessionStorage.removeItem("fusion_selected_package_intent");
+            setSelectedPkg(parsedPkg);
+            setSelectedTier(normalizeTier(parsedPkg.tier));
+            setStep("checkout");
+            setIsOpen(true);
+            return;
+          } catch {}
+        }
+
+        const storageKey = getActiveStorageKey(uid);
+        const alreadyDismissed = sessionStorage.getItem(storageKey);
+
+        if (!alreadyDismissed && !hasScheduledInThisMountRef.current) {
+          hasScheduledInThisMountRef.current = true;
+          document.documentElement.setAttribute(
+            "data-fusion-promo-active",
+            "true",
+          );
+
+          timerRef.current = setTimeout(() => {
+            if (!isMounted) return;
+            const checkAgain = sessionStorage.getItem(storageKey);
+            if (!checkAgain) {
+              sessionStorage.setItem(storageKey, "true");
+              openModal("banner");
+            }
+          }, 4000);
+        }
+      } catch {
+      } finally {
+        if (isMounted) setLoadingPkgs(false);
+      }
     }
+
+    initPopupAndSchedule();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        if (event === "SIGNED_OUT") {
+          setIsAuthenticated(false);
+          setCurrentUserId(null);
+          try {
+            sessionStorage.removeItem(VISITOR_SEEN_KEY);
+            Object.keys(sessionStorage).forEach((k) => {
+              if (k.startsWith(AUTH_SEEN_PREFIX)) {
+                sessionStorage.removeItem(k);
+              }
+            });
+          } catch {}
+        } else if (event === "SIGNED_IN" && session?.user) {
+          const uid = session.user.id;
+          setIsAuthenticated(true);
+          setCurrentUserId(uid);
+
+          const authKey = getActiveStorageKey(uid);
+          const alreadySeenAuth = sessionStorage.getItem(authKey);
+
+          if (!alreadySeenAuth) {
+            if (timerRef.current) clearTimeout(timerRef.current);
+            document.documentElement.setAttribute(
+              "data-fusion-promo-active",
+              "true",
+            );
+            timerRef.current = setTimeout(() => {
+              sessionStorage.setItem(authKey, "true");
+              openModal("banner");
+            }, 4000);
+          }
+        }
+      },
+    );
 
     const handleCustomOpen = (e: Event) => {
+      if (timerRef.current) clearTimeout(timerRef.current);
       const customEv = e as CustomEvent;
       const targetStep = customEv.detail?.step === "plans" ? "plans" : "banner";
       openModal(targetStep);
@@ -237,10 +314,12 @@ export function FusionPassPromoPopup({
     window.addEventListener("open-fusion-pass", handleCustomOpen);
 
     return () => {
-      if (timer) clearTimeout(timer);
+      isMounted = false;
+      if (timerRef.current) clearTimeout(timerRef.current);
       window.removeEventListener("open-fusion-pass", handleCustomOpen);
+      authListener.subscription.unsubscribe();
     };
-  }, [isAuthenticated, openModal]);
+  }, [supabase, openModal, getActiveStorageKey]);
 
   // Polling automático quando o QR Code PIX da assinatura estiver aberto
   useEffect(() => {
@@ -274,15 +353,6 @@ export function FusionPassPromoPopup({
 
     return () => clearInterval(timer);
   }, [isOpen, step, paymentId, selectedPkg, toast, handleClose]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") handleClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isOpen, handleClose]);
 
   const handleSelectPackageToBuy = (pkg: any) => {
     if (onSelectPlan) {
@@ -420,7 +490,7 @@ export function FusionPassPromoPopup({
 
   return (
     <>
-      {/* Adia o banner de instalar aplicativo enquanto o pop-up estiver aberto */}
+      {/* Adia o banner de instalar aplicativo enquanto o pop-up estiver ativo */}
       <style jsx global>{`
         html[data-fusion-promo-active="true"] [class*="pwa"],
         html[data-fusion-promo-active="true"] [id*="pwa"],
@@ -438,35 +508,36 @@ export function FusionPassPromoPopup({
           isClosing ? "opacity-0" : "opacity-100"
         }`}
       >
-        {/* Fundo escurecido suave */}
+        {/* Backdrop escurecido SEM onClick (só fecha se clicar no botão X) */}
         <div
-          onClick={handleClose}
-          className="fixed inset-0 bg-black/60 backdrop-blur-[2px] transition-opacity"
+          aria-hidden="true"
+          className="fixed inset-0 bg-black/65 backdrop-blur-[2px] transition-opacity"
         />
 
-        {/* Card no Tamanho Intermediário Ideal (355px no celular / 395px no desktop) */}
+        {/* Card Principal (355px no celular / 395px no banner / 460px nos planos e checkout) */}
         <div
           className={`relative z-10 w-full ${
             step === "banner"
               ? "max-w-[355px] sm:max-w-[395px]"
-              : "max-w-[380px] sm:max-w-[450px]"
+              : "max-w-[390px] sm:max-w-[460px]"
           } bg-white rounded-3xl shadow-2xl overflow-hidden transition-all duration-200 ${
             isClosing ? "scale-95 opacity-0" : "scale-100 opacity-100"
           }`}
         >
-          {/* Botão Fechar (X) */}
+          {/* Botão Fechar (X) - Único ponto de fechamento do modal */}
           <button
             type="button"
             onClick={handleClose}
             aria-label="Fechar"
-            className="absolute top-3 right-3 z-30 w-8 h-8 rounded-full bg-black/55 hover:bg-black/80 text-white flex items-center justify-center backdrop-blur-xs shadow-md transition-transform active:scale-95 cursor-pointer"
+            title="Fechar"
+            className="absolute top-3 right-3 z-30 w-8 h-8 rounded-full bg-black/60 hover:bg-black/85 text-white flex items-center justify-center backdrop-blur-xs shadow-md transition-transform active:scale-95 cursor-pointer"
           >
             <X className="w-4 h-4 stroke-[2.5]" />
           </button>
 
           {step === "banner" && (
             /* ================================================================ */
-            /* ETAPA 1: EQUILÍBRIO ENTRE V1 E V2 (ARTE + PÍLULA + CTA)          */
+            /* ETAPA 1: BANNER DE IMPACTO                                       */
             /* ================================================================ */
             <div className="flex flex-col">
               <div
@@ -484,12 +555,12 @@ export function FusionPassPromoPopup({
                 <div className="flex items-center justify-center gap-3 text-[11px] font-semibold text-stone-600">
                   <span className="flex items-center gap-1">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                    Salas Basic, VIP e Premium
+                    Cancele quando quiser
                   </span>
                   <span className="text-stone-300">•</span>
                   <span className="flex items-center gap-1">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                    Melhor custo benefício
+                    Use, doe ou negocie
                   </span>
                 </div>
 
@@ -515,9 +586,9 @@ export function FusionPassPromoPopup({
 
           {step === "plans" && (
             /* ================================================================ */
-            /* ETAPA 2: VITRINE DE PLANOS (BRANDING FUSION)                     */
+            /* ETAPA 2: VITRINE DE PLANOS + PÍLULA EXPLICATIVA                  */
             /* ================================================================ */
-            <div className="flex flex-col max-h-[84vh]">
+            <div className="flex flex-col max-h-[86vh]">
               <div className="px-5 pt-4 pb-3.5 bg-[#FAF7F5] border-b border-stone-200/80">
                 <button
                   type="button"
@@ -571,7 +642,9 @@ export function FusionPassPromoPopup({
                         ? "Libera salas VIP e Basic"
                         : "Libera salas Basic"}
                   </span>
-                  <span>Validade: 30 dias</span>
+                  <span className="text-stone-700 font-semibold">
+                    Ciclo de 30 dias
+                  </span>
                 </div>
 
                 {loadingPkgs ? (
@@ -649,6 +722,60 @@ export function FusionPassPromoPopup({
                     );
                   })
                 )}
+
+                {/* Acordeão limpo de Dúvidas Rápidas / Garantias na Vitrine */}
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowRulesDetails((prev) => !prev)}
+                    className="w-full p-3 rounded-xl bg-[#FAF7F5] border border-stone-200/80 flex items-center justify-between text-xs font-semibold text-stone-700 hover:text-stone-900 transition-colors cursor-pointer"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <HelpCircle className="w-3.5 h-3.5 text-[#BF4B24]" />
+                      Como funcionam o prazo, cancelamento e sobras de horas?
+                    </span>
+                    <ChevronDown
+                      className={`w-4 h-4 text-stone-400 transition-transform duration-200 ${
+                        showRulesDetails ? "rotate-180" : ""
+                      }`}
+                    />
+                  </button>
+
+                  {showRulesDetails && (
+                    <div className="mt-1.5 p-3.5 rounded-xl bg-[#FAF7F5]/70 border border-stone-200/60 space-y-2.5 text-[11px] text-stone-600 leading-relaxed animate-in fade-in duration-150">
+                      <div className="flex items-start gap-2">
+                        <Unlock className="w-3.5 h-3.5 text-[#BF4B24] shrink-0 mt-0.5" />
+                        <p>
+                          <strong className="text-stone-900">
+                            Liberdade total:
+                          </strong>{" "}
+                          cancele ou altere seu plano quando quiser, sem multa e
+                          sem fidelidade.
+                        </p>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <CalendarClock className="w-3.5 h-3.5 text-[#BF4B24] shrink-0 mt-0.5" />
+                        <p>
+                          <strong className="text-stone-900">
+                            30 dias para utilizar:
+                          </strong>{" "}
+                          suas horas entram na hora na carteira digital e ficam
+                          ativas por 30 dias.
+                        </p>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <ArrowLeftRight className="w-3.5 h-3.5 text-[#BF4B24] shrink-0 mt-0.5" />
+                        <p>
+                          <strong className="text-stone-900">
+                            Não usou tudo no mês?
+                          </strong>{" "}
+                          Dentro dos 30 dias, você pode doar ou negociar suas
+                          horas disponíveis com outros profissionais da Fusion.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="px-5 py-3 bg-stone-50 border-t border-stone-200/80 flex items-center justify-between text-xs">
@@ -656,22 +783,18 @@ export function FusionPassPromoPopup({
                   <ShieldCheck className="w-4 h-4 text-emerald-600" />
                   Créditos liberados na hora
                 </span>
-                <button
-                  type="button"
-                  onClick={handleClose}
-                  className="font-semibold text-stone-500 hover:text-stone-800 cursor-pointer"
-                >
-                  Fechar
-                </button>
+                <span className="text-[11px] text-stone-400 font-medium">
+                  Sem taxa de adesão
+                </span>
               </div>
             </div>
           )}
 
           {step === "checkout" && selectedPkg && (
             /* ================================================================ */
-            /* ETAPA 3: CHECKOUT TRANSPARENTE FUSION                            */
+            /* ETAPA 3: CHECKOUT TRANSPARENTE + CARD DE GARANTIAS DO PLANO      */
             /* ================================================================ */
-            <div className="flex flex-col max-h-[85vh]">
+            <div className="flex flex-col max-h-[88vh]">
               <div className="px-5 pt-4 pb-3.5 bg-[#FAF7F5] border-b border-stone-200/80">
                 <button
                   type="button"
@@ -706,7 +829,50 @@ export function FusionPassPromoPopup({
                 </div>
               </div>
 
-              <div className="p-5 overflow-y-auto space-y-3.5 bg-white flex-1">
+              <div className="p-4 sm:p-5 overflow-y-auto space-y-3.5 bg-white flex-1">
+                {/* CARD DE GARANTIAS E BENEFÍCIOS DO ASSINANTE (TRANSPARÊNCIA NO CHECKOUT) */}
+                <div className="p-3.5 rounded-2xl bg-[#FAF7F5] border border-[#BF4B24]/20 space-y-2">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-[#BF4B24]">
+                    Benefícios garantidos na sua assinatura
+                  </p>
+
+                  <div className="grid grid-cols-1 gap-2 text-xs text-stone-700">
+                    <div className="flex items-start gap-2">
+                      <Unlock className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                      <p className="leading-snug">
+                        <strong className="text-stone-900">
+                          Cancele quando quiser:
+                        </strong>{" "}
+                        sem fidelidade, sem multa e com controle total pelo seu
+                        painel.
+                      </p>
+                    </div>
+
+                    <div className="flex items-start gap-2">
+                      <CalendarClock className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                      <p className="leading-snug">
+                        <strong className="text-stone-900">
+                          30 dias para utilizar:
+                        </strong>{" "}
+                        seus créditos entram na hora e valem por 30 dias
+                        corridos.
+                      </p>
+                    </div>
+
+                    <div className="flex items-start gap-2">
+                      <ArrowLeftRight className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                      <p className="leading-snug">
+                        <strong className="text-stone-900">
+                          Flexibilidade para doar ou negociar:
+                        </strong>{" "}
+                        se não usar todas as horas no período, você pode doá-las
+                        ou negociá-las com outros profissionais.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Seletor PIX vs Cartão */}
                 <div className="grid grid-cols-2 gap-1.5 bg-stone-100 p-1 rounded-xl">
                   <button
                     type="button"
