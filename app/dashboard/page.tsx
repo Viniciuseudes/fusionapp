@@ -12,6 +12,8 @@ import {
   User,
   Loader2,
   Building2,
+  Tag,
+  ChevronRight,
 } from "lucide-react";
 
 import { SearchTab } from "@/components/search-tab";
@@ -23,8 +25,8 @@ import { CohostTab } from "@/components/cohost-tab";
 import { NotificationBell } from "@/components/notification-bell";
 import { RoomDetail } from "@/components/room-detail";
 import { ReviewModal } from "@/components/review-modal";
-import { OnboardingTutorial } from "@/components/onboarding-tutorial";
 import { PushRegistry } from "@/components/push-registry";
+import { FusionPassPromoPopup } from "@/components/fusion-pass-promo-popup";
 
 type TabType =
   "search" | "favorites" | "bookings" | "cohost" | "chat" | "profile";
@@ -158,6 +160,14 @@ function DashboardContent() {
     );
   };
 
+  const handleOpenFusionPassShowcase = () => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("open-fusion-pass", { detail: { step: "plans" } }),
+      );
+    }
+  };
+
   useEffect(() => {
     async function initializeDashboard() {
       try {
@@ -215,38 +225,32 @@ function DashboardContent() {
           setIsCohost(true);
         }
 
-        const hasSeenOnboarding = localStorage.getItem(
-          `fusion_onboarding_${user.id}`,
-        );
+        const now = new Date().toISOString();
+        const { data: bookings } = await supabase
+          .from("bookings")
+          .select(`id, room_id, start_time, end_time, status, rooms ( name )`)
+          .eq("user_id", user.id)
+          .in("status", ["confirmed", "completed"])
+          .lt("end_time", now)
+          .order("end_time", { ascending: false })
+          .limit(5);
 
-        if (hasSeenOnboarding) {
-          const now = new Date().toISOString();
-          const { data: bookings } = await supabase
-            .from("bookings")
-            .select(`id, room_id, start_time, end_time, status, rooms ( name )`)
-            .eq("user_id", user.id)
-            .in("status", ["confirmed", "completed"])
-            .lt("end_time", now)
-            .order("end_time", { ascending: false })
-            .limit(5);
+        if (bookings && bookings.length > 0) {
+          for (const booking of bookings) {
+            const isSkipped = localStorage.getItem(
+              `fusion_review_skipped_${booking.id}`,
+            );
+            if (isSkipped === "true") continue;
 
-          if (bookings && bookings.length > 0) {
-            for (const booking of bookings) {
-              const isSkipped = localStorage.getItem(
-                `fusion_review_skipped_${booking.id}`,
-              );
-              if (isSkipped === "true") continue;
+            const { data: reviewData } = await supabase
+              .from("reviews")
+              .select("id")
+              .eq("booking_id", booking.id)
+              .maybeSingle();
 
-              const { data: reviewData } = await supabase
-                .from("reviews")
-                .select("id")
-                .eq("booking_id", booking.id)
-                .maybeSingle();
-
-              if (!reviewData) {
-                setPendingReviewBooking(booking);
-                break;
-              }
+            if (!reviewData) {
+              setPendingReviewBooking(booking);
+              break;
             }
           }
         }
@@ -284,14 +288,9 @@ function DashboardContent() {
 
   return (
     <div className="flex min-h-svh flex-col bg-slate-50">
-      <OnboardingTutorial />
+      {/* Pop-up do Fusion Pass+ (aparece 4s após carregar as salas e apenas 1 vez por sessão) */}
+      <FusionPassPromoPopup />
       <PushRegistry />
-
-      {!selectedRoom && (
-        <div className="absolute top-10 right-5 lg:top-8 lg:right-8 z-50">
-          <NotificationBell />
-        </div>
-      )}
 
       {!selectedRoom && (
         <aside className="hidden lg:flex fixed inset-y-0 left-0 z-40 w-64 flex-col border-r border-slate-200 bg-white shadow-sm">
@@ -356,8 +355,36 @@ function DashboardContent() {
       )}
 
       <main
-        className={`flex-1 min-w-0 ${!selectedRoom ? "lg:ml-64 pb-20 lg:pb-0" : ""}`}
+        className={`relative flex-1 min-w-0 ${!selectedRoom ? "lg:ml-64 pb-20 lg:pb-0" : ""}`}
       >
+        {/* AVISO NO TOPO PARA VER OS PLANOS (LOGADO) */}
+        {!selectedRoom && (
+          <div className="bg-gradient-to-r from-[#BF4B24] to-[#9A3C1D] px-4 py-2.5 text-white flex items-center justify-between gap-2 shadow-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <Tag className="w-3.5 h-3.5 text-amber-200 shrink-0" />
+              <p className="text-xs font-medium truncate">
+                <strong className="font-bold">FP+:</strong> Horas com até 41% de
+                desconto
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleOpenFusionPassShowcase}
+              className="px-3 py-1 rounded-lg bg-white hover:bg-stone-50 text-[#BF4B24] font-bold text-[11px] shrink-0 shadow-2xs flex items-center gap-0.5 transition-transform active:scale-95 cursor-pointer"
+            >
+              <span>Ver Planos</span>
+              <ChevronRight className="w-3 h-3 stroke-[2.5]" />
+            </button>
+          </div>
+        )}
+
+        {/* Sino de notificações posicionado abaixo da barra superior */}
+        {!selectedRoom && (
+          <div className="absolute top-16 right-5 lg:top-16 lg:right-8 z-50">
+            <NotificationBell />
+          </div>
+        )}
+
         {renderTab()}
       </main>
 

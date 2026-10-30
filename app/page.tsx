@@ -1,3 +1,4 @@
+// app/page.tsx
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
@@ -6,6 +7,7 @@ import { createClient } from "@/utils/supabase/client";
 import { cn } from "@/lib/utils";
 import { SearchTab, type Room } from "@/components/search-tab";
 import { RoomDetail } from "@/components/room-detail";
+import { FusionPassPromoPopup } from "@/components/fusion-pass-promo-popup";
 import {
   Search,
   Heart,
@@ -13,6 +15,8 @@ import {
   LogIn,
   UserPlus,
   Loader2,
+  Tag,
+  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -139,6 +143,14 @@ export default function AppPage() {
     }
   };
 
+  const handleOpenFusionPassShowcase = () => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("open-fusion-pass", { detail: { step: "plans" } }),
+      );
+    }
+  };
+
   if (isCheckingAuth) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-slate-50">
@@ -149,6 +161,9 @@ export default function AppPage() {
 
   return (
     <div className="flex min-h-svh flex-col bg-slate-50">
+      {/* Pop-up do Fusion Pass+ */}
+      <FusionPassPromoPopup />
+
       <aside className="hidden lg:flex fixed inset-y-0 left-0 z-40 w-64 flex-col border-r border-slate-200 bg-white shadow-sm">
         <div className="flex items-center gap-3 px-6 py-5 border-b border-slate-100">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary shadow-sm">
@@ -210,6 +225,27 @@ export default function AppPage() {
       <main
         className={cn("flex-1 lg:ml-64", selectedRoom ? "" : "pb-20 lg:pb-0")}
       >
+        {/* AVISO NO TOPO PARA VER OS PLANOS (DESLOGADO) */}
+        {!selectedRoom && (
+          <div className="bg-gradient-to-r from-[#BF4B24] to-[#9A3C1D] px-4 py-2.5 text-white flex items-center justify-between gap-2 shadow-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <Tag className="w-3.5 h-3.5 text-amber-200 shrink-0" />
+              <p className="text-xs font-medium truncate">
+                <strong className="font-bold">Fusion Pass+:</strong>
+                Horas com até 41% de desconto
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleOpenFusionPassShowcase}
+              className="px-3 py-1 rounded-lg bg-white hover:bg-stone-50 text-[#BF4B24] font-bold text-[11px] shrink-0 shadow-2xs flex items-center gap-0.5 transition-transform active:scale-95 cursor-pointer"
+            >
+              <span>Ver Planos</span>
+              <ChevronRight className="w-3 h-3 stroke-[2.5]" />
+            </button>
+          </div>
+        )}
+
         {selectedRoom ? (
           <RoomDetail
             roomId={selectedRoom.id}
@@ -227,6 +263,7 @@ export default function AppPage() {
         )}
       </main>
 
+      {/* BARRA INFERIOR MOBILE ORIGINAL (APENAS OS 4 ITENS) */}
       {!selectedRoom && (
         <nav className="fixed inset-x-0 bottom-0 z-50 flex lg:hidden items-stretch justify-around border-t border-slate-200 bg-white/90 backdrop-blur-md pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
           {navItems.map((item) => {
