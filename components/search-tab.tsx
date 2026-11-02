@@ -1,7 +1,7 @@
 // components/search-tab.tsx
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
@@ -25,7 +25,6 @@ import {
   ChevronRight,
   Building2,
   Stethoscope,
-  Zap,
   Wallet,
   Compass,
   BriefcaseMedical,
@@ -39,6 +38,17 @@ import {
   TrendingUp,
   ArrowDownToLine,
   ArrowUpFromLine,
+  Calendar as CalendarIcon,
+  BadgeCheck,
+  Tag,
+  SlidersHorizontal,
+  Mic,
+  MicOff,
+  SendHorizontal,
+  CalendarCheck,
+  MessageSquareText,
+  UserCheck,
+  AlertCircle,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -78,6 +88,51 @@ export interface Room {
   host_id?: string;
   specialty?: string;
   selectedModality?: RentalType;
+  preselectedDate?: string;
+  preselectedSlot?: string;
+}
+
+interface ComparisonBlock {
+  title: string;
+  subtitle?: string;
+  bullets: string[];
+}
+
+interface RoomAvailabilityMatch {
+  roomId: string;
+  roomName?: string;
+  specialty?: string;
+  tier?: "start" | "vip" | "master";
+  neighborhood?: string;
+  city?: string;
+  hourlyPrice?: number;
+  passHourlyPrice?: number;
+  score: number;
+  exactSlotAvailable: boolean;
+  consecutiveSlotsAvailable?: boolean;
+  requestedSlotLabel: string | null;
+  availableSlots: string[];
+  matchReason: string;
+  aiPitch?: string;
+}
+
+interface AIConversationExchange {
+  id: string;
+  userQuery: string;
+  intentType:
+    | "room_search"
+    | "comparison_question"
+    | "financial_simulation"
+    | "profile_guidance";
+  headline: string;
+  comparisonBlocks: ComparisonBlock[];
+  recommendationSummary: string;
+  closingQuestion: string;
+  followUpSuggestions: string[];
+  suggestedCta:
+    "none" | "open_pass_modal" | "switch_to_turno" | "complete_profile";
+  recommendedRooms: RoomAvailabilityMatch[];
+  targetDateISO: string | null;
 }
 
 const calculateDistance = (
@@ -102,23 +157,37 @@ const calculateDistance = (
 const CATEGORIES = [
   {
     id: "Todas as Salas",
+    shortLabel: "Todas",
     icon: Building2,
     desc: "Visualizar todas as modalidades",
   },
-  { id: "Psicologia", icon: Sofa, desc: "Divãs e poltronas confortáveis" },
+  {
+    id: "Psicologia",
+    shortLabel: "Psicologia",
+    icon: Sofa,
+    desc: "Divãs e poltronas confortáveis",
+  },
   {
     id: "Nutrição & Clínica",
+    shortLabel: "Nutrição & Clínica",
     icon: Activity,
     desc: "Mesa, balança e bioimpedância",
   },
   {
     id: "Odontologia",
+    shortLabel: "Odontologia",
     icon: Stethoscope,
     desc: "Cadeira odontológica completa",
   },
-  { id: "Estética", icon: Sparkles, desc: "Maca e lavatório" },
+  {
+    id: "Estética",
+    shortLabel: "Estética",
+    icon: Sparkles,
+    desc: "Maca e lavatório",
+  },
   {
     id: "Multiuso",
+    shortLabel: "Multiuso",
     icon: BriefcaseMedical,
     desc: "Consultório clínico padrão",
   },
@@ -126,18 +195,40 @@ const CATEGORIES = [
 
 export function SearchTab({
   onOpenRoom,
+  onNavigateToProfile,
+  isDashboard = false,
 }: {
   onOpenRoom?: (room: Room) => void;
+  onNavigateToProfile?: () => void;
+  isDashboard?: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
   const [supabase] = useState(() => createClient());
   const { toast } = useToast();
-  const isPublic = pathname === "/";
+
+  // IA liberada EXCLUSIVAMENTE para especialistas autenticados (!isPublic)
+  const isPublic = pathname === "/" && !isDashboard;
+  const canUseAIConcierge = !isPublic;
 
   const [loading, setLoading] = useState(true);
+  const [logoError, setLogoError] = useState(false);
   const [dbRooms, setDbRooms] = useState<Room[]>([]);
-  const [profile, setProfile] = useState({ name: "", balance: 0 });
+  const [profile, setProfile] = useState<{
+    name: string;
+    balance: number;
+    specialty: string | null;
+    isComplete: boolean;
+    completionPct: number;
+    missingFields: string[];
+  }>({
+    name: "",
+    balance: 0,
+    specialty: null,
+    isComplete: true,
+    completionPct: 100,
+    missingFields: [],
+  });
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
 
   const [pendingFilters, setPendingFilters] = useState({
@@ -168,6 +259,23 @@ export function SearchTab({
     lng: number;
   } | null>(null);
 
+  // Estados do Concierge IA Consultivo
+  const [isAISearchExpanded, setIsAISearchExpanded] = useState(false);
+  const [aiQuery, setAiQuery] = useState("");
+  const [isListeningVoice, setIsListeningVoice] = useState(false);
+  const [isRunningAISearch, setIsRunningAISearch] = useState(false);
+  const [pendingUserQuestion, setPendingUserQuestion] = useState<string | null>(
+    null,
+  );
+  const [aiExchanges, setAiExchanges] = useState<AIConversationExchange[]>([]);
+  const [aiMatchesMap, setAiMatchesMap] = useState<
+    Record<string, RoomAvailabilityMatch>
+  >({});
+  const [aiTargetDateISO, setAiTargetDateISO] = useState<string | null>(null);
+  const recognitionRef = useRef<any>(null);
+  const aiInputRef = useRef<HTMLInputElement | null>(null);
+  const aiThreadEndRef = useRef<HTMLDivElement | null>(null);
+
   // Estados da Carteira e Histórico
   const [isWalletOpen, setIsWalletOpen] = useState(false);
   const [isPassModalOpen, setIsPassModalOpen] = useState(false);
@@ -188,7 +296,11 @@ export function SearchTab({
 
   const [bestHourlyRates, setBestHourlyRates] = useState<
     Record<string, number>
-  >({});
+  >({
+    start: 26,
+    vip: 34,
+    master: 50,
+  });
 
   useMobileBack(
     isWalletOpen,
@@ -200,6 +312,55 @@ export function SearchTab({
     () => setIsMobileSearchOpen(false),
     "mobile-search",
   );
+
+  const handleGoToCompleteProfile = useCallback(() => {
+    setIsAISearchExpanded(false);
+    setIsMobileSearchOpen(false);
+    if (onNavigateToProfile) {
+      onNavigateToProfile();
+      return;
+    }
+    if (typeof window !== "undefined") {
+      window.history.pushState(
+        null,
+        "",
+        window.location.pathname + window.location.search + "#profile",
+      );
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }
+  }, [onNavigateToProfile]);
+
+  const dynamicStarterCards = useMemo(() => {
+    const specLabel = profile.specialty || "Psicologia";
+    return [
+      {
+        badge: profile.specialty
+          ? `Sua Área • ${profile.specialty}`
+          : "Agenda de Hoje",
+        title: `Sala para ${specLabel} hoje às 15h em Natal`,
+        desc: "Verifica disponibilidade exata e horários vizinhos na sua área",
+        icon: CalendarCheck,
+      },
+      {
+        badge: "Simulador de Lucro",
+        title: "Vale mais a pena Hora Avulsa ou Fusion Pass+?",
+        desc: "Compare o custo por consulta e descubra quando compensa",
+        icon: TrendingUp,
+      },
+      {
+        badge: "Comparativo",
+        title: "Diferença entre Sala Basic, VIP e Premium?",
+        desc: "Entenda o que muda na estrutura e no uso dos créditos",
+        icon: Crown,
+      },
+      {
+        badge: "Múltiplas Horas",
+        title: "Preciso atender por 3 horas amanhã à tarde",
+        desc: "Busca salas com horas seguidas livres ou Turno Fixo",
+        icon: Clock,
+      },
+    ];
+  }, [profile.specialty]);
 
   const availableCities = useMemo<string[]>(() => {
     const cities = new Set<string>(
@@ -219,7 +380,13 @@ export function SearchTab({
     if (!user) return;
 
     const [profileRes, subRes, txRes, favRes] = await Promise.all([
-      supabase.from("profiles").select("full_name").eq("id", user.id).single(),
+      supabase
+        .from("profiles")
+        .select(
+          "full_name, specialty, cpf, birth_date, address_street, address_number",
+        )
+        .eq("id", user.id)
+        .single(),
       supabase
         .from("subscriptions")
         .select("id, tier, status, hours, created_at")
@@ -232,7 +399,7 @@ export function SearchTab({
         .from("wallet_transactions")
         .select("amount, created_at, description, type, tier, expires_at")
         .eq("user_id", user.id)
-        .order("created_at", { ascending: false }), // Descendente para o Histórico/Extrato
+        .order("created_at", { ascending: false }),
       supabase.from("favorites").select("room_id").eq("user_id", user.id),
     ]);
 
@@ -241,7 +408,6 @@ export function SearchTab({
     const allTxs = txRes.data || [];
     setTxHistory(allTxs);
 
-    // Calcula a Economia Total do Profissional
     let calculatedSavings = 0;
     allTxs.forEach((tx) => {
       if (tx.amount > 0 && tx.description) {
@@ -258,7 +424,6 @@ export function SearchTab({
     });
     setTotalSavings(calculatedSavings);
 
-    // O Motor FIFO precisa das transações em ordem crescente (mais antigas primeiro)
     const fifoTxs = [...allTxs].reverse();
     const fifoBalances = computeWalletBalancesFIFO(fifoTxs);
 
@@ -272,9 +437,29 @@ export function SearchTab({
       setFavorites(new Set(favRes.data.map((f: any) => f.room_id)));
     }
 
+    const pData = profileRes.data;
+    const missing: string[] = [];
+    if (!pData?.specialty) missing.push("Especialidade");
+    if (!pData?.cpf) missing.push("CPF");
+    if (!pData?.birth_date) missing.push("Data de Nascimento");
+    if (!pData?.address_street || !pData?.address_number) {
+      missing.push("Endereço");
+    }
+
+    const totalChecks = 5;
+    const completedChecks = totalChecks - missing.length;
+    const completionPct = Math.max(
+      20,
+      Math.round((completedChecks / totalChecks) * 100),
+    );
+
     setProfile({
-      name: profileRes.data?.full_name || "Doutor(a)",
+      name: pData?.full_name || "Doutor(a)",
       balance: fifoBalances.total,
+      specialty: pData?.specialty || null,
+      isComplete: missing.length === 0,
+      completionPct,
+      missingFields: missing,
     });
   }, [supabase]);
 
@@ -414,6 +599,262 @@ export function SearchTab({
     fetchData();
   }, [isPublic, supabase, appliedFilters.modality, fetchWalletData]);
 
+  // ====================================================================
+  // EXECUÇÃO DO CONCIERGE CONSULTIVO COM GEMINI (/api/ai-search)
+  // ====================================================================
+  const executeAISearch = useCallback(
+    async (customText?: string) => {
+      if (!canUseAIConcierge) return;
+
+      const textToSearch = (customText ?? aiQuery).trim();
+      if (!textToSearch) {
+        toast({
+          title: "Digite ou fale sua dúvida",
+          description:
+            'Ex: "Sala disponível hoje às 15h" ou "Diferença entre Basic e VIP?"',
+        });
+        return;
+      }
+
+      setIsRunningAISearch(true);
+      setPendingUserQuestion(textToSearch);
+      setIsAISearchExpanded(true);
+      setAiQuery("");
+
+      setTimeout(() => {
+        aiThreadEndRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+        });
+      }, 60);
+
+      try {
+        const historyPayload = aiExchanges.flatMap((ex) => [
+          { role: "user" as const, content: ex.userQuery },
+          {
+            role: "assistant" as const,
+            content: `${ex.headline} ${ex.recommendationSummary}`,
+          },
+        ]);
+
+        const detectedUserTier =
+          walletBalances.master > 0
+            ? "Premium"
+            : walletBalances.vip > 0
+              ? "VIP"
+              : walletBalances.start > 0
+                ? "Basic"
+                : activeSub?.tier || null;
+
+        const res = await fetch("/api/ai-search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: textToSearch,
+            history: historyPayload,
+            walletBalance: profile.balance,
+            activeTier: detectedUserTier,
+            userSpecialty: profile.specialty,
+            isProfileComplete: profile.isComplete,
+            missingProfileFields: profile.missingFields,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(
+            data.error || "Falha ao consultar o Concierge IA da Fusion.",
+          );
+        }
+
+        const ext = data.extraction;
+        const matchesList: RoomAvailabilityMatch[] = data.matches || [];
+
+        if (ext?.shouldApplyFilters) {
+          const parsedDate = ext?.dateISO
+            ? new Date(`${ext.dateISO}T12:00:00`)
+            : undefined;
+
+          const nextFilters = {
+            city: ext?.city || "Qualquer lugar",
+            date: parsedDate,
+            time: ext?.shift || "",
+            modality: (ext?.modality || "hora") as RentalType,
+            category: ext?.category || "Todas as Salas",
+          };
+
+          setPendingFilters(nextFilters);
+          setAppliedFilters(nextFilters);
+          if (ext?.tier && ext.tier !== "all") {
+            setActiveTier(ext.tier);
+          } else {
+            setActiveTier("all");
+          }
+
+          const map: Record<string, RoomAvailabilityMatch> = {};
+          matchesList.forEach((m: RoomAvailabilityMatch) => {
+            map[m.roomId] = m;
+          });
+
+          setAiMatchesMap(map);
+          setAiTargetDateISO(ext?.dateISO || null);
+          setHasSearched(true);
+        }
+
+        const newExchange: AIConversationExchange = {
+          id: `${Date.now()}`,
+          userQuery: textToSearch,
+          intentType: ext?.intentType || "room_search",
+          headline:
+            ext?.headline ||
+            data.assistantMessage ||
+            "Aqui estão as melhores opções para o seu atendimento:",
+          comparisonBlocks: Array.isArray(ext?.comparisonBlocks)
+            ? ext.comparisonBlocks
+            : [],
+          recommendationSummary: ext?.recommendationSummary || "",
+          closingQuestion:
+            ext?.closingQuestion ||
+            "Deseja simular outra data ou comparar os pacotes Fusion Pass+?",
+          followUpSuggestions: Array.isArray(ext?.followUpSuggestions)
+            ? ext.followUpSuggestions
+            : dynamicStarterCards.map((c) => c.title),
+          suggestedCta: ext?.suggestedCta || "none",
+          // FILTRO ESTRITO: só exibe no chat salas que realmente têm horários livres verificados na data e score positivo
+          recommendedRooms:
+            ext?.shouldApplyFilters !== false
+              ? matchesList
+                  .filter(
+                    (m) =>
+                      m.availableSlots &&
+                      m.availableSlots.length > 0 &&
+                      m.score >= 0,
+                  )
+                  .slice(0, 3)
+              : [],
+          targetDateISO: ext?.dateISO || null,
+        };
+
+        setAiExchanges((prev) => [...prev.slice(-3), newExchange]);
+        setIsMobileSearchOpen(false);
+
+        setTimeout(() => {
+          aiThreadEndRef.current?.scrollIntoView({
+            behavior: "smooth",
+            block: "nearest",
+          });
+        }, 120);
+      } catch (err: any) {
+        toast({
+          variant: "destructive",
+          title: "Não foi possível consultar o Concierge IA",
+          description: err.message,
+        });
+      } finally {
+        setIsRunningAISearch(false);
+        setPendingUserQuestion(null);
+      }
+    },
+    [
+      canUseAIConcierge,
+      aiQuery,
+      aiExchanges,
+      walletBalances,
+      activeSub,
+      profile,
+      dynamicStarterCards,
+      toast,
+    ],
+  );
+
+  // ====================================================================
+  // RECONHECIMENTO DE VOZ NATIVO (MICROFONE EXCLUSIVO PARA LOGADOS)
+  // ====================================================================
+  const handleToggleVoiceSearch = useCallback(() => {
+    if (!canUseAIConcierge) return;
+
+    if (isListeningVoice) {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      setIsListeningVoice(false);
+      return;
+    }
+
+    const SpeechRecognition =
+      typeof window !== "undefined"
+        ? (window as any).SpeechRecognition ||
+          (window as any).webkitSpeechRecognition
+        : null;
+
+    if (!SpeechRecognition) {
+      setIsAISearchExpanded(true);
+      setTimeout(() => aiInputRef.current?.focus(), 100);
+      toast({
+        title: "Digite sua pergunta abaixo",
+        description:
+          "Seu navegador não suporta microfone direto, mas o Concierge IA responde por texto imediatamente!",
+      });
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = "pt-BR";
+      recognition.continuous = false;
+      recognition.interimResults = true;
+
+      let finalTranscript = "";
+
+      recognition.onstart = () => {
+        setIsAISearchExpanded(true);
+        setIsListeningVoice(true);
+      };
+
+      recognition.onresult = (event: any) => {
+        let interim = "";
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript;
+          } else {
+            interim += transcript;
+          }
+        }
+        const currentText = (finalTranscript || interim).trim();
+        if (currentText) {
+          setAiQuery(currentText);
+        }
+      };
+
+      recognition.onerror = () => {
+        setIsListeningVoice(false);
+      };
+
+      recognition.onend = () => {
+        setIsListeningVoice(false);
+        if (finalTranscript.trim()) {
+          executeAISearch(finalTranscript.trim());
+        }
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch {
+      setIsListeningVoice(false);
+    }
+  }, [canUseAIConcierge, isListeningVoice, executeAISearch, toast]);
+
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+    };
+  }, []);
+
   const requestLocation = () => {
     if ("geolocation" in navigator) {
       toast({
@@ -456,6 +897,10 @@ export function SearchTab({
     setActiveTier("all");
     setUsingLocation(false);
     setHasSearched(false);
+    setAiExchanges([]);
+    setAiMatchesMap({});
+    setAiTargetDateISO(null);
+    setAiQuery("");
     setActiveMobileTab("onde");
   };
 
@@ -464,16 +909,32 @@ export function SearchTab({
     setHasSearched(true);
     setActiveSearchTab(null);
     setIsMobileSearchOpen(false);
-    window.scrollTo({ top: 380, behavior: "smooth" });
+    window.scrollTo({ top: 280, behavior: "smooth" });
+  };
+
+  const handleQuickCategorySelect = (categoryId: string) => {
+    setPendingFilters((prev) => ({ ...prev, category: categoryId }));
+    setAppliedFilters((prev) => ({ ...prev, category: categoryId }));
+    setHasSearched(categoryId !== "Todas as Salas");
   };
 
   const handleOpenPassWithTier = (
     tier: PassTier = "vip",
     hours: number | null = null,
   ) => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("open-fusion-pass", {
+          detail: { step: "plans", tier },
+        }),
+      );
+      return;
+    }
     setPassPreselect({ tier, hours });
     setIsPassModalOpen(true);
   };
+
+  const hasAIMatches = Object.keys(aiMatchesMap).length > 0;
 
   const searchResults = useMemo(() => {
     let exactMatches = dbRooms;
@@ -521,10 +982,10 @@ export function SearchTab({
 
       if (cityMatches.length > 0) {
         exactMatches = cityMatches;
-        fallbackMessage = `Não encontramos espaços exatos para "${appliedFilters.category}" na modalidade desejada, mas veja estas excelentes salas na região.`;
+        fallbackMessage = `Não encontramos espaços exatos para "${appliedFilters.category}" na modalidade selecionada, mas separamos estas excelentes salas disponíveis na região.`;
       } else {
         exactMatches = dbRooms;
-        fallbackMessage = `Ainda não temos unidades em "${appliedFilters.city}". Confira nossos espaços mais populares!`;
+        fallbackMessage = `Ainda não temos unidades em "${appliedFilters.city}". Confira nossos consultórios mais reservados:`;
       }
     }
 
@@ -542,6 +1003,18 @@ export function SearchTab({
           return { ...r, distanceKm: d };
         })
         .sort((a, b) => (a.distanceKm || 999) - (b.distanceKm || 999));
+    } else if (hasAIMatches) {
+      // Remove da vitrine salas que estão 100% fechadas ou sem vagas na data pesquisada pela IA
+      const openInAI = exactMatches.filter(
+        (r) => (aiMatchesMap[r.id]?.availableSlots?.length ?? 0) > 0,
+      );
+      exactMatches = (openInAI.length > 0 ? openInAI : exactMatches).sort(
+        (a, b) => {
+          const scoreA = aiMatchesMap[a.id]?.score ?? -999;
+          const scoreB = aiMatchesMap[b.id]?.score ?? -999;
+          return scoreB - scoreA;
+        },
+      );
     }
 
     return { rooms: exactMatches, isFallback, fallbackMessage };
@@ -552,6 +1025,8 @@ export function SearchTab({
     hasSearched,
     usingLocation,
     userLocation,
+    hasAIMatches,
+    aiMatchesMap,
   ]);
 
   const masterRooms = searchResults.rooms.filter((r) => r.tier === "master");
@@ -598,83 +1073,64 @@ export function SearchTab({
   const renderTargetedPassBanner = () => {
     if (activeTier === "all") return null;
 
-    let title,
-      subtitle,
-      Icon,
-      bgClass,
-      iconColorClass,
-      textClass,
-      buttonClass,
-      benefits;
+    let title, subtitle, Icon, benefits;
     let baseHourlyRate = BASE_HOURLY_RATES.start;
 
     if (activeTier === "vip") {
       baseHourlyRate = BASE_HOURLY_RATES.vip;
-      title = "Fusion Pass VIP";
-      subtitle = `Salas de alto padrão não precisam custar R$ ${baseHourlyRate}/h. Assine o Pass VIP, impressione seus pacientes e aumente sua margem.`;
+      title = "Pacote de Horas • Salas VIP";
+      subtitle = `Reduza o valor da hora avulsa de R$ ${baseHourlyRate}/h com os pacotes VIP e aumente sua margem em cada atendimento.`;
       Icon = Star;
-      bgClass = "bg-orange-50 border-orange-200";
-      iconColorClass = "text-[#BF4B24]";
-      textClass = "text-orange-950";
-      buttonClass =
-        "bg-[#BF4B24] hover:bg-[#9A3C1D] text-white shadow-orange-500/20";
       benefits = [
-        "Atraia pacientes High-Ticket",
-        "Desconto agressivo no pacote",
-        "Reserva prioritária",
+        "Economia de até 41% por hora",
+        "Validade de 30 dias",
+        "Sem fidelidade",
       ];
     } else if (activeTier === "master") {
       baseHourlyRate = BASE_HOURLY_RATES.master;
-      title = "Fusion Pass Premium";
-      subtitle = `A elite da Fusion Clinic à sua disposição. Esqueça os R$ ${baseHourlyRate}/h avulsos: assine o Premium e tenha passe livre nos melhores espaços.`;
+      title = "Pacote de Horas • Salas Premium";
+      subtitle = `Acesso livre a todas as salas da Fusion Clinic (Premium, VIP e Basic) pagando muito menos que os R$ ${baseHourlyRate}/h avulsos.`;
       Icon = Crown;
-      bgClass = "bg-slate-950 border-slate-800";
-      iconColorClass = "text-amber-500";
-      textClass = "text-white";
-      buttonClass = "bg-amber-500 hover:bg-amber-600 text-slate-950 font-black";
       benefits = [
-        "Posicionamento Premium",
-        "Zero taxas de upgrade",
-        "Status Exclusivo",
+        "Libera 100% das unidades",
+        "Zero taxa de upgrade",
+        "Repasse ou doe horas",
       ];
     } else {
       baseHourlyRate = BASE_HOURLY_RATES.start;
-      title = "Fusion Pass Basic";
-      subtitle = `Cansado de pagar R$ ${baseHourlyRate}/h no avulso? Assine o Pass Basic, trave o menor custo da plataforma e aumente o lucro de cada consulta.`;
+      title = "Pacote de Horas • Salas Basic";
+      subtitle = `Em vez de pagar R$ ${baseHourlyRate}/h por consulta avulsa, ative um pacote Basic e garanta o menor custo por hora da plataforma.`;
       Icon = Shield;
-      bgClass = "bg-slate-50 border-slate-200";
-      iconColorClass = "text-slate-600";
-      textClass = "text-slate-900";
-      buttonClass = "bg-slate-900 hover:bg-slate-800 text-white";
       benefits = [
-        "Aumente sua margem de lucro",
-        "Horas cumulativas",
-        "Sem fidelidade oculta",
+        "Maior rentabilidade por paciente",
+        "Crédito liberado na hora",
+        "Cancele quando quiser",
       ];
     }
 
     return (
-      <div
-        className={`flex flex-col sm:flex-row items-start sm:items-center justify-between gap-5 p-5 sm:p-6 rounded-2xl mb-8 border shadow-sm transition-all ${bgClass}`}
-      >
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-5 p-5 sm:p-6 rounded-2xl mb-6 bg-[#FAF7F4] border border-[#BF4B24]/25 shadow-2xs transition-all mx-4 sm:mx-0">
         <div className="flex items-start sm:items-center gap-4 w-full sm:w-auto">
-          <div className="w-12 h-12 rounded-full flex items-center justify-center shrink-0 shadow-sm bg-white border border-slate-200/50">
-            <Icon className={`w-6 h-6 ${iconColorClass}`} />
+          <div className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 bg-white border border-[#BF4B24]/20 text-[#BF4B24]">
+            <Icon className="w-5 h-5" />
           </div>
           <div>
-            <h3 className={`text-lg font-black ${textClass} leading-tight`}>
-              {title}
-            </h3>
-            <p
-              className={`text-sm font-medium mt-1 leading-snug max-w-lg ${textClass} opacity-80`}
-            >
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-[#BF4B24] bg-white border border-[#BF4B24]/20 px-2 py-0.5 rounded-full">
+                Fusion Pass+
+              </span>
+              <h3 className="text-base font-bold text-stone-900 leading-tight">
+                {title}
+              </h3>
+            </div>
+            <p className="text-xs sm:text-sm text-stone-600 mt-1 leading-relaxed max-w-xl">
               {subtitle}
             </p>
-            <div className="flex flex-wrap items-center gap-3 mt-3">
+            <div className="flex flex-wrap items-center gap-4 mt-2.5">
               {benefits.map((ben, idx) => (
                 <div key={idx} className="flex items-center gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                  <span className={`text-xs font-bold ${textClass}`}>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  <span className="text-xs font-semibold text-stone-700">
                     {ben}
                   </span>
                 </div>
@@ -684,9 +1140,9 @@ export function SearchTab({
         </div>
         <Button
           onClick={() => handleOpenPassWithTier(activeTier)}
-          className={`w-full sm:w-auto shrink-0 rounded-xl font-bold h-12 px-6 ${buttonClass}`}
+          className="w-full sm:w-auto shrink-0 rounded-xl font-bold h-11 px-5 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white text-xs cursor-pointer"
         >
-          Ver Planos e Assinar
+          Simular pacote com desconto
         </Button>
       </div>
     );
@@ -694,15 +1150,18 @@ export function SearchTab({
 
   if (loading)
     return (
-      <div className="flex justify-center items-center min-h-screen bg-slate-50">
-        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
+      <div className="flex justify-center items-center min-h-[60vh] bg-[#FAF7F4]">
+        <Loader2 className="w-9 h-9 animate-spin text-[#BF4B24]" />
       </div>
     );
 
+  const firstName = profile.name ? profile.name.split(" ")[0] : "Especialista";
+  const hasActiveWalletCredits = profile.balance > 0 || Boolean(activeSub);
+
   return (
-    <div className="flex flex-col pb-24 bg-slate-50 min-h-screen relative font-sans">
+    <div className="flex flex-col pb-24 bg-[#FAF7F4] min-h-screen relative font-sans">
       {/* ======================================================== */}
-      {/* COMPONENTE DESACOPLADO DO FUSION PASS+                   */}
+      {/* MODAL DO FUSION PASS+                                    */}
       {/* ======================================================== */}
       <FusionPassModal
         isOpen={isPassModalOpen}
@@ -717,51 +1176,138 @@ export function SearchTab({
         }}
       />
 
-      {/* ========================================== */}
-      {/* MODAL DE BUSCA MOBILE (ESTILO AIRBNB)      */}
-      {/* ========================================== */}
+      {/* ==================================================================== */}
+      {/* GAVETA DE BUSCA MOBILE REFINADA (ESTILO AIRBNB / BOOKING)            */}
+      {/* ==================================================================== */}
       {isMobileSearchOpen && (
-        <div className="fixed inset-0 z-[200] bg-slate-100 flex flex-col md:hidden animate-in slide-in-from-bottom-full duration-300">
-          <div className="flex justify-between items-center p-4 bg-slate-100 shrink-0 z-10">
+        <div className="fixed inset-0 z-[200] bg-[#FAF7F4] flex flex-col md:hidden animate-in slide-in-from-bottom-6 duration-200">
+          <div className="flex justify-between items-center px-5 pt-4 pb-3 bg-white border-b border-stone-200/80 shrink-0 z-10">
             <button
               onClick={() => setIsMobileSearchOpen(false)}
-              className="w-10 h-10 rounded-full bg-white flex items-center justify-center hover:bg-slate-50 border border-slate-200 shadow-sm"
+              aria-label="Fechar busca"
+              className="w-9 h-9 rounded-full bg-stone-100 flex items-center justify-center hover:bg-stone-200 text-stone-700 transition-colors"
             >
-              <X className="w-5 h-5 text-slate-700" />
+              <X className="w-4 h-4 stroke-[2.5]" />
             </button>
+            <span className="text-xs font-bold uppercase tracking-wider text-stone-800">
+              Buscar Consultório
+            </span>
             <button
               onClick={handleClearFilters}
-              className="text-xs font-bold text-slate-900 underline underline-offset-2"
+              className="text-xs font-semibold text-[#BF4B24] hover:underline"
             >
-              Limpar tudo
+              Limpar
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-4 py-2 space-y-4">
-            {/* ONDE - MOBILE */}
+          <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+            {/* CONCIERGE IA DENTRO DA GAVETA MOBILE (APENAS PARA ESPECIALISTAS LOGADOS) */}
+            {canUseAIConcierge && (
+              <div className="bg-white rounded-3xl p-4 shadow-2xs border border-[#BF4B24]/25">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-[#BF4B24] flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    Concierge IA{" "}
+                    {profile.specialty ? `• ${profile.specialty}` : ""}
+                  </span>
+                  {isListeningVoice && (
+                    <span className="text-[10px] font-bold text-red-600 animate-pulse">
+                      Ouvindo...
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={aiQuery}
+                    onChange={(e) => setAiQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") executeAISearch();
+                    }}
+                    placeholder='Ex: "Sala livre hoje às 15h" ou "Basic vs VIP?"'
+                    className="flex-1 h-10 px-3.5 rounded-xl bg-[#FAF7F4] border border-stone-200 text-xs text-stone-900 placeholder:text-stone-400 focus:outline-none focus:border-[#BF4B24]"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleToggleVoiceSearch}
+                    aria-label="Buscar por comando de voz"
+                    className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-all ${
+                      isListeningVoice
+                        ? "bg-red-600 text-white animate-pulse"
+                        : "bg-stone-100 text-stone-700"
+                    }`}
+                  >
+                    {isListeningVoice ? (
+                      <MicOff className="w-4 h-4" />
+                    ) : (
+                      <Mic className="w-4 h-4" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isRunningAISearch}
+                    onClick={() => executeAISearch()}
+                    className="h-10 px-3.5 rounded-xl bg-[#BF4B24] text-white font-bold text-xs flex items-center justify-center shrink-0"
+                  >
+                    {isRunningAISearch ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <SendHorizontal className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 1. ONDE - MOBILE */}
             {activeMobileTab === "onde" ? (
-              <div className="bg-white rounded-[2rem] p-6 shadow-xl shadow-slate-200/50 border border-slate-100 animate-in fade-in zoom-in-95">
-                <h2 className="text-2xl font-black text-slate-900 mb-6">
-                  Para onde?
+              <div className="bg-white rounded-3xl p-5 shadow-sm border border-stone-200/80 animate-in fade-in duration-150">
+                <h2 className="text-lg font-bold text-stone-900 mb-3.5">
+                  Onde você deseja atender?
                 </h2>
-                <div className="space-y-2 max-h-[50vh] overflow-y-auto scrollbar-hide">
+                <div className="space-y-2 max-h-[48vh] overflow-y-auto scrollbar-hide">
                   <button
                     onClick={requestLocation}
-                    className="w-full flex items-center gap-4 p-3 rounded-2xl bg-orange-50 border border-orange-100 text-left"
+                    className="w-full flex items-center gap-3.5 p-3 rounded-2xl bg-[#FAF7F4] border border-[#BF4B24]/25 text-left"
                   >
-                    <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shrink-0 shadow-sm">
-                      <Compass className="w-6 h-6 text-[#BF4B24]" />
+                    <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center shrink-0 border border-[#BF4B24]/20">
+                      <Compass className="w-5 h-5 text-[#BF4B24]" />
                     </div>
                     <div>
-                      <span className="block font-bold text-slate-900">
+                      <span className="block text-sm font-bold text-stone-900">
                         Perto de mim
                       </span>
-                      <span className="block text-xs text-slate-500 mt-0.5">
-                        Buscar por GPS
+                      <span className="block text-xs text-stone-500">
+                        Usar localização atual do GPS
                       </span>
                     </div>
                   </button>
-                  <div className="w-full h-px bg-slate-100 my-4"></div>
+
+                  <div className="w-full h-px bg-stone-100 my-2.5" />
+
+                  <button
+                    onClick={() => {
+                      setPendingFilters((p) => ({
+                        ...p,
+                        city: "Qualquer lugar",
+                      }));
+                      setActiveMobileTab("quando");
+                    }}
+                    className={`w-full flex items-center gap-3.5 p-3 rounded-2xl transition-colors text-left border ${
+                      pendingFilters.city === "Qualquer lugar"
+                        ? "border-[#BF4B24] bg-[#FAF7F4]/60"
+                        : "border-transparent hover:bg-stone-50"
+                    }`}
+                  >
+                    <div className="w-10 h-10 bg-stone-100 rounded-full flex items-center justify-center shrink-0">
+                      <Building2 className="w-5 h-5 text-stone-600" />
+                    </div>
+                    <span className="text-sm font-semibold text-stone-800">
+                      Todas as unidades (Qualquer lugar)
+                    </span>
+                  </button>
+
                   {availableCities.map((city: string) => (
                     <button
                       key={city}
@@ -769,12 +1315,18 @@ export function SearchTab({
                         setPendingFilters((p) => ({ ...p, city }));
                         setActiveMobileTab("quando");
                       }}
-                      className="w-full flex items-center gap-4 p-3 rounded-2xl hover:bg-slate-50 transition-colors text-left"
+                      className={`w-full flex items-center gap-3.5 p-3 rounded-2xl transition-colors text-left border ${
+                        pendingFilters.city === city
+                          ? "border-[#BF4B24] bg-[#FAF7F4]/60"
+                          : "border-transparent hover:bg-stone-50"
+                      }`}
                     >
-                      <div className="w-12 h-12 bg-slate-50 border border-slate-100 rounded-full flex items-center justify-center shrink-0">
-                        <MapPin className="w-6 h-6 text-slate-500" />
+                      <div className="w-10 h-10 bg-stone-100 rounded-full flex items-center justify-center shrink-0">
+                        <MapPin className="w-5 h-5 text-stone-600" />
                       </div>
-                      <span className="font-bold text-slate-700">{city}</span>
+                      <span className="text-sm font-semibold text-stone-800">
+                        {city}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -782,25 +1334,34 @@ export function SearchTab({
             ) : (
               <div
                 onClick={() => setActiveMobileTab("onde")}
-                className="bg-white rounded-2xl p-5 flex justify-between shadow-sm border border-slate-100 items-center cursor-pointer active:scale-[0.98] transition-transform"
+                className="bg-white rounded-2xl px-5 py-4 flex justify-between border border-stone-200/80 items-center cursor-pointer active:scale-[0.99] transition-transform"
               >
-                <span className="text-sm font-medium text-slate-500">Onde</span>
-                <span className="text-sm font-bold text-slate-900">
+                <span className="text-xs font-semibold text-stone-500">
+                  Localização
+                </span>
+                <span className="text-xs font-bold text-stone-900">
                   {pendingFilters.city}
                 </span>
               </div>
             )}
 
-            {/* QUANDO - MOBILE */}
+            {/* 2. QUANDO - MOBILE */}
             {activeMobileTab === "quando" ? (
-              <div className="bg-white rounded-[2rem] p-0 shadow-xl shadow-slate-200/50 border border-slate-100 animate-in fade-in zoom-in-95 flex flex-col overflow-hidden max-h-[70vh]">
-                <div className="p-6 pb-2 shrink-0">
-                  <h2 className="text-2xl font-black text-slate-900">
-                    Quando você precisa?
+              <div className="bg-white rounded-3xl p-5 shadow-sm border border-stone-200/80 animate-in fade-in duration-150 flex flex-col overflow-hidden max-h-[65vh]">
+                <div className="pb-2 shrink-0 flex items-center justify-between">
+                  <h2 className="text-lg font-bold text-stone-900">
+                    Para quando você precisa?
                   </h2>
+                  <button
+                    type="button"
+                    onClick={() => setActiveMobileTab("como")}
+                    className="text-xs font-bold text-[#BF4B24]"
+                  >
+                    Pular data ›
+                  </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto px-6 pb-6 scrollbar-hide">
+                <div className="flex-1 overflow-y-auto pb-4 scrollbar-hide">
                   <Calendar
                     mode="single"
                     selected={pendingFilters.date}
@@ -814,12 +1375,12 @@ export function SearchTab({
                       date < new Date(new Date().setHours(0, 0, 0, 0))
                     }
                     locale={ptBR}
-                    numberOfMonths={6}
+                    numberOfMonths={3}
                     disableNavigation
                     showOutsideDays={false}
-                    className="p-0 w-full [&_.rdp-months]:flex-col [&_.rdp-month]:mb-10 [&_.rdp-nav]:hidden [&_.rdp-caption_label]:text-lg [&_.rdp-caption_label]:font-black [&_.rdp-caption_label]:capitalize [&_.rdp-head_cell]:text-slate-400 [&_.rdp-head_cell]:font-bold [&_.rdp-head_cell]:text-[11px] [&_.rdp-head_cell]:uppercase [&_.rdp-table]:w-full"
+                    className="p-0 w-full [&_.rdp-months]:flex-col [&_.rdp-month]:mb-8 [&_.rdp-nav]:hidden [&_.rdp-caption_label]:text-base [&_.rdp-caption_label]:font-bold [&_.rdp-caption_label]:capitalize [&_.rdp-head_cell]:text-stone-400 [&_.rdp-head_cell]:font-semibold [&_.rdp-head_cell]:text-[11px] [&_.rdp-head_cell]:uppercase [&_.rdp-table]:w-full"
                     modifiersClassNames={{
-                      today: "font-normal bg-transparent text-slate-900",
+                      today: "font-bold bg-stone-100 text-stone-900",
                     }}
                   />
                 </div>
@@ -827,32 +1388,38 @@ export function SearchTab({
             ) : (
               <div
                 onClick={() => setActiveMobileTab("quando")}
-                className="bg-white rounded-2xl p-5 flex justify-between shadow-sm border border-slate-100 items-center cursor-pointer active:scale-[0.98] transition-transform"
+                className="bg-white rounded-2xl px-5 py-4 flex justify-between border border-stone-200/80 items-center cursor-pointer active:scale-[0.99] transition-transform"
               >
-                <span className="text-sm font-medium text-slate-500">
-                  Quando
+                <span className="text-xs font-semibold text-stone-500">
+                  Data
                 </span>
-                <span className="text-sm font-bold text-slate-900">
+                <span className="text-xs font-bold text-stone-900">
                   {pendingFilters.date
-                    ? format(pendingFilters.date, "dd MMM", { locale: ptBR })
-                    : "Insira as datas"}
+                    ? format(pendingFilters.date, "dd 'de' MMM", {
+                        locale: ptBR,
+                      })
+                    : "Qualquer data"}
                 </span>
               </div>
             )}
 
-            {/* COMO - MOBILE */}
+            {/* 3. COMO - MOBILE */}
             {activeMobileTab === "como" ? (
-              <div className="bg-white rounded-[2rem] p-6 shadow-xl shadow-slate-200/50 border border-slate-100 animate-in fade-in zoom-in-95">
-                <h2 className="text-2xl font-black text-slate-900 mb-6">
-                  Como deseja alugar?
+              <div className="bg-white rounded-3xl p-5 shadow-sm border border-stone-200/80 animate-in fade-in duration-150">
+                <h2 className="text-lg font-bold text-stone-900 mb-4">
+                  Modalidade de locação
                 </h2>
 
-                <div className="flex bg-slate-100 p-1.5 rounded-xl mb-6">
+                <div className="flex bg-stone-100 p-1 rounded-xl mb-5">
                   <button
                     onClick={() =>
                       setPendingFilters((p) => ({ ...p, modality: "hora" }))
                     }
-                    className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${pendingFilters.modality === "hora" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
+                    className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${
+                      pendingFilters.modality === "hora"
+                        ? "bg-white shadow-2xs text-[#BF4B24]"
+                        : "text-stone-600"
+                    }`}
                   >
                     Por Hora
                   </button>
@@ -860,7 +1427,11 @@ export function SearchTab({
                     onClick={() =>
                       setPendingFilters((p) => ({ ...p, modality: "turno" }))
                     }
-                    className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${pendingFilters.modality === "turno" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
+                    className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${
+                      pendingFilters.modality === "turno"
+                        ? "bg-white shadow-2xs text-[#BF4B24]"
+                        : "text-stone-600"
+                    }`}
                   >
                     Turno Fixo
                   </button>
@@ -868,7 +1439,11 @@ export function SearchTab({
                     onClick={() =>
                       setPendingFilters((p) => ({ ...p, modality: "fixo" }))
                     }
-                    className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${pendingFilters.modality === "fixo" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
+                    className={`flex-1 text-xs font-bold py-2.5 rounded-lg transition-all ${
+                      pendingFilters.modality === "fixo"
+                        ? "bg-white shadow-2xs text-[#BF4B24]"
+                        : "text-stone-600"
+                    }`}
                   >
                     Mensal
                   </button>
@@ -876,8 +1451,8 @@ export function SearchTab({
 
                 {pendingFilters.modality !== "fixo" ? (
                   <>
-                    <h3 className="text-sm font-black text-slate-900 mb-3">
-                      Período de preferência
+                    <h3 className="text-xs font-bold text-stone-700 mb-2.5">
+                      Período de preferência (opcional)
                     </h3>
                     <div className="space-y-2">
                       {[
@@ -902,10 +1477,10 @@ export function SearchTab({
                       ].map((shift) => (
                         <label
                           key={shift.id}
-                          className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${
+                          className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
                             pendingFilters.time === shift.id
-                              ? "border-[#BF4B24] bg-orange-50"
-                              : "border-slate-100"
+                              ? "border-[#BF4B24] bg-[#FAF7F4]"
+                              : "border-stone-200/80"
                           }`}
                         >
                           <input
@@ -921,15 +1496,17 @@ export function SearchTab({
                             }
                           />
                           <shift.icon
-                            className={`w-5 h-5 ${pendingFilters.time === shift.id ? "text-[#BF4B24]" : "text-slate-400"}`}
+                            className={`w-4 h-4 ${
+                              pendingFilters.time === shift.id
+                                ? "text-[#BF4B24]"
+                                : "text-stone-400"
+                            }`}
                           />
                           <div>
-                            <p
-                              className={`text-sm font-bold ${pendingFilters.time === shift.id ? "text-orange-950" : "text-slate-700"}`}
-                            >
+                            <p className="text-xs font-bold text-stone-900">
                               {shift.label}
                             </p>
-                            <p className="text-[10px] text-slate-500">
+                            <p className="text-[11px] text-stone-500">
                               {shift.sub}
                             </p>
                           </div>
@@ -938,52 +1515,60 @@ export function SearchTab({
                     </div>
                   </>
                 ) : (
-                  <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 mt-2">
-                    <p className="text-sm font-bold text-blue-900">
-                      Locação Mensal
+                  <div className="bg-[#FAF7F4] p-4 rounded-xl border border-[#BF4B24]/25 mt-2">
+                    <p className="text-xs font-bold text-stone-900">
+                      Sala Exclusiva Mensal
                     </p>
-                    <p className="text-xs text-blue-800/80 mt-1 font-medium">
-                      Você terá exclusividade total sobre a sala 24h por dia,
-                      sem precisar escolher turnos.
+                    <p className="text-xs text-stone-600 mt-1 leading-relaxed">
+                      Exclusividade sobre o consultório com opção de sublocar
+                      horários vagos no modo Coanfitrião.
                     </p>
                   </div>
                 )}
 
-                <div className="mt-6 pt-4 border-t border-slate-100 flex justify-end">
+                <div className="mt-5 pt-3.5 border-t border-stone-100">
                   <Button
                     onClick={() => setActiveMobileTab("oque")}
-                    className="bg-slate-900 hover:bg-slate-800 text-white rounded-xl h-12 px-8 font-black w-full shadow-lg"
+                    className="bg-stone-900 hover:bg-stone-800 text-white rounded-xl h-11 font-bold text-xs w-full"
                   >
-                    Próximo Passo
+                    Escolher especialidade
                   </Button>
                 </div>
               </div>
             ) : (
               <div
                 onClick={() => setActiveMobileTab("como")}
-                className="bg-white rounded-2xl p-5 flex justify-between shadow-sm border border-slate-100 items-center cursor-pointer active:scale-[0.98] transition-transform"
+                className="bg-white rounded-2xl px-5 py-4 flex justify-between border border-stone-200/80 items-center cursor-pointer active:scale-[0.99] transition-transform"
               >
-                <span className="text-sm font-medium text-slate-500">Como</span>
-                <span className="text-sm font-bold text-slate-900">
+                <span className="text-xs font-semibold text-stone-500">
+                  Modalidade
+                </span>
+                <span className="text-xs font-bold text-stone-900">
                   {pendingFilters.modality === "hora"
                     ? "Por Hora"
                     : pendingFilters.modality === "turno"
                       ? "Turno Fixo"
                       : "Mensal"}
                   {pendingFilters.modality !== "fixo" && pendingFilters.time
-                    ? ` • ${pendingFilters.time === "manha" ? "Manhã" : pendingFilters.time === "tarde" ? "Tarde" : "Noite"}`
+                    ? ` • ${
+                        pendingFilters.time === "manha"
+                          ? "Manhã"
+                          : pendingFilters.time === "tarde"
+                            ? "Tarde"
+                            : "Noite"
+                      }`
                     : ""}
                 </span>
               </div>
             )}
 
-            {/* O QUÊ - MOBILE */}
+            {/* 4. O QUÊ - MOBILE */}
             {activeMobileTab === "oque" ? (
-              <div className="bg-white rounded-[2rem] p-6 shadow-xl shadow-slate-200/50 border border-slate-100 animate-in fade-in zoom-in-95 pb-8">
-                <h2 className="text-2xl font-black text-slate-900 mb-6">
+              <div className="bg-white rounded-3xl p-5 shadow-sm border border-stone-200/80 animate-in fade-in duration-150 pb-6">
+                <h2 className="text-lg font-bold text-stone-900 mb-4">
                   Qual a especialidade?
                 </h2>
-                <div className="flex flex-col gap-3">
+                <div className="grid grid-cols-1 gap-2.5">
                   {CATEGORIES.map((cat) => {
                     const Icon = cat.icon;
                     const isSelected = pendingFilters.category === cat.id;
@@ -993,24 +1578,26 @@ export function SearchTab({
                         onClick={() =>
                           setPendingFilters((p) => ({ ...p, category: cat.id }))
                         }
-                        className={`p-4 rounded-2xl flex items-center gap-4 transition-all border-2 text-left ${
+                        className={`p-3.5 rounded-2xl flex items-center gap-3.5 transition-all border text-left ${
                           isSelected
-                            ? "border-[#BF4B24] bg-orange-50"
-                            : "border-slate-100 bg-white hover:border-slate-200"
+                            ? "border-[#BF4B24] bg-[#FAF7F4]"
+                            : "border-stone-200/80 bg-white"
                         }`}
                       >
                         <div
-                          className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 border ${isSelected ? "bg-[#BF4B24] text-white border-transparent" : "bg-slate-50 text-slate-500 border-slate-200"}`}
+                          className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
+                            isSelected
+                              ? "bg-[#BF4B24] text-white border-transparent"
+                              : "bg-stone-50 text-stone-600 border-stone-200/70"
+                          }`}
                         >
-                          <Icon className="w-5 h-5" />
+                          <Icon className="w-4 h-4" />
                         </div>
                         <div>
-                          <span
-                            className={`block text-sm font-black ${isSelected ? "text-orange-950" : "text-slate-700"}`}
-                          >
+                          <span className="block text-xs font-bold text-stone-900">
                             {cat.id}
                           </span>
-                          <span className="block text-[10px] text-slate-500 mt-0.5 leading-tight">
+                          <span className="block text-[11px] text-stone-500 mt-0.5 leading-tight">
                             {cat.desc}
                           </span>
                         </div>
@@ -1022,118 +1609,172 @@ export function SearchTab({
             ) : (
               <div
                 onClick={() => setActiveMobileTab("oque")}
-                className="bg-white rounded-2xl p-5 flex justify-between shadow-sm border border-slate-100 items-center cursor-pointer active:scale-[0.98] transition-transform"
+                className="bg-white rounded-2xl px-5 py-4 flex justify-between border border-stone-200/80 items-center cursor-pointer active:scale-[0.99] transition-transform"
               >
-                <span className="text-sm font-medium text-slate-500">
-                  O Quê
+                <span className="text-xs font-semibold text-stone-500">
+                  Especialidade
                 </span>
-                <span className="text-sm font-bold text-slate-900">
+                <span className="text-xs font-bold text-stone-900">
                   {pendingFilters.category}
                 </span>
               </div>
             )}
 
-            <div className="h-24 w-full"></div>
+            <div className="h-24 w-full" />
           </div>
 
-          <div className="fixed bottom-0 left-0 w-full p-4 bg-white border-t border-slate-200 z-50">
+          <div className="fixed bottom-0 inset-x-0 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] bg-white border-t border-stone-200/80 z-50 flex items-center gap-3">
             <Button
               onClick={handleExecuteSearch}
-              className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black text-lg rounded-xl shadow-lg shadow-orange-500/30"
+              className="w-full h-12 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold text-sm rounded-xl shadow-sm"
             >
-              <Search className="w-5 h-5 mr-2" /> Buscar Espaços
+              <Search className="w-4 h-4 mr-2" />
+              Mostrar consultórios disponíveis
             </Button>
           </div>
         </div>
       )}
 
-      {/* HEADER LARANJA COM BOAS VINDAS */}
-      <header className="bg-gradient-to-r from-[#ea580c] to-[#9A3C1D] px-4 pb-16 pt-10 lg:px-8 lg:pt-14 rounded-b-[2.5rem] shadow-md relative z-30">
-        {!isPublic && (
-          <div className="mx-auto max-w-5xl mb-6 flex justify-between items-center">
-            <div>
-              <p className="text-white/80 text-xs font-bold tracking-widest uppercase mb-1">
-                Bem-vindo(a) de volta
-              </p>
-              <h1 className="text-2xl font-bold text-white tracking-tight">
-                Dr(a). {profile.name.split(" ")[0]}
-              </h1>
-            </div>
-            <div
-              onClick={() => setIsWalletOpen(!isWalletOpen)}
-              className="flex flex-col items-end cursor-pointer group transition-opacity mt-1 mr-16 sm:mr-20"
-            >
-              <span className="text-[10px] text-white/80 font-bold uppercase tracking-widest group-hover:text-white">
-                {isWalletOpen ? "Voltar para Busca" : "Saldo Fusion"}
-              </span>
-              <div className="bg-white/20 backdrop-blur-md px-4 py-2 rounded-xl mt-1 flex items-center gap-2 border border-white/10 group-hover:bg-white/30 transition-all shadow-sm">
-                {isWalletOpen ? (
-                  <span className="text-sm font-semibold text-white flex items-center gap-1.5">
-                    <ArrowLeft className="w-4 h-4" /> Fechar
+      {/* ==================================================================== */}
+      {/* HERO COMPACTO MOBILE COM A LOGO LARANJA OFICIAL NO TOPO              */}
+      {/* No Desktop (lg:) continua 100% transparente para não afetar o layout */}
+      {/* ==================================================================== */}
+      <header className="relative overflow-hidden bg-[#B83B10] px-4 pt-3.5 pb-12 lg:bg-none lg:bg-transparent lg:shadow-none lg:pt-14 lg:pb-16 rounded-b-[28px] lg:rounded-none shadow-xs z-30 lg:pointer-events-none">
+        <div className="lg:hidden absolute inset-y-0 right-0 w-[62%] z-0 pointer-events-none">
+          <img
+            src="/hero.png"
+            alt="Consultório Fusion Clinic"
+            className="w-full h-full object-cover object-[center_65%] opacity-55"
+          />
+          <div
+            className="absolute inset-0"
+            style={{
+              background:
+                "linear-gradient(90deg, #B83B10 0%, rgba(184,59,16,0.92) 32%, rgba(184,59,16,0.35) 100%)",
+            }}
+          />
+        </div>
+
+        <div className="lg:hidden relative z-10 mx-auto max-w-md">
+          <div
+            className={`flex items-center justify-between mb-3.5 ${
+              !isPublic ? "pr-11" : ""
+            }`}
+          >
+            <div className="inline-flex items-center bg-white/95 backdrop-blur-xs px-3 py-1.5 rounded-xl shadow-2xs border border-white/60">
+              {!logoError ? (
+                <img
+                  src="/logo-fusion-orange.png"
+                  alt="Fusion Clinic"
+                  onError={() => setLogoError(true)}
+                  className="h-5 w-auto object-contain"
+                />
+              ) : (
+                <span className="text-sm font-black text-[#BF4B24] tracking-tight leading-none">
+                  Fusion{" "}
+                  <span className="font-semibold text-stone-600 text-[11px]">
+                    clinic
                   </span>
-                ) : (
-                  <span className="text-sm font-bold text-white">
-                    {profile.balance} Horas
-                  </span>
-                )}
-              </div>
+                </span>
+              )}
             </div>
+
+            {!isPublic && (
+              <button
+                type="button"
+                onClick={() => setIsWalletOpen(!isWalletOpen)}
+                className="inline-flex items-center gap-1.5 bg-white/95 text-stone-900 px-3 py-1.5 rounded-xl text-[11px] font-bold shadow-2xs active:scale-95 transition-transform"
+              >
+                <Wallet className="w-3.5 h-3.5 text-[#BF4B24]" />
+                <span>
+                  {isWalletOpen
+                    ? "Voltar à busca"
+                    : `${profile.balance}h na Carteira`}
+                </span>
+              </button>
+            )}
           </div>
-        )}
+
+          {!isPublic ? (
+            <div className="space-y-1">
+              <h1 className="text-[22px] font-extrabold text-white tracking-tight leading-[1.15]">
+                Olá, Dr(a). {firstName}.{" "}
+                <span className="font-serif italic font-normal text-orange-50 block">
+                  Estrutura pronta para você.
+                </span>
+              </h1>
+              <p className="text-xs text-orange-50/90 leading-relaxed max-w-[310px]">
+                Reserve consultórios por hora, turno ou tire dúvidas no
+                Concierge IA para escolher a melhor opção.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              <h1 className="text-[23px] font-extrabold text-white tracking-tight leading-[1.15]">
+                Consultórios prontos,{" "}
+                <span className="font-serif italic font-normal text-orange-50 block">
+                  esperando por você.
+                </span>
+              </h1>
+              <p className="text-xs text-orange-50/90 leading-relaxed max-w-[310px]">
+                Atenda seus pacientes por hora, turno ou pacote, sem custos
+                fixos de manutenção.
+              </p>
+            </div>
+          )}
+        </div>
       </header>
 
-      {/* TELA DE CARTEIRA (SALDO FUSION) COMPLETAMENTE DESENHADA */}
+      {/* TELA DE CARTEIRA (SALDO FUSION) */}
       {isWalletOpen ? (
         <div className="mx-auto w-full max-w-5xl px-4 -mt-6 relative z-20 animate-in fade-in slide-in-from-bottom-2 duration-300">
-          {/* CARD 1: SALDO, COMPOSIÇÃO E ASSINATURA */}
-          <div className="bg-white rounded-3xl p-8 md:p-10 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 relative overflow-hidden mb-6">
-            <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-orange-50 via-transparent to-transparent rounded-full blur-3xl -translate-y-1/2 translate-x-1/3 pointer-events-none" />
-
-            <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-8">
+          <div className="bg-white rounded-3xl p-6 md:p-10 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-stone-200/80 relative overflow-hidden mb-6">
+            <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
               <div>
-                <p className="text-slate-500 font-bold uppercase tracking-wider text-xs mb-2 flex items-center gap-2">
-                  <Wallet className="w-5 h-5" /> Saldo Total Disponível
+                <p className="text-stone-500 font-bold uppercase tracking-wider text-xs mb-1.5 flex items-center gap-2">
+                  <Wallet className="w-4 h-4 text-[#BF4B24]" /> Saldo Total
+                  Disponível
                 </p>
                 <div className="flex items-baseline gap-2">
-                  <span className="text-6xl font-black text-slate-900 tracking-tight">
+                  <span className="text-5xl md:text-6xl font-black text-stone-900 tracking-tight">
                     {profile.balance}
                   </span>
-                  <span className="text-xl font-semibold text-slate-400">
+                  <span className="text-lg font-semibold text-stone-400">
                     Horas
                   </span>
                 </div>
-                <p className="text-xs text-slate-400 font-medium mt-2 max-w-md">
-                  Créditos Premium podem ser usados em todas as salas. Créditos
-                  VIP nas salas VIP e Basic.
+                <p className="text-xs text-stone-500 mt-1.5 max-w-md leading-relaxed">
+                  Créditos Premium liberam todas as salas. Créditos VIP liberam
+                  salas VIP e Basic.
                 </p>
               </div>
 
-              <div className="bg-slate-50 border border-slate-100/80 rounded-2xl p-6 min-w-[250px]">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4">
+              <div className="bg-[#FAF7F4] border border-stone-200/80 rounded-2xl p-5 min-w-[240px]">
+                <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mb-3">
                   Composição do Saldo
                 </p>
-                <div className="space-y-3">
+                <div className="space-y-2.5">
                   <div className="flex items-center justify-between">
-                    <span className="flex items-center gap-2 text-sm font-medium text-slate-600">
-                      <Shield className="w-4 h-4 text-slate-400" /> Basic
+                    <span className="flex items-center gap-2 text-xs font-semibold text-stone-600">
+                      <Shield className="w-3.5 h-3.5 text-stone-400" /> Basic
                     </span>
-                    <span className="font-bold text-slate-900">
+                    <span className="font-bold text-sm text-stone-900">
                       {walletBalances.start}h
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="flex items-center gap-2 text-sm font-medium text-slate-600">
-                      <Star className="w-4 h-4 text-slate-800" /> VIP
+                    <span className="flex items-center gap-2 text-xs font-semibold text-stone-600">
+                      <Star className="w-3.5 h-3.5 text-[#BF4B24]" /> VIP
                     </span>
-                    <span className="font-bold text-slate-900">
+                    <span className="font-bold text-sm text-stone-900">
                       {walletBalances.vip}h
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="flex items-center gap-2 text-sm font-medium text-slate-600">
-                      <Crown className="w-4 h-4 text-amber-500" /> Premium
+                    <span className="flex items-center gap-2 text-xs font-semibold text-stone-600">
+                      <Crown className="w-3.5 h-3.5 text-amber-500" /> Premium
                     </span>
-                    <span className="font-bold text-slate-900">
+                    <span className="font-bold text-sm text-stone-900">
                       {walletBalances.master}h
                     </span>
                   </div>
@@ -1141,17 +1782,16 @@ export function SearchTab({
               </div>
             </div>
 
-            {/* PAINEL DE GESTÃO DA ASSINATURA RECORRENTE (NOVO) */}
-            <div className="relative z-10 mt-8 pt-6 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="relative z-10 mt-6 pt-5 border-t border-stone-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               {activeSub ? (
                 <>
                   <div className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <Badge className="bg-emerald-100 text-emerald-800 border-0 text-xs font-bold flex items-center gap-1">
+                      <Badge className="bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold flex items-center gap-1">
                         <RefreshCw className="w-3 h-3" /> Assinatura Mensal
                         Ativa
                       </Badge>
-                      <span className="text-sm font-black text-slate-900 uppercase">
+                      <span className="text-xs font-black text-stone-900 uppercase">
                         Plano{" "}
                         {activeSub.tier === "master"
                           ? "Premium"
@@ -1161,14 +1801,13 @@ export function SearchTab({
                         ({activeSub.hours}h/mês)
                       </span>
                     </div>
-                    <p className="text-xs text-slate-500 font-medium max-w-xl">
-                      Suas horas renovam automaticamente. Se cancelar, o seu
-                      cartão não será mais cobrado e mantém o saldo atual até
-                      expirar.
+                    <p className="text-xs text-stone-500 max-w-xl">
+                      Suas horas renovam automaticamente. Você pode alterar ou
+                      cancelar quando quiser sem multa.
                     </p>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+                  <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                     <Button
                       type="button"
                       variant="outline"
@@ -1182,26 +1821,26 @@ export function SearchTab({
                           activeSub.hours,
                         )
                       }
-                      className="rounded-xl border-slate-200 text-slate-700 font-bold text-xs h-10 px-4"
+                      className="rounded-xl border-stone-200 text-stone-700 font-bold text-xs h-10 px-4"
                     >
-                      Alterar Plano
+                      Fazer Upgrade / +Horas
                     </Button>
                     <Button
                       type="button"
                       variant="outline"
                       disabled={cancellingSub}
                       onClick={handleCancelSubscription}
-                      className="rounded-xl border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 font-bold text-xs h-10 px-4"
+                      className="rounded-xl border-red-200 text-red-600 hover:bg-red-50 font-bold text-xs h-10 px-4"
                     >
                       {cancellingSub ? (
                         <>
-                          <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />A
-                          cancelar no Asaas...
+                          <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
+                          Cancelando...
                         </>
                       ) : (
                         <>
                           <XCircle className="w-3.5 h-3.5 mr-1.5" />
-                          Cancelar renovação automática
+                          Cancelar renovação
                         </>
                       )}
                     </Button>
@@ -1210,12 +1849,11 @@ export function SearchTab({
               ) : (
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between w-full gap-3">
                   <div>
-                    <p className="text-sm font-bold text-slate-900">
-                      Não possui assinatura com renovação automática ativa
+                    <p className="text-sm font-bold text-stone-900">
+                      Quer economizar até 41% nas próximas reservas?
                     </p>
-                    <p className="text-xs text-slate-500 font-medium mt-0.5">
-                      Assine um plano do Fusion Pass+ para receber horas todo
-                      mês com desconto exclusivo.
+                    <p className="text-xs text-stone-500 mt-0.5">
+                      Adicione um pacote de horas à sua carteira sem fidelidade.
                     </p>
                   </div>
                   <Button
@@ -1230,22 +1868,20 @@ export function SearchTab({
             </div>
           </div>
 
-          {/* CARD 2: EXTRATO DA CARTEIRA E ECONOMIA TOTAL (NOVO) */}
-          <div className="bg-white rounded-3xl p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 mb-10">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 border-b border-slate-100 pb-4 gap-4">
-              <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                <History className="w-5 h-5 text-[#BF4B24]" /> Extrato da
+          <div className="bg-white rounded-3xl p-6 md:p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-stone-200/80 mb-10">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-5 border-b border-stone-100 pb-4 gap-3">
+              <h3 className="text-base font-bold text-stone-900 flex items-center gap-2">
+                <History className="w-4 h-4 text-[#BF4B24]" /> Extrato da
                 Carteira
               </h3>
 
-              {/* Medidor de Economia */}
               {totalSavings > 0 && (
-                <div className="bg-emerald-50 border border-emerald-100 px-4 py-2.5 rounded-xl flex items-center gap-2">
-                  <TrendingUp className="w-5 h-5 text-emerald-600" />
-                  <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider">
-                    Economia c/ Pacotes:
+                <div className="bg-emerald-50 border border-emerald-200/70 px-3.5 py-2 rounded-xl flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-emerald-600" />
+                  <span className="text-xs font-bold text-emerald-800">
+                    Economia acumulada:
                   </span>
-                  <span className="text-base font-black text-emerald-600">
+                  <span className="text-sm font-black text-emerald-700">
                     R${" "}
                     {totalSavings.toLocaleString("pt-BR", {
                       minimumFractionDigits: 2,
@@ -1255,12 +1891,11 @@ export function SearchTab({
               )}
             </div>
 
-            {/* Lista Cronológica de Transações */}
-            <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 scrollbar-hide">
+            <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1 scrollbar-hide">
               {txHistory.length === 0 ? (
                 <div className="text-center py-8">
-                  <Wallet className="w-10 h-10 text-slate-200 mx-auto mb-3" />
-                  <p className="text-sm font-bold text-slate-500">
+                  <Wallet className="w-9 h-9 text-stone-200 mx-auto mb-2" />
+                  <p className="text-xs font-semibold text-stone-500">
                     Nenhuma movimentação encontrada.
                   </p>
                 </div>
@@ -1275,54 +1910,47 @@ export function SearchTab({
                   return (
                     <div
                       key={tx.id || idx}
-                      className="flex items-start gap-4 p-4 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors"
+                      className="flex items-start gap-3.5 p-3.5 rounded-2xl border border-stone-100 bg-[#FAF7F4]/60"
                     >
                       <div
-                        className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                        className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${
                           isCredit
-                            ? "bg-emerald-100 text-emerald-600"
+                            ? "bg-emerald-100 text-emerald-700"
                             : "bg-orange-100 text-[#BF4B24]"
                         }`}
                       >
                         {isCredit ? (
-                          <ArrowDownToLine className="w-5 h-5" />
+                          <ArrowDownToLine className="w-4 h-4" />
                         ) : (
-                          <ArrowUpFromLine className="w-5 h-5" />
+                          <ArrowUpFromLine className="w-4 h-4" />
                         )}
                       </div>
 
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2 mb-1">
-                          <p className="text-sm font-bold text-slate-900 truncate">
+                        <div className="flex items-center justify-between gap-2 mb-0.5">
+                          <p className="text-xs sm:text-sm font-bold text-stone-900 truncate">
                             {tx.description?.replace(/\[Asaas:.*?\]/g, "") ||
                               (isCredit
                                 ? "Recarga de Créditos"
                                 : "Uso de Créditos")}
                           </p>
                           <span
-                            className={`text-sm font-black whitespace-nowrap ${isCredit ? "text-emerald-600" : "text-[#BF4B24]"}`}
+                            className={`text-xs sm:text-sm font-black whitespace-nowrap ${
+                              isCredit ? "text-emerald-700" : "text-[#BF4B24]"
+                            }`}
                           >
                             {isCredit ? "+" : "-"}
                             {amt}h
                           </span>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-medium text-slate-500">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-stone-500">
                           <span>{txDate}</span>
-                          <span className="flex items-center gap-1">
-                            {normalizePassTier(tx.tier) === "master" && (
-                              <Crown className="w-3 h-3 text-amber-500" />
-                            )}
-                            {normalizePassTier(tx.tier) === "vip" && (
-                              <Star className="w-3 h-3 text-slate-800" />
-                            )}
-                            {normalizePassTier(tx.tier) === "start" && (
-                              <Shield className="w-3 h-3 text-slate-400" />
-                            )}
+                          <span className="font-semibold text-stone-700">
                             {normalizePassTier(tx.tier).toUpperCase()}
                           </span>
                           {isCredit && tx.expires_at && (
-                            <span className="text-slate-400">
+                            <span className="text-stone-400">
                               Válido até{" "}
                               {format(new Date(tx.expires_at), "dd/MM/yyyy")}
                             </span>
@@ -1338,11 +1966,12 @@ export function SearchTab({
         </div>
       ) : (
         <>
-          {/* ========================================== */}
-          {/* SEARCH COMPONENT (DESKTOP E TRIGGER MOBILE) */}
-          {/* ========================================== */}
-          <div className="mx-auto w-full max-w-4xl px-4 -mt-8 relative z-40 sticky top-4 animate-in fade-in duration-300">
-            <div className="hidden md:flex bg-white rounded-full shadow-xl shadow-slate-200/50 items-center border border-slate-200 p-2 relative">
+          {/* ============================================================== */}
+          {/* BARRA DE BUSCA + CONCIERGE IA (CONCIERGE SÓ PARA LOGADOS)      */}
+          {/* ============================================================== */}
+          <div className="mx-auto w-full max-w-[960px] px-4 -mt-6 lg:-mt-8 relative z-40 sticky top-3 lg:static animate-in fade-in duration-300">
+            {/* BUSCA DESKTOP */}
+            <div className="hidden md:flex bg-white rounded-full shadow-[0_18px_45px_rgba(28,25,23,0.12)] items-center border border-stone-200/90 p-2 relative">
               {/* 1. ONDE */}
               <Popover
                 open={activeSearchTab === "onde"}
@@ -1350,43 +1979,54 @@ export function SearchTab({
               >
                 <PopoverTrigger asChild>
                   <div
-                    className={`flex-1 px-6 py-3 rounded-full cursor-pointer transition-colors ${activeSearchTab === "onde" ? "bg-white shadow-md ring-1 ring-slate-200" : "hover:bg-slate-100"}`}
+                    className={`flex-1 px-5 py-2.5 rounded-full cursor-pointer transition-colors flex items-center gap-3 ${
+                      activeSearchTab === "onde"
+                        ? "bg-stone-50 shadow-2xs ring-1 ring-stone-200"
+                        : "hover:bg-stone-50/80"
+                    }`}
                   >
-                    <div className="text-[10px] font-black uppercase tracking-widest text-slate-800">
-                      Onde
-                    </div>
-                    <div
-                      className={`text-sm truncate mt-0.5 ${appliedFilters.city !== "Qualquer lugar" ? "text-slate-900 font-bold" : "text-slate-500 font-medium"}`}
-                    >
-                      {pendingFilters.city}
+                    <MapPin className="w-5 h-5 text-stone-700 shrink-0 stroke-[1.8]" />
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-stone-800">
+                        Onde
+                      </div>
+                      <div
+                        className={`text-sm truncate mt-0.5 ${
+                          appliedFilters.city !== "Qualquer lugar"
+                            ? "text-stone-900 font-semibold"
+                            : "text-stone-500 font-normal"
+                        }`}
+                      >
+                        {pendingFilters.city}
+                      </div>
                     </div>
                   </div>
                 </PopoverTrigger>
                 <PopoverContent
-                  className="w-80 p-6 rounded-3xl mt-4 shadow-2xl border-0"
+                  className="w-80 p-6 rounded-3xl mt-4 shadow-2xl border border-stone-100"
                   align="start"
                 >
-                  <h3 className="text-sm font-black text-slate-900 mb-4">
+                  <h3 className="text-sm font-bold text-stone-900 mb-4">
                     Buscar por Região
                   </h3>
                   <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 scrollbar-hide">
                     <button
                       onClick={requestLocation}
-                      className="w-full flex items-center gap-4 p-3 rounded-2xl hover:bg-slate-50 transition-colors text-left group border border-transparent hover:border-slate-100"
+                      className="w-full flex items-center gap-4 p-3 rounded-2xl hover:bg-stone-50 transition-colors text-left group border border-transparent hover:border-stone-200/70"
                     >
-                      <div className="w-12 h-12 bg-orange-50 rounded-full flex items-center justify-center shrink-0 group-hover:bg-[#BF4B24]/10 transition-colors">
-                        <Compass className="w-6 h-6 text-[#BF4B24]" />
+                      <div className="w-11 h-11 bg-[#FAF7F4] rounded-full flex items-center justify-center shrink-0 border border-[#BF4B24]/20">
+                        <Compass className="w-5 h-5 text-[#BF4B24]" />
                       </div>
                       <div>
-                        <span className="block font-bold text-slate-900">
+                        <span className="block font-bold text-stone-900 text-sm">
                           Perto de mim
                         </span>
-                        <span className="block text-xs text-slate-500">
+                        <span className="block text-xs text-stone-500">
                           Usar GPS do dispositivo
                         </span>
                       </div>
                     </button>
-                    <div className="w-full h-px bg-slate-100 my-2"></div>
+                    <div className="w-full h-px bg-stone-100 my-2"></div>
                     {availableCities.map((city: string) => (
                       <button
                         key={city}
@@ -1394,12 +2034,14 @@ export function SearchTab({
                           setPendingFilters((p) => ({ ...p, city }));
                           setActiveSearchTab("quando");
                         }}
-                        className="w-full flex items-center gap-4 p-3 rounded-2xl hover:bg-slate-50 transition-colors text-left border border-transparent hover:border-slate-100"
+                        className="w-full flex items-center gap-4 p-3 rounded-2xl hover:bg-stone-50 transition-colors text-left border border-transparent hover:border-stone-200/70"
                       >
-                        <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center shrink-0">
-                          <MapPin className="w-6 h-6 text-slate-500" />
+                        <div className="w-11 h-11 bg-stone-100 rounded-full flex items-center justify-center shrink-0">
+                          <MapPin className="w-5 h-5 text-stone-600" />
                         </div>
-                        <span className="font-bold text-slate-700">{city}</span>
+                        <span className="font-semibold text-stone-800 text-sm">
+                          {city}
+                        </span>
                       </button>
                     ))}
                     <button
@@ -1410,7 +2052,7 @@ export function SearchTab({
                         }));
                         setActiveSearchTab("quando");
                       }}
-                      className="w-full mt-2 text-center text-xs font-bold text-slate-400 hover:text-slate-600 underline"
+                      className="w-full mt-2 text-center text-xs font-semibold text-stone-400 hover:text-stone-700 underline"
                     >
                       Limpar localização
                     </button>
@@ -1418,7 +2060,7 @@ export function SearchTab({
                 </PopoverContent>
               </Popover>
 
-              <div className="w-px h-10 bg-slate-200 mx-1"></div>
+              <div className="w-px h-9 bg-stone-200/80 mx-1"></div>
 
               {/* 2. QUANDO E COMO */}
               <Popover
@@ -1427,33 +2069,50 @@ export function SearchTab({
               >
                 <PopoverTrigger asChild>
                   <div
-                    className={`flex-1 px-6 py-3 rounded-full cursor-pointer transition-colors ${activeSearchTab === "quando" ? "bg-white shadow-md ring-1 ring-slate-200" : "hover:bg-slate-100"}`}
+                    className={`flex-1 px-5 py-2.5 rounded-full cursor-pointer transition-colors flex items-center gap-3 ${
+                      activeSearchTab === "quando"
+                        ? "bg-stone-50 shadow-2xs ring-1 ring-stone-200"
+                        : "hover:bg-stone-50/80"
+                    }`}
                   >
-                    <div className="text-[10px] font-black uppercase tracking-widest text-slate-800">
-                      Quando
-                    </div>
-                    <div
-                      className={`text-sm truncate mt-0.5 ${pendingFilters.date ? "text-slate-900 font-bold" : "text-slate-500 font-medium"}`}
-                    >
-                      {pendingFilters.date
-                        ? format(pendingFilters.date, "dd MMM", {
-                            locale: ptBR,
-                          }) +
-                          (pendingFilters.time &&
-                          pendingFilters.modality !== "fixo"
-                            ? ` • ${pendingFilters.time === "manha" ? "Manhã" : pendingFilters.time === "tarde" ? "Tarde" : "Noite"}`
-                            : "")
-                        : "Insira as datas"}
+                    <CalendarIcon className="w-5 h-5 text-stone-700 shrink-0 stroke-[1.8]" />
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-stone-800">
+                        Quando
+                      </div>
+                      <div
+                        className={`text-sm truncate mt-0.5 ${
+                          pendingFilters.date
+                            ? "text-stone-900 font-semibold"
+                            : "text-stone-500 font-normal"
+                        }`}
+                      >
+                        {pendingFilters.date
+                          ? format(pendingFilters.date, "dd MMM", {
+                              locale: ptBR,
+                            }) +
+                            (pendingFilters.time &&
+                            pendingFilters.modality !== "fixo"
+                              ? ` • ${
+                                  pendingFilters.time === "manha"
+                                    ? "Manhã"
+                                    : pendingFilters.time === "tarde"
+                                      ? "Tarde"
+                                      : "Noite"
+                                }`
+                              : "")
+                          : "Insira as datas"}
+                      </div>
                     </div>
                   </div>
                 </PopoverTrigger>
                 <PopoverContent
-                  className="w-auto p-6 rounded-3xl mt-4 shadow-2xl border-0 overflow-y-auto max-h-[85vh]"
+                  className="w-auto p-6 rounded-3xl mt-4 shadow-2xl border border-stone-100 overflow-y-auto max-h-[85vh]"
                   align="center"
                 >
                   <div className="flex flex-col md:flex-row gap-6">
                     <div>
-                      <h3 className="text-sm font-black text-slate-900 mb-2">
+                      <h3 className="text-sm font-bold text-stone-900 mb-2">
                         Selecione a Data
                       </h3>
                       <Calendar
@@ -1467,19 +2126,19 @@ export function SearchTab({
                         }
                         locale={ptBR}
                         modifiersClassNames={{
-                          today: "font-normal bg-transparent text-slate-900",
+                          today: "font-normal bg-transparent text-stone-900",
                         }}
                         className="p-0"
                       />
                     </div>
 
-                    <div className="w-px bg-slate-100 hidden md:block"></div>
+                    <div className="w-px bg-stone-100 hidden md:block"></div>
 
                     <div className="w-64 flex flex-col pb-4">
-                      <h3 className="text-sm font-black text-slate-900 mb-3">
+                      <h3 className="text-sm font-bold text-stone-900 mb-3">
                         Como deseja alugar?
                       </h3>
-                      <div className="flex bg-slate-100 p-1.5 rounded-xl mb-6">
+                      <div className="flex bg-stone-100 p-1 rounded-xl mb-6">
                         <button
                           onClick={() =>
                             setPendingFilters((p) => ({
@@ -1487,7 +2146,11 @@ export function SearchTab({
                               modality: "hora",
                             }))
                           }
-                          className={`flex-1 text-[11px] font-bold py-1.5 rounded-lg transition-all ${pendingFilters.modality === "hora" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
+                          className={`flex-1 text-[11px] font-bold py-1.5 rounded-lg transition-all ${
+                            pendingFilters.modality === "hora"
+                              ? "bg-white shadow-2xs text-stone-900"
+                              : "text-stone-500"
+                          }`}
                         >
                           Por Hora
                         </button>
@@ -1498,7 +2161,11 @@ export function SearchTab({
                               modality: "turno",
                             }))
                           }
-                          className={`flex-1 text-[11px] font-bold py-1.5 rounded-lg transition-all ${pendingFilters.modality === "turno" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
+                          className={`flex-1 text-[11px] font-bold py-1.5 rounded-lg transition-all ${
+                            pendingFilters.modality === "turno"
+                              ? "bg-white shadow-2xs text-stone-900"
+                              : "text-stone-500"
+                          }`}
                         >
                           Turno Fixo
                         </button>
@@ -1509,7 +2176,11 @@ export function SearchTab({
                               modality: "fixo",
                             }))
                           }
-                          className={`flex-1 text-[11px] font-bold py-1.5 rounded-lg transition-all ${pendingFilters.modality === "fixo" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
+                          className={`flex-1 text-[11px] font-bold py-1.5 rounded-lg transition-all ${
+                            pendingFilters.modality === "fixo"
+                              ? "bg-white shadow-2xs text-stone-900"
+                              : "text-stone-500"
+                          }`}
                         >
                           Mensal
                         </button>
@@ -1517,7 +2188,7 @@ export function SearchTab({
 
                       {pendingFilters.modality !== "fixo" ? (
                         <>
-                          <h3 className="text-sm font-black text-slate-900 mb-3">
+                          <h3 className="text-sm font-bold text-stone-900 mb-3">
                             Período de preferência
                           </h3>
                           <div className="space-y-2">
@@ -1543,10 +2214,10 @@ export function SearchTab({
                             ].map((shift) => (
                               <label
                                 key={shift.id}
-                                className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${
+                                className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
                                   pendingFilters.time === shift.id
-                                    ? "border-[#BF4B24] bg-orange-50"
-                                    : "border-slate-100 hover:border-slate-200"
+                                    ? "border-[#BF4B24] bg-[#FAF7F4]"
+                                    : "border-stone-200/80 hover:border-stone-300"
                                 }`}
                               >
                                 <input
@@ -1562,15 +2233,23 @@ export function SearchTab({
                                   }
                                 />
                                 <shift.icon
-                                  className={`w-5 h-5 ${pendingFilters.time === shift.id ? "text-[#BF4B24]" : "text-slate-400"}`}
+                                  className={`w-4 h-4 ${
+                                    pendingFilters.time === shift.id
+                                      ? "text-[#BF4B24]"
+                                      : "text-stone-400"
+                                  }`}
                                 />
                                 <div>
                                   <p
-                                    className={`text-sm font-bold ${pendingFilters.time === shift.id ? "text-orange-950" : "text-slate-700"}`}
+                                    className={`text-xs font-bold ${
+                                      pendingFilters.time === shift.id
+                                        ? "text-stone-900"
+                                        : "text-stone-700"
+                                    }`}
                                   >
                                     {shift.label}
                                   </p>
-                                  <p className="text-[10px] text-slate-500">
+                                  <p className="text-[10px] text-stone-500">
                                     {shift.sub}
                                   </p>
                                 </div>
@@ -1579,22 +2258,23 @@ export function SearchTab({
                           </div>
                         </>
                       ) : (
-                        <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 mt-2">
-                          <p className="text-sm font-bold text-blue-900">
-                            Locação Mensal
+                        <div className="bg-[#FAF7F4] p-4 rounded-xl border border-[#BF4B24]/25 mt-2">
+                          <p className="text-xs font-bold text-stone-900">
+                            Locação Mensal Exclusiva
                           </p>
-                          <p className="text-xs text-blue-800/80 mt-1 font-medium">
-                            Você terá exclusividade total sobre a sala 24h por
-                            dia, sem precisar escolher turnos.
+                          <p className="text-xs text-stone-600 mt-1 leading-relaxed">
+                            Você terá exclusividade sobre o consultório, podendo
+                            inclusive sublocar horários livres no modo
+                            Coanfitrião.
                           </p>
                         </div>
                       )}
                     </div>
                   </div>
-                  <div className="mt-4 pt-4 border-t border-slate-100 flex justify-end">
+                  <div className="mt-4 pt-4 border-t border-stone-100 flex justify-end">
                     <Button
                       onClick={() => setActiveSearchTab("oque")}
-                      className="bg-slate-900 hover:bg-slate-800 text-white rounded-xl h-10 px-6 font-bold"
+                      className="bg-stone-900 hover:bg-stone-800 text-white rounded-xl h-10 px-6 font-bold text-xs"
                     >
                       Próximo
                     </Button>
@@ -1602,7 +2282,7 @@ export function SearchTab({
                 </PopoverContent>
               </Popover>
 
-              <div className="w-px h-10 bg-slate-200 mx-1"></div>
+              <div className="w-px h-9 bg-stone-200/80 mx-1"></div>
 
               {/* 3. O QUÊ? */}
               <Popover
@@ -1611,26 +2291,37 @@ export function SearchTab({
               >
                 <PopoverTrigger asChild>
                   <div
-                    className={`flex-1 px-6 py-3 rounded-full cursor-pointer transition-colors ${activeSearchTab === "oque" ? "bg-white shadow-md ring-1 ring-slate-200" : "hover:bg-slate-100"}`}
+                    className={`flex-1 px-5 py-2.5 rounded-full cursor-pointer transition-colors flex items-center gap-3 ${
+                      activeSearchTab === "oque"
+                        ? "bg-stone-50 shadow-2xs ring-1 ring-stone-200"
+                        : "hover:bg-stone-50/80"
+                    }`}
                   >
-                    <div className="text-[10px] font-black uppercase tracking-widest text-slate-800">
-                      O Quê?
-                    </div>
-                    <div
-                      className={`text-sm truncate mt-0.5 ${pendingFilters.category !== "Todas as Salas" ? "text-slate-900 font-bold" : "text-slate-500 font-medium"}`}
-                    >
-                      {pendingFilters.category}
+                    <Stethoscope className="w-5 h-5 text-stone-700 shrink-0 stroke-[1.8]" />
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-stone-800">
+                        O Quê?
+                      </div>
+                      <div
+                        className={`text-sm truncate mt-0.5 ${
+                          pendingFilters.category !== "Todas as Salas"
+                            ? "text-stone-900 font-semibold"
+                            : "text-stone-500 font-normal"
+                        }`}
+                      >
+                        {pendingFilters.category}
+                      </div>
                     </div>
                   </div>
                 </PopoverTrigger>
                 <PopoverContent
-                  className="w-[480px] p-6 rounded-3xl mt-4 shadow-2xl border-0"
+                  className="w-[460px] p-6 rounded-3xl mt-4 shadow-2xl border border-stone-100"
                   align="end"
                 >
-                  <h3 className="text-sm font-black text-slate-900 mb-4">
-                    Especialidade da Sala
+                  <h3 className="text-sm font-bold text-stone-900 mb-4">
+                    Especialidade do Consultório
                   </h3>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-2 gap-2.5">
                     {CATEGORIES.map((cat) => {
                       const Icon = cat.icon;
                       const isSelected = pendingFilters.category === cat.id;
@@ -1643,22 +2334,26 @@ export function SearchTab({
                               category: cat.id,
                             }));
                           }}
-                          className={`p-4 rounded-2xl flex flex-col items-start gap-2 transition-all border-2 text-left ${
+                          className={`p-3.5 rounded-2xl flex flex-col items-start gap-2 transition-all border text-left cursor-pointer ${
                             isSelected
-                              ? "border-[#BF4B24] bg-orange-50"
-                              : "border-slate-100 bg-white hover:border-slate-200 hover:bg-slate-50"
+                              ? "border-[#BF4B24] bg-[#FAF7F4]"
+                              : "border-stone-200/80 bg-white hover:border-stone-300"
                           }`}
                         >
                           <Icon
-                            className={`w-6 h-6 ${isSelected ? "text-[#BF4B24]" : "text-slate-400"}`}
+                            className={`w-5 h-5 ${
+                              isSelected ? "text-[#BF4B24]" : "text-stone-500"
+                            }`}
                           />
                           <div>
                             <span
-                              className={`block text-xs font-bold ${isSelected ? "text-orange-950" : "text-slate-700"}`}
+                              className={`block text-xs font-bold ${
+                                isSelected ? "text-stone-900" : "text-stone-800"
+                              }`}
                             >
                               {cat.id}
                             </span>
-                            <span className="block text-[10px] text-slate-500 mt-0.5 leading-tight">
+                            <span className="block text-[10px] text-stone-500 mt-0.5 leading-tight">
                               {cat.desc}
                             </span>
                           </div>
@@ -1669,121 +2364,986 @@ export function SearchTab({
                 </PopoverContent>
               </Popover>
 
-              <div className="p-2 flex gap-2 items-center">
-                {hasSearched && (
+              {/* BOTÃO DO CONCIERGE IA (EXCLUSIVO PARA ESPECIALISTAS LOGADOS) + BUSCA PADRÃO */}
+              <div className="pr-1.5 pl-2 flex gap-2 items-center">
+                {(hasSearched || aiExchanges.length > 0) && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       handleClearFilters();
                     }}
-                    className="text-xs font-bold text-slate-500 hover:text-slate-700 underline mx-2"
+                    className="text-xs font-semibold text-stone-500 hover:text-stone-800 underline mx-1.5 cursor-pointer"
                   >
                     Limpar
                   </button>
                 )}
+
+                {canUseAIConcierge && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAISearchExpanded((prev) => !prev);
+                      setTimeout(() => aiInputRef.current?.focus(), 80);
+                    }}
+                    title="Abrir Concierge IA personalizado para a sua especialidade"
+                    className={`h-12 px-4 rounded-full border flex items-center gap-2 text-xs font-bold transition-all cursor-pointer ${
+                      isAISearchExpanded || aiExchanges.length > 0
+                        ? "bg-stone-950 text-[#FBBF24] border-stone-950 shadow-md"
+                        : "bg-gradient-to-r from-[#FAF7F4] to-orange-50/70 hover:from-orange-50 hover:to-orange-100/60 text-stone-900 border-[#BF4B24]/35 shadow-2xs"
+                    }`}
+                  >
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#BF4B24] opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-[#BF4B24]" />
+                    </span>
+                    <Sparkles className="w-3.5 h-3.5 text-[#BF4B24]" />
+                    <span>Concierge IA</span>
+                  </button>
+                )}
+
                 <button
                   onClick={handleExecuteSearch}
-                  className="w-14 h-14 rounded-full bg-[#BF4B24] text-white flex items-center justify-center shrink-0 hover:bg-[#9A3C1D] transition-transform active:scale-95 shadow-lg shadow-orange-500/30 gap-2"
+                  aria-label="Buscar consultórios"
+                  className="w-13 h-13 rounded-full bg-gradient-to-r from-[#C24116] to-[#DE5D2E] hover:from-[#A83812] hover:to-[#C84B20] text-white flex items-center justify-center shrink-0 transition-transform active:scale-95 shadow-md shadow-[#BF4B24]/25 cursor-pointer"
                 >
-                  <Search className="w-5 h-5" />
+                  <Search className="w-5 h-5 stroke-[2.2]" />
                 </button>
               </div>
             </div>
 
-            {/* PILL MOBILE TRIGGER */}
-            <div
-              className="md:hidden w-full bg-white rounded-full shadow-xl shadow-slate-200/50 flex items-center p-3 gap-3 border border-slate-100 cursor-pointer"
-              onClick={() => {
-                setIsMobileSearchOpen(true);
-                setActiveMobileTab("onde");
-              }}
-            >
-              <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center shrink-0">
-                <Search className="w-5 h-5 text-slate-900" />
-              </div>
-              <div className="flex flex-col flex-1 truncate">
-                <span className="text-sm font-black text-slate-900 truncate">
-                  {appliedFilters.city}
-                </span>
-                <span className="text-[10px] font-medium text-slate-500 truncate">
-                  {appliedFilters.date
-                    ? format(appliedFilters.date, "dd MMM", { locale: ptBR })
-                    : "Insira as datas"}{" "}
-                  • {appliedFilters.category}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* ========================================== */}
-          {/* BANNER GERAL FUSION PASS+ NO TOPO          */}
-          {/* ========================================== */}
-          <div className="mx-auto w-full max-w-5xl px-4 mt-6 animate-in fade-in slide-in-from-bottom-2 duration-300 relative z-30">
-            <div
-              onClick={() =>
-                handleOpenPassWithTier(
-                  activeTier === "all" ? "vip" : activeTier,
-                )
-              }
-              className="flex items-center justify-between bg-gradient-to-r from-[#ea580c] to-[#9A3C1D] p-3.5 rounded-xl shadow-md cursor-pointer active:scale-[0.98] transition-transform"
-            >
-              <div className="flex items-center gap-2.5">
-                <div className="bg-white/20 p-1.5 rounded-lg">
-                  <Sparkles className="w-4 h-4 text-white" />
+            {/* CÁPSULA DE BUSCA MOBILE ESTILO AIRBNB + CONCIERGE IA (SE LOGADO) */}
+            <div className="md:hidden w-full bg-white rounded-full shadow-[0_12px_32px_rgba(28,25,23,0.12)] flex items-center justify-between p-2 pl-3.5 border border-stone-200/90">
+              <div
+                onClick={() => {
+                  setIsMobileSearchOpen(true);
+                  setActiveMobileTab("onde");
+                }}
+                className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer active:scale-[0.99] transition-transform"
+              >
+                <div className="w-9 h-9 bg-[#BF4B24] text-white rounded-full flex items-center justify-center shrink-0 shadow-2xs">
+                  <Search className="w-4 h-4 stroke-[2.5]" />
                 </div>
-                <span className="text-white font-black text-sm tracking-wide">
-                  Fusion Pass | +horas +descontos
+                <div className="flex flex-col min-w-0 flex-1">
+                  <span className="text-xs font-bold text-stone-900 truncate">
+                    {appliedFilters.city === "Qualquer lugar"
+                      ? "Onde e quando atender?"
+                      : appliedFilters.city}
+                  </span>
+                  <span className="text-[11px] text-stone-500 truncate">
+                    {appliedFilters.date
+                      ? format(appliedFilters.date, "dd MMM", { locale: ptBR })
+                      : "Qualquer data"}{" "}
+                    •{" "}
+                    {appliedFilters.modality === "hora"
+                      ? "Por hora"
+                      : appliedFilters.modality === "turno"
+                        ? "Turno fixo"
+                        : "Mensal"}{" "}
+                    •{" "}
+                    {appliedFilters.category === "Todas as Salas"
+                      ? "Todas as áreas"
+                      : appliedFilters.category}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                {canUseAIConcierge && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAISearchExpanded((prev) => !prev);
+                      setTimeout(() => aiInputRef.current?.focus(), 80);
+                    }}
+                    aria-label="Concierge IA"
+                    className={`h-9 px-3 rounded-full border flex items-center gap-1.5 text-[11px] font-bold transition-all ${
+                      isAISearchExpanded ||
+                      isListeningVoice ||
+                      aiExchanges.length > 0
+                        ? "bg-stone-950 text-[#FBBF24] border-stone-950 shadow-2xs"
+                        : "bg-[#FAF7F4] border-[#BF4B24]/35 text-[#BF4B24]"
+                    }`}
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>IA</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMobileSearchOpen(true);
+                    setActiveMobileTab("onde");
+                  }}
+                  aria-label="Filtros"
+                  className="w-9 h-9 rounded-full border border-stone-200 bg-stone-50 flex items-center justify-center text-stone-700"
+                >
+                  <SlidersHorizontal className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* ==================================================================== */}
+            {/* PAINEL CONCIERGE IA COM ESPECIALIDADE + GUIA DE CADASTRO + FOTOS     */}
+            {/* ==================================================================== */}
+            {canUseAIConcierge && isAISearchExpanded && (
+              <div className="mt-3.5 bg-white rounded-[28px] shadow-[0_26px_70px_rgba(28,25,23,0.22)] border border-stone-200/95 overflow-hidden animate-in fade-in slide-in-from-top-3 duration-200">
+                {/* 1. CABEÇALHO DO CONCIERGE COM TAG DE ESPECIALIDADE */}
+                <div className="px-4 sm:px-6 py-4 bg-gradient-to-r from-[#141210] via-[#241E1A] to-[#141210] text-white flex items-center justify-between gap-3 border-b border-white/10">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="relative w-10 h-10 rounded-2xl bg-gradient-to-br from-[#DE5D2E] to-[#9A3C1D] text-white flex items-center justify-center shrink-0 shadow-md ring-1 ring-white/20">
+                      <Sparkles className="w-5 h-5" />
+                      <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 ring-2 ring-[#141210]" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm sm:text-[15px] font-extrabold text-white tracking-tight truncate">
+                          Concierge Fusion IA
+                        </span>
+                        {profile.specialty ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider bg-emerald-400/15 text-emerald-300 border border-emerald-400/30 px-2.5 py-0.5 rounded-full">
+                            <Stethoscope className="w-3 h-3" />
+                            {profile.specialty}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider bg-amber-400/15 text-[#FBBF24] border border-amber-400/30 px-2 py-0.5 rounded-full">
+                            Especialista VIP
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] sm:text-xs text-stone-300 truncate mt-0.5">
+                        {profile.specialty
+                          ? `Curadoria personalizada para seus atendimentos de ${profile.specialty}`
+                          : "Assistente inteligente de agendamento, comparação de salas e economia"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {aiExchanges.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAiExchanges([]);
+                          setAiMatchesMap({});
+                          setAiTargetDateISO(null);
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-[11px] font-semibold text-stone-200 transition-colors cursor-pointer"
+                      >
+                        Nova conversa
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setIsAISearchExpanded(false)}
+                      aria-label="Fechar Concierge"
+                      className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2. CORPO DO CHAT */}
+                <div className="max-h-[68vh] overflow-y-auto px-4 sm:px-6 py-5 bg-[#FAF7F4]/70 space-y-6 scrollbar-hide">
+                  {/* GUIA INTELIGENTE DE CONCLUSÃO DE PERFIL (SE INCOMPLETO) */}
+                  {!profile.isComplete && (
+                    <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-amber-50/90 via-orange-50/60 to-white border border-[#BF4B24]/30 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="space-y-2 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider bg-[#BF4B24] text-white px-2.5 py-0.5 rounded-full">
+                            <AlertCircle className="w-3 h-3" />
+                            Cadastro {profile.completionPct}% concluído
+                          </span>
+                          <span className="text-xs font-bold text-stone-900">
+                            Personalize sua experiência e libere o check-in
+                            digital
+                          </span>
+                        </div>
+
+                        <p className="text-xs text-stone-600 leading-relaxed">
+                          Notamos que ainda falta preencher:{" "}
+                          <strong className="text-stone-900">
+                            {profile.missingFields.join(", ")}
+                          </strong>
+                          . Ao informar sua especialidade e dados profissionais,
+                          eu passo a recomendar automaticamente os consultórios
+                          equipados para a sua área e libero suas reservas em 1
+                          clique.
+                        </p>
+
+                        <div className="w-full max-w-xs h-1.5 bg-stone-200 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-[#BF4B24] rounded-full transition-all duration-500"
+                            style={{ width: `${profile.completionPct}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleGoToCompleteProfile}
+                        className="px-4 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 shadow-2xs transition-all active:scale-95 cursor-pointer"
+                      >
+                        <UserCheck className="w-4 h-4 text-[#FBBF24]" />
+                        <span>Completar meu perfil agora</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* TELA INICIAL DE BOAS-VINDAS (QUANDO AINDA NÃO HÁ MENSAGENS) */}
+                  {aiExchanges.length === 0 && !isRunningAISearch && (
+                    <div className="space-y-4">
+                      <div className="bg-white rounded-2xl p-4 sm:p-5 border border-stone-200/80 shadow-2xs flex items-start gap-3.5">
+                        <div className="w-9 h-9 rounded-xl bg-[#FAF7F4] border border-[#BF4B24]/25 text-[#BF4B24] flex items-center justify-center shrink-0 mt-0.5">
+                          <MessageSquareText className="w-4 h-4" />
+                        </div>
+                        <div className="space-y-1">
+                          <h3 className="text-sm sm:text-base font-bold text-stone-900">
+                            Olá, Dr(a). {firstName}!{" "}
+                            {profile.specialty
+                              ? `Já configurei minha busca para seus atendimentos de ${profile.specialty}.`
+                              : "Como posso ajudar nos seus atendimentos hoje?"}
+                          </h3>
+                          <p className="text-xs text-stone-600 leading-relaxed">
+                            Peça um dia e horário (ex: <em>“hoje às 15h”</em>)
+                            que eu verifico a agenda em tempo real, comparo os
+                            padrões <strong>Basic, VIP e Premium</strong> e
+                            calculo se compensa mais{" "}
+                            <strong>
+                              Hora Avulsa, Fusion Pass+ ou Turno Fixo
+                            </strong>
+                            .
+                          </p>
+                        </div>
+                      </div>
+
+                      <div>
+                        <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400 mb-2.5 pl-1">
+                          Sugestões personalizadas para você:
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          {dynamicStarterCards.map((card) => {
+                            const Icon = card.icon;
+                            return (
+                              <button
+                                key={card.title}
+                                type="button"
+                                onClick={() => executeAISearch(card.title)}
+                                className="group p-3.5 rounded-2xl bg-white hover:bg-orange-50/40 border border-stone-200/85 hover:border-[#BF4B24]/45 text-left transition-all flex items-start gap-3 shadow-2xs hover:shadow-sm cursor-pointer"
+                              >
+                                <div className="w-9 h-9 rounded-xl bg-[#FAF7F4] group-hover:bg-[#BF4B24] text-[#BF4B24] group-hover:text-white border border-[#BF4B24]/20 flex items-center justify-center shrink-0 transition-colors mt-0.5">
+                                  <Icon className="w-4 h-4" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#BF4B24] block">
+                                    {card.badge}
+                                  </span>
+                                  <p className="text-xs font-bold text-stone-900 group-hover:text-[#BF4B24] transition-colors mt-0.5 leading-snug">
+                                    “{card.title}”
+                                  </p>
+                                  <p className="text-[11px] text-stone-500 mt-0.5 truncate">
+                                    {card.desc}
+                                  </p>
+                                </div>
+                                <ChevronRight className="w-4 h-4 text-stone-300 group-hover:text-[#BF4B24] shrink-0 self-center transition-transform group-hover:translate-x-0.5" />
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* LISTA DE TROCAS DE MENSAGENS DO CONCIERGE */}
+                  {aiExchanges.map((exchange) => (
+                    <div key={exchange.id} className="space-y-4">
+                      {/* Balão da Pergunta do Especialista */}
+                      <div className="flex flex-col items-end">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-1 pr-1">
+                          Dr(a). {firstName}{" "}
+                          {profile.specialty ? `• ${profile.specialty}` : ""}
+                        </span>
+                        <div className="bg-stone-900 text-white px-4 py-2.5 rounded-2xl rounded-tr-xs text-xs sm:text-sm font-semibold max-w-[88%] sm:max-w-[75%] shadow-xs">
+                          {exchange.userQuery}
+                        </div>
+                      </div>
+
+                      {/* Resposta Rica do Concierge Fusion */}
+                      <div className="bg-white rounded-3xl p-4 sm:p-6 border border-stone-200/90 shadow-xs space-y-5">
+                        <div className="flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-xl bg-[#FAF7F4] border border-[#BF4B24]/25 text-[#BF4B24] flex items-center justify-center shrink-0 mt-0.5">
+                            <Sparkles className="w-4 h-4" />
+                          </div>
+                          <div className="space-y-1 flex-1">
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#BF4B24] block">
+                              Resposta do Concierge
+                            </span>
+                            <p className="text-xs sm:text-[15px] font-bold text-stone-900 leading-relaxed">
+                              {exchange.headline}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* VITRINE DE SALAS COM FOTO DENTRO DO CHAT */}
+                        {exchange.recommendedRooms.length > 0 && (
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between px-1">
+                              <span className="text-[11px] font-extrabold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
+                                <CalendarCheck className="w-3.5 h-3.5 text-[#BF4B24]" />
+                                Salas disponíveis verificadas (toque para abrir)
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                              {exchange.recommendedRooms.map((match) => {
+                                const fullRoom = dbRooms.find(
+                                  (r) => r.id === match.roomId,
+                                );
+                                if (!fullRoom) return null;
+
+                                const isMaster = fullRoom.tier === "master";
+                                const isVip = fullRoom.tier === "vip";
+                                const passRate =
+                                  bestHourlyRates[fullRoom.tier] ||
+                                  (isMaster ? 50 : isVip ? 34 : 26);
+                                const neighborhood =
+                                  fullRoom.rawAddress?.neighborhood || "Centro";
+
+                                return (
+                                  <div
+                                    key={match.roomId}
+                                    onClick={() =>
+                                      onOpenRoom &&
+                                      onOpenRoom({
+                                        ...fullRoom,
+                                        selectedModality:
+                                          appliedFilters.modality,
+                                        preselectedDate:
+                                          exchange.targetDateISO || undefined,
+                                        preselectedSlot:
+                                          match.exactSlotAvailable &&
+                                          match.requestedSlotLabel
+                                            ? match.requestedSlotLabel
+                                            : match.availableSlots[0] ||
+                                              undefined,
+                                      })
+                                    }
+                                    className={`group rounded-2xl bg-white border overflow-hidden transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md cursor-pointer flex flex-col ${
+                                      match.exactSlotAvailable
+                                        ? "border-emerald-500/60 ring-1 ring-emerald-500/20"
+                                        : "border-stone-200/90 hover:border-[#BF4B24]/50"
+                                    }`}
+                                  >
+                                    {/* FOTO DA SALA NO CHAT */}
+                                    <div className="relative w-full h-32 sm:h-36 bg-stone-100 overflow-hidden">
+                                      <Image
+                                        src={fullRoom.image}
+                                        alt={fullRoom.name}
+                                        fill
+                                        sizes="(max-width: 768px) 100vw, 320px"
+                                        className="object-cover group-hover:scale-105 transition-transform duration-500"
+                                        onError={(e: any) => {
+                                          e.target.src = "/placeholder.jpg";
+                                        }}
+                                      />
+                                      <div className="absolute inset-0 bg-gradient-to-t from-black/65 via-black/10 to-black/20 pointer-events-none" />
+
+                                      <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-1 z-10">
+                                        <span
+                                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 shadow-2xs ${
+                                            isMaster
+                                              ? "bg-stone-950/90 text-amber-300"
+                                              : isVip
+                                                ? "bg-[#BF4B24] text-white"
+                                                : "bg-white/95 text-stone-800"
+                                          }`}
+                                        >
+                                          {isMaster ? (
+                                            <>
+                                              <Crown className="w-2.5 h-2.5" />{" "}
+                                              Premium
+                                            </>
+                                          ) : isVip ? (
+                                            <>
+                                              <Star className="w-2.5 h-2.5" />{" "}
+                                              VIP
+                                            </>
+                                          ) : (
+                                            <>
+                                              <Shield className="w-2.5 h-2.5" />{" "}
+                                              Basic
+                                            </>
+                                          )}
+                                        </span>
+
+                                        {fullRoom.reviews_count > 0 && (
+                                          <span className="bg-black/55 backdrop-blur-xs text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                                            <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
+                                            {Number(fullRoom.rating).toFixed(1)}
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      <div className="absolute bottom-2 left-2.5 right-2.5 flex items-center justify-between z-10">
+                                        <span
+                                          className={`inline-flex items-center gap-1 text-[10px] font-extrabold px-2 py-0.5 rounded-md shadow-2xs ${
+                                            match.exactSlotAvailable
+                                              ? "bg-emerald-600 text-white"
+                                              : "bg-amber-500 text-stone-950"
+                                          }`}
+                                        >
+                                          <Clock className="w-2.5 h-2.5" />
+                                          {match.matchReason}
+                                        </span>
+                                      </div>
+                                    </div>
+
+                                    {/* CONTEÚDO DO MINI-CARD DA SALA */}
+                                    <div className="p-3.5 flex-1 flex flex-col justify-between bg-white space-y-3">
+                                      <div>
+                                        <div className="flex items-center gap-1 text-[11px] text-stone-500 font-medium truncate">
+                                          <MapPin className="w-3 h-3 text-[#BF4B24] shrink-0" />
+                                          <span className="truncate">
+                                            {neighborhood} •{" "}
+                                            {fullRoom.specialty ||
+                                              fullRoom.category}
+                                          </span>
+                                        </div>
+
+                                        <h4 className="font-bold text-sm text-stone-900 group-hover:text-[#BF4B24] transition-colors line-clamp-1 mt-0.5">
+                                          {fullRoom.name}
+                                        </h4>
+
+                                        <div className="mt-1.5 flex items-baseline gap-1.5 flex-wrap">
+                                          <span className="text-xs font-extrabold text-stone-900">
+                                            {fullRoom.priceLabel}
+                                          </span>
+                                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
+                                            ou R$ {passRate}/h no Pass+
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      {match.availableSlots.length > 0 && (
+                                        <div className="space-y-1.5 pt-2 border-t border-stone-100">
+                                          <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block">
+                                            Horários verificados livres:
+                                          </span>
+                                          <div className="flex items-center gap-1.5 flex-wrap">
+                                            {match.availableSlots
+                                              .slice(0, 3)
+                                              .map((slot) => {
+                                                const isReq =
+                                                  slot ===
+                                                  match.requestedSlotLabel;
+                                                return (
+                                                  <button
+                                                    key={slot}
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      if (onOpenRoom) {
+                                                        onOpenRoom({
+                                                          ...fullRoom,
+                                                          selectedModality:
+                                                            appliedFilters.modality,
+                                                          preselectedDate:
+                                                            exchange.targetDateISO ||
+                                                            undefined,
+                                                          preselectedSlot: slot,
+                                                        });
+                                                      }
+                                                    }}
+                                                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                                                      isReq
+                                                        ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs"
+                                                        : "bg-[#FAF7F4] hover:bg-[#BF4B24] text-stone-800 hover:text-white border border-stone-200/90"
+                                                    }`}
+                                                  >
+                                                    {slot}
+                                                  </button>
+                                                );
+                                              })}
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      <div className="pt-2 border-t border-stone-100 flex items-center justify-between text-xs font-bold text-[#BF4B24] group-hover:translate-x-0.5 transition-transform">
+                                        <span>Ver fotos e detalhes</span>
+                                        <ArrowRight className="w-3.5 h-3.5" />
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* BLOCOS COMPARATIVOS EDITORIAIS */}
+                        {exchange.comparisonBlocks.length > 0 && (
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            {exchange.comparisonBlocks.map((block, bIdx) => (
+                              <div
+                                key={bIdx}
+                                className="p-4 rounded-2xl bg-[#FAF7F4] border border-stone-200/90 flex flex-col justify-between space-y-2.5"
+                              >
+                                <div className="space-y-2">
+                                  <div className="pb-2 border-b border-stone-200/70">
+                                    <h4 className="text-xs sm:text-sm font-extrabold text-stone-900">
+                                      {block.title}
+                                    </h4>
+                                    {block.subtitle && (
+                                      <p className="text-[11px] font-bold text-[#BF4B24] mt-0.5">
+                                        {block.subtitle}
+                                      </p>
+                                    )}
+                                  </div>
+                                  <ul className="space-y-2 pt-0.5">
+                                    {block.bullets.map((bullet, i) => (
+                                      <li
+                                        key={i}
+                                        className="text-[11px] sm:text-xs text-stone-700 leading-snug flex items-start gap-2"
+                                      >
+                                        <CheckCircle2 className="w-3.5 h-3.5 text-[#BF4B24] shrink-0 mt-0.5" />
+                                        <span>{bullet}</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* RECOMENDAÇÃO DE BOLSO + BOTÃO DE AÇÃO DIRETA */}
+                        {exchange.recommendationSummary && (
+                          <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-emerald-50/90 to-teal-50/50 border border-emerald-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="flex items-start gap-2.5">
+                              <BadgeCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                              <p className="text-xs text-emerald-950 font-medium leading-relaxed">
+                                <strong className="font-extrabold">
+                                  Orientação do Concierge:
+                                </strong>{" "}
+                                {exchange.recommendationSummary}
+                              </p>
+                            </div>
+
+                            {exchange.suggestedCta === "complete_profile" && (
+                              <button
+                                type="button"
+                                onClick={handleGoToCompleteProfile}
+                                className="px-4 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                              >
+                                <UserCheck className="w-3.5 h-3.5 text-[#FBBF24]" />
+                                <span>Completar perfil em 1 min</span>
+                              </button>
+                            )}
+
+                            {exchange.suggestedCta === "open_pass_modal" && (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenPassWithTier("vip")}
+                                className="px-4 py-2.5 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                              >
+                                <Tag className="w-3.5 h-3.5" />
+                                <span>Simular Fusion Pass+ (-41%)</span>
+                              </button>
+                            )}
+
+                            {exchange.suggestedCta === "switch_to_turno" && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPendingFilters((p) => ({
+                                    ...p,
+                                    modality: "turno",
+                                  }));
+                                  setAppliedFilters((p) => ({
+                                    ...p,
+                                    modality: "turno",
+                                  }));
+                                }}
+                                className="px-4 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                              >
+                                <span>Ver Salas com Turno Fixo</span>
+                                <ChevronRight className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        )}
+
+                        {/* PRÓXIMAS PERGUNTAS SUGERIDAS */}
+                        <div className="pt-1 space-y-2.5">
+                          {exchange.closingQuestion && (
+                            <p className="text-xs font-bold text-stone-700">
+                              {exchange.closingQuestion}
+                            </p>
+                          )}
+
+                          <div className="flex flex-wrap gap-2">
+                            {exchange.followUpSuggestions.map(
+                              (followUp, fIdx) => (
+                                <button
+                                  key={fIdx}
+                                  type="button"
+                                  onClick={() => executeAISearch(followUp)}
+                                  className="text-[11px] sm:text-xs font-semibold text-[#BF4B24] bg-[#FAF7F4] hover:bg-[#BF4B24] hover:text-white border border-[#BF4B24]/30 px-3.5 py-1.5 rounded-full transition-all cursor-pointer text-left flex items-center gap-1.5 shadow-2xs"
+                                >
+                                  <span>{followUp}</span>
+                                  <ArrowRight className="w-3 h-3 opacity-70" />
+                                </button>
+                              ),
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* ESTADO DE CARREGAMENTO ANIMADO */}
+                  {isRunningAISearch && (
+                    <div className="space-y-3 animate-in fade-in duration-150">
+                      {pendingUserQuestion && (
+                        <div className="flex flex-col items-end">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-1 pr-1">
+                            Dr(a). {firstName}
+                          </span>
+                          <div className="bg-stone-900 text-white px-4 py-2.5 rounded-2xl rounded-tr-xs text-xs sm:text-sm font-semibold max-w-[85%]">
+                            {pendingUserQuestion}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="bg-white rounded-3xl p-5 border border-stone-200/90 shadow-2xs flex items-center gap-3.5">
+                        <div className="w-9 h-9 rounded-xl bg-[#FAF7F4] border border-[#BF4B24]/25 flex items-center justify-center shrink-0">
+                          <Loader2 className="w-4 h-4 text-[#BF4B24] animate-spin" />
+                        </div>
+                        <div>
+                          <p className="text-xs sm:text-sm font-bold text-stone-900">
+                            {profile.specialty
+                              ? `Verificando agenda real de salas compatíveis com ${profile.specialty}...`
+                              : "Verificando agendas em tempo real e calculando o melhor custo-benefício..."}
+                          </p>
+                          <p className="text-[11px] text-stone-500">
+                            Cruzando turnos abertos e reservas na Fusion Clinic
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div ref={aiThreadEndRef} />
+                </div>
+
+                {/* 3. BARRA INFERIOR DE ENTRADA DE TEXTO E VOZ */}
+                <div className="p-3.5 sm:p-4 bg-white border-t border-stone-200/80">
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        ref={aiInputRef}
+                        type="text"
+                        value={aiQuery}
+                        onChange={(e) => setAiQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") executeAISearch();
+                        }}
+                        placeholder={
+                          profile.specialty
+                            ? `Pergunte sobre salas para ${profile.specialty}, horários ou pacotes...`
+                            : 'Pergunte ao Concierge: "Sala livre hoje às 15h", "Basic vs VIP?"...'
+                        }
+                        className="w-full h-11 sm:h-12 pl-4 pr-10 rounded-2xl bg-[#FAF7F4] border border-stone-200/95 text-xs sm:text-sm text-stone-900 placeholder:text-stone-400 focus:outline-none focus:border-[#BF4B24] focus:bg-white transition-colors"
+                      />
+                      {aiQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setAiQuery("")}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-700"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleToggleVoiceSearch}
+                      title={
+                        isListeningVoice
+                          ? "Parar gravação"
+                          : "Falar no microfone"
+                      }
+                      className={`h-11 sm:h-12 px-3.5 sm:px-4 rounded-2xl font-bold text-xs flex items-center gap-1.5 shrink-0 transition-all cursor-pointer ${
+                        isListeningVoice
+                          ? "bg-red-600 text-white animate-pulse shadow-md"
+                          : "bg-stone-100 hover:bg-stone-200 text-stone-800"
+                      }`}
+                    >
+                      {isListeningVoice ? (
+                        <>
+                          <MicOff className="w-4 h-4" />
+                          <span className="hidden sm:inline">Ouvindo...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Mic className="w-4 h-4 text-[#BF4B24]" />
+                          <span className="hidden sm:inline">Voz</span>
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isRunningAISearch}
+                      onClick={() => executeAISearch()}
+                      className="h-11 sm:h-12 px-4 sm:px-5 rounded-2xl bg-gradient-to-r from-[#C24116] to-[#DE5D2E] hover:from-[#A83812] hover:to-[#C84B20] disabled:opacity-60 text-white font-bold text-xs flex items-center gap-1.5 shrink-0 shadow-sm transition-all cursor-pointer"
+                    >
+                      {isRunningAISearch ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <>
+                          <span className="hidden sm:inline">Enviar</span>
+                          <SendHorizontal className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ============================================================== */}
+          {/* FAIXA DE ESPECIALIDADES NO POLEGAR (EXCLUSIVO MOBILE)          */}
+          {/* ============================================================== */}
+          <div className="lg:hidden px-4 mt-3.5">
+            <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide py-1">
+              {CATEGORIES.map((cat) => {
+                const Icon = cat.icon;
+                const active = appliedFilters.category === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => handleQuickCategorySelect(cat.id)}
+                    className={`px-3.5 py-2 rounded-full text-xs font-semibold flex items-center gap-1.5 shrink-0 border transition-all ${
+                      active
+                        ? "bg-stone-900 text-white border-stone-900 shadow-2xs"
+                        : "bg-white text-stone-600 border-stone-200/90"
+                    }`}
+                  >
+                    <Icon
+                      className={`w-3.5 h-3.5 ${
+                        active ? "text-[#FBBF24]" : "text-[#BF4B24]"
+                      }`}
+                    />
+                    <span>{cat.shortLabel}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ============================================================== */}
+          {/* CARD COMPACTO FUSION PASS+ MOBILE (SEM QUEBRA DE LINHA)        */}
+          {/* ============================================================== */}
+          <div className="lg:hidden mx-auto w-full px-4 mt-3 relative z-30">
+            {hasActiveWalletCredits ? (
+              <div
+                onClick={() => setIsWalletOpen(true)}
+                className="flex items-center justify-between bg-white px-4 py-3 rounded-2xl border border-[#BF4B24]/30 shadow-2xs cursor-pointer active:scale-[0.99] transition-transform"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-[#FAF7F4] border border-[#BF4B24]/20 flex items-center justify-center shrink-0 text-[#BF4B24]">
+                    <Crown className="w-4 h-4 fill-[#BF4B24]" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#BF4B24]">
+                        Assinante Pass+
+                      </span>
+                      <span className="text-[10px] font-bold bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded">
+                        {profile.balance}h ativas
+                      </span>
+                    </div>
+                    <p className="text-xs font-semibold text-stone-700 truncate mt-0.5">
+                      Toque para ver seu extrato ou fazer upgrade
+                    </p>
+                  </div>
+                </div>
+                <ChevronRight className="w-4 h-4 text-stone-400 shrink-0" />
+              </div>
+            ) : (
+              <div
+                onClick={() =>
+                  handleOpenPassWithTier(
+                    activeTier === "all" ? "vip" : activeTier,
+                  )
+                }
+                className="flex items-center justify-between bg-white px-3.5 py-3 rounded-2xl border border-[#BF4B24]/30 shadow-2xs cursor-pointer active:scale-[0.99] transition-transform"
+              >
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                  <div className="bg-[#FAF7F4] border border-[#BF4B24]/25 text-[#BF4B24] rounded-xl px-2.5 py-1.5 text-center shrink-0">
+                    <span className="text-[9px] font-extrabold uppercase block leading-none">
+                      ATÉ
+                    </span>
+                    <span className="text-sm font-black leading-none block mt-0.5">
+                      -41%
+                    </span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1 text-xs font-bold text-stone-900 whitespace-nowrap truncate">
+                      <span>Fusion Pass+</span>
+                      <span className="text-stone-300">•</span>
+                      <span className="text-[#BF4B24]">
+                        Hora a partir de R$ 26
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-stone-500 truncate mt-0.5">
+                      Sem fidelidade • Use em 30 dias, doe ou negocie
+                    </p>
+                  </div>
+                </div>
+                <span className="text-xs font-bold text-[#BF4B24] flex items-center shrink-0 ml-2">
+                  <span>Simular</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
                 </span>
               </div>
-              <ChevronRight className="w-5 h-5 text-white/80" />
-            </div>
+            )}
           </div>
 
-          <div className="px-4 py-2 mx-auto max-w-5xl w-full mt-6 space-y-5">
-            <div>
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 pl-1">
-                Padrão do Espaço
-              </p>
-              <div className="flex items-center gap-3 overflow-x-auto scrollbar-hide pb-1">
-                <button
-                  onClick={() => setActiveTier("all")}
-                  className={`px-5 py-2.5 rounded-full text-sm font-bold transition-all shrink-0 border ${activeTier === "all" ? "bg-slate-900 text-white border-slate-900 shadow-md" : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"}`}
+          {/* ============================================================== */}
+          {/* BARRA RESUMO DO CONCIERGE (QUANDO RECOLHIDO APÓS UMA BUSCA)    */}
+          {/* ============================================================== */}
+          {canUseAIConcierge &&
+            !isAISearchExpanded &&
+            aiExchanges.length > 0 && (
+              <div className="px-4 lg:px-10 mx-auto max-w-5xl lg:max-w-[1360px] w-full mt-4 animate-in fade-in duration-200">
+                <div
+                  onClick={() => setIsAISearchExpanded(true)}
+                  className="p-3.5 sm:px-5 rounded-2xl bg-white border border-[#BF4B24]/30 shadow-2xs flex items-center justify-between gap-3 cursor-pointer hover:bg-orange-50/30 transition-colors"
                 >
-                  Todos
-                </button>
-                <button
-                  onClick={() => setActiveTier("start")}
-                  className={`px-5 py-2.5 rounded-full text-sm font-bold transition-all flex items-center gap-2 shrink-0 border ${activeTier === "start" ? "bg-slate-100 text-slate-900 border-slate-300 shadow-md" : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"}`}
-                >
-                  <Shield className="w-4 h-4" /> Basic
-                </button>
-                <button
-                  onClick={() => setActiveTier("vip")}
-                  className={`px-5 py-2.5 rounded-full text-sm font-bold transition-all flex items-center gap-2 shrink-0 border ${activeTier === "vip" ? "bg-orange-50 text-[#BF4B24] border-orange-200 shadow-md" : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"}`}
-                >
-                  <Star className="w-4 h-4" /> VIP
-                </button>
-                <button
-                  onClick={() => setActiveTier("master")}
-                  className={`px-5 py-2.5 rounded-full text-sm font-bold transition-all flex items-center gap-2 shrink-0 border ${activeTier === "master" ? "bg-amber-50 text-amber-600 border-amber-200 shadow-md" : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"}`}
-                >
-                  <Crown className="w-4 h-4" /> Premium
-                </button>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-8 h-8 rounded-xl bg-stone-900 text-[#FBBF24] flex items-center justify-center shrink-0">
+                      <Sparkles className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#BF4B24] block">
+                        Concierge IA Ativo • Toque para ver os cards e continuar
+                      </span>
+                      <p className="text-xs font-semibold text-stone-800 truncate">
+                        {aiExchanges[aiExchanges.length - 1].headline}
+                      </p>
+                    </div>
+                  </div>
+
+                  <span className="text-xs font-bold text-[#BF4B24] shrink-0 flex items-center gap-1">
+                    <span>Abrir chat</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </span>
+                </div>
+              </div>
+            )}
+
+          {/* ============================================================== */}
+          {/* BARRA DE CURADORIA E FILTROS DO MOSTRUÁRIO (PADRÃO + ÁREA)     */}
+          {/* ============================================================== */}
+          <div className="px-4 lg:px-10 mx-auto max-w-5xl lg:max-w-[1360px] w-full mt-4 lg:mt-8">
+            <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 pb-4 lg:pb-5 border-b border-stone-200/80">
+              <div>
+                <p className="text-[10px] lg:text-[11px] font-bold text-stone-400 uppercase tracking-wider mb-2">
+                  Padrão do Consultório
+                </p>
+                <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pb-0.5">
+                  <button
+                    onClick={() => setActiveTier("all")}
+                    className={`px-3.5 lg:px-4 py-1.5 lg:py-2 rounded-full text-xs sm:text-sm font-semibold transition-all shrink-0 border cursor-pointer ${
+                      activeTier === "all"
+                        ? "bg-stone-900 text-white border-stone-900 shadow-2xs"
+                        : "bg-white text-stone-600 border-stone-200/90 hover:border-stone-300 hover:text-stone-900"
+                    }`}
+                  >
+                    Todos ({searchResults.rooms.length})
+                  </button>
+                  <button
+                    onClick={() => setActiveTier("master")}
+                    className={`px-3.5 lg:px-4 py-1.5 lg:py-2 rounded-full text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 shrink-0 border cursor-pointer ${
+                      activeTier === "master"
+                        ? "bg-stone-900 text-amber-300 border-stone-900 shadow-2xs"
+                        : "bg-white text-stone-600 border-stone-200/90 hover:border-stone-300 hover:text-stone-900"
+                    }`}
+                  >
+                    <Crown className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Premium</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTier("vip")}
+                    className={`px-3.5 lg:px-4 py-1.5 lg:py-2 rounded-full text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 shrink-0 border cursor-pointer ${
+                      activeTier === "vip"
+                        ? "bg-[#BF4B24] text-white border-[#BF4B24] shadow-2xs"
+                        : "bg-white text-stone-600 border-stone-200/90 hover:border-stone-300 hover:text-stone-900"
+                    }`}
+                  >
+                    <Star className="w-3.5 h-3.5" />
+                    <span>VIP</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTier("start")}
+                    className={`px-3.5 lg:px-4 py-1.5 lg:py-2 rounded-full text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 shrink-0 border cursor-pointer ${
+                      activeTier === "start"
+                        ? "bg-stone-800 text-white border-stone-800 shadow-2xs"
+                        : "bg-white text-stone-600 border-stone-200/90 hover:border-stone-300 hover:text-stone-900"
+                    }`}
+                  >
+                    <Shield className="w-3.5 h-3.5" />
+                    <span>Basic</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="hidden lg:block">
+                <p className="text-[11px] font-bold text-stone-400 uppercase tracking-wider mb-2.5 text-right">
+                  Filtrar por Especialidade
+                </p>
+                <div className="flex items-center gap-1.5 bg-white p-1 rounded-full border border-stone-200/80 shadow-2xs">
+                  {CATEGORIES.map((cat) => {
+                    const Icon = cat.icon;
+                    const active = appliedFilters.category === cat.id;
+                    return (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => handleQuickCategorySelect(cat.id)}
+                        className={`px-3.5 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                          active
+                            ? "bg-[#FAF7F4] text-[#BF4B24] border border-[#BF4B24]/30 shadow-2xs"
+                            : "text-stone-600 hover:text-stone-900 hover:bg-stone-50"
+                        }`}
+                      >
+                        <Icon className="w-3.5 h-3.5" />
+                        <span>{cat.shortLabel}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>
 
-          {searchResults.isFallback && (
-            <div className="px-4 max-w-5xl mx-auto w-full mb-8">
-              <div className="p-5 bg-orange-50 border border-orange-200 rounded-2xl flex items-start gap-4 animate-in fade-in shadow-sm">
-                <div className="p-2 bg-white rounded-xl shadow-sm shrink-0">
-                  <Zap className="w-6 h-6 text-[#BF4B24]" />
+          {searchResults.isFallback && aiExchanges.length === 0 && (
+            <div className="px-4 lg:px-10 max-w-5xl lg:max-w-[1360px] mx-auto w-full mt-5">
+              <div className="p-4 sm:p-5 bg-white border border-[#BF4B24]/25 rounded-2xl flex items-start gap-3.5 animate-in fade-in shadow-2xs">
+                <div className="p-2 bg-[#FAF7F4] rounded-xl shrink-0">
+                  <Compass className="w-5 h-5 text-[#BF4B24]" />
                 </div>
                 <div>
-                  <h4 className="font-black text-orange-950 text-lg">
-                    Busca Flexível
+                  <h4 className="font-bold text-stone-900 text-sm">
+                    Sugestões próximas na Fusion Clinic
                   </h4>
-                  <p className="text-sm font-medium text-orange-800 mt-1 leading-relaxed">
+                  <p className="text-xs text-stone-600 mt-0.5 leading-relaxed">
                     {searchResults.fallbackMessage}
                   </p>
                 </div>
@@ -1792,41 +3352,66 @@ export function SearchTab({
           )}
 
           {searchResults.rooms.length === 0 ? (
-            <div className="px-4 max-w-5xl mx-auto w-full mt-8">
-              <div className="text-center py-16 bg-white rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center">
-                <Search className="w-10 h-10 text-slate-300 mb-4" />
-                <h3 className="text-lg font-bold text-slate-900 mb-1">
-                  Nenhuma sala disponível
+            <div className="px-4 lg:px-10 max-w-5xl lg:max-w-[1360px] mx-auto w-full mt-8">
+              <div className="text-center py-14 bg-white rounded-3xl border border-stone-200/80 shadow-2xs flex flex-col items-center px-4">
+                <Search className="w-9 h-9 text-stone-300 mb-3" />
+                <h3 className="text-base font-bold text-stone-900 mb-1">
+                  Nenhum consultório encontrado com estes filtros
                 </h3>
-                <p className="text-slate-500 text-sm font-medium max-w-sm">
-                  Tente ajustar seus filtros ou desativar a localização.
+                <p className="text-stone-500 text-xs max-w-sm">
+                  Experimente visualizar todas as especialidades ou limpar o
+                  filtro de região.
                 </p>
                 <Button
                   variant="outline"
                   onClick={handleClearFilters}
-                  className="mt-6 font-semibold rounded-xl px-6"
+                  className="mt-5 font-semibold rounded-xl px-5 text-xs border-stone-200"
                 >
-                  Limpar Todos os Filtros
+                  Mostrar todos os consultórios
                 </Button>
               </div>
             </div>
           ) : (
-            <div className="px-0 md:px-4 max-w-5xl mx-auto w-full space-y-12 pb-12 mt-6">
-              {/* MASTER SECTION */}
+            <div className="px-0 md:px-4 lg:px-10 max-w-5xl lg:max-w-[1360px] mx-auto w-full space-y-9 lg:space-y-12 pb-12 mt-6 lg:mt-8">
+              {/* ============================================================ */}
+              {/* SEÇÃO 1: SALAS PREMIUM                                       */}
+              {/* ============================================================ */}
               {(activeTier === "all" || activeTier === "master") &&
                 masterRooms.length > 0 && (
-                  <section className="pt-8">
-                    <div className="flex items-center gap-2 mb-4 px-4 sm:px-0">
-                      <Crown className="w-6 h-6 text-amber-500" />
-                      <div>
-                        <h2 className="text-xl font-bold text-slate-900">
-                          Salas Premium
-                        </h2>
-                        <p className="text-xs font-medium text-slate-500">
-                          O mais alto padrão de sofisticação e conforto.
-                        </p>
+                  <section>
+                    <div className="flex items-end justify-between gap-2 mb-3.5 lg:mb-5 px-4 sm:px-0">
+                      <div className="flex items-start gap-2.5 lg:gap-3">
+                        <div className="w-9 h-9 lg:w-10 lg:h-10 rounded-2xl bg-stone-900 text-amber-400 flex items-center justify-center shrink-0 mt-0.5 shadow-2xs">
+                          <Crown className="w-4 h-4 lg:w-5 lg:h-5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h2 className="text-lg lg:text-2xl font-bold text-stone-900 tracking-tight">
+                              Consultórios Premium
+                            </h2>
+                            <span className="text-[10px] lg:text-[11px] font-semibold text-stone-500 bg-stone-200/70 px-2 py-0.5 rounded-full">
+                              {masterRooms.length}
+                            </span>
+                          </div>
+                          <p className="text-xs sm:text-sm text-stone-500 mt-0.5">
+                            Arquitetura executiva e máximo conforto acústico.
+                          </p>
+                        </div>
                       </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleOpenPassWithTier("master")}
+                        className="inline-flex items-center gap-0.5 text-[11px] lg:text-xs font-bold text-[#BF4B24] hover:underline cursor-pointer shrink-0"
+                      >
+                        <span className="hidden sm:inline">
+                          Ver pacote Pass+ Premium
+                        </span>
+                        <span className="sm:hidden">Pass+ Premium</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
                     </div>
+
                     {activeTier === "master" &&
                       appliedFilters.modality === "hora" &&
                       renderTargetedPassBanner()}
@@ -1834,8 +3419,8 @@ export function SearchTab({
                     <div
                       className={
                         masterRooms.length === 1
-                          ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 px-4 sm:px-0"
-                          : "flex overflow-x-auto gap-4 pb-6 snap-x scrollbar-hide px-4 sm:px-0"
+                          ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 lg:gap-6 px-4 sm:px-0"
+                          : "flex overflow-x-auto gap-3.5 pb-3 snap-x snap-mandatory scrollbar-hide px-4 sm:px-0 lg:grid lg:grid-cols-3 lg:gap-6 lg:overflow-visible lg:pb-0"
                       }
                     >
                       {masterRooms.map((room: Room) => (
@@ -1844,7 +3429,9 @@ export function SearchTab({
                           room={{
                             ...room,
                             selectedModality: appliedFilters.modality,
+                            preselectedDate: aiTargetDateISO || undefined,
                           }}
+                          aiMatch={aiMatchesMap[room.id]}
                           bestHourlyRate={bestHourlyRates[room.tier]}
                           isFavorited={favorites.has(room.id)}
                           onToggleFavorite={toggleFavorite}
@@ -1854,28 +3441,49 @@ export function SearchTab({
                           activeTier={activeTier}
                         />
                       ))}
-                      {masterRooms.length > 1 && (
-                        <div className="w-1 shrink-0 sm:hidden block"></div>
-                      )}
                     </div>
                   </section>
                 )}
 
-              {/* VIP SECTION */}
+              {/* ============================================================ */}
+              {/* SEÇÃO 2: SALAS VIP                                           */}
+              {/* ============================================================ */}
               {(activeTier === "all" || activeTier === "vip") &&
                 vipRooms.length > 0 && (
-                  <section className="pt-8">
-                    <div className="flex items-center gap-2 mb-4 px-4 sm:px-0">
-                      <Star className="w-6 h-6 text-slate-900" />
-                      <div>
-                        <h2 className="text-xl font-bold text-slate-900">
-                          Salas VIP
-                        </h2>
-                        <p className="text-xs font-medium text-slate-500">
-                          Ambientes premium com design diferenciado.
-                        </p>
+                  <section>
+                    <div className="flex items-end justify-between gap-2 mb-3.5 lg:mb-5 px-4 sm:px-0">
+                      <div className="flex items-start gap-2.5 lg:gap-3">
+                        <div className="w-9 h-9 lg:w-10 lg:h-10 rounded-2xl bg-[#FAF7F4] border border-[#BF4B24]/25 text-[#BF4B24] flex items-center justify-center shrink-0 mt-0.5">
+                          <Star className="w-4 h-4 lg:w-5 lg:h-5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h2 className="text-lg lg:text-2xl font-bold text-stone-900 tracking-tight">
+                              Consultórios VIP
+                            </h2>
+                            <span className="text-[10px] lg:text-[11px] font-semibold text-stone-500 bg-stone-200/70 px-2 py-0.5 rounded-full">
+                              {vipRooms.length}
+                            </span>
+                          </div>
+                          <p className="text-xs sm:text-sm text-stone-500 mt-0.5">
+                            Ambientes clínicos completos com design acolhedor.
+                          </p>
+                        </div>
                       </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleOpenPassWithTier("vip")}
+                        className="inline-flex items-center gap-0.5 text-[11px] lg:text-xs font-bold text-[#BF4B24] hover:underline cursor-pointer shrink-0"
+                      >
+                        <span className="hidden sm:inline">
+                          Ver pacote Pass+ VIP
+                        </span>
+                        <span className="sm:hidden">Pass+ VIP</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
                     </div>
+
                     {activeTier === "vip" &&
                       appliedFilters.modality === "hora" &&
                       renderTargetedPassBanner()}
@@ -1883,8 +3491,8 @@ export function SearchTab({
                     <div
                       className={
                         vipRooms.length === 1
-                          ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 px-4 sm:px-0"
-                          : "flex overflow-x-auto gap-4 pb-6 snap-x scrollbar-hide px-4 sm:px-0"
+                          ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 lg:gap-6 px-4 sm:px-0"
+                          : "flex overflow-x-auto gap-3.5 pb-3 snap-x snap-mandatory scrollbar-hide px-4 sm:px-0 lg:grid lg:grid-cols-3 lg:gap-6 lg:overflow-visible lg:pb-0"
                       }
                     >
                       {vipRooms.map((room: Room) => (
@@ -1893,7 +3501,9 @@ export function SearchTab({
                           room={{
                             ...room,
                             selectedModality: appliedFilters.modality,
+                            preselectedDate: aiTargetDateISO || undefined,
                           }}
+                          aiMatch={aiMatchesMap[room.id]}
                           bestHourlyRate={bestHourlyRates[room.tier]}
                           isFavorited={favorites.has(room.id)}
                           onToggleFavorite={toggleFavorite}
@@ -1903,28 +3513,49 @@ export function SearchTab({
                           activeTier={activeTier}
                         />
                       ))}
-                      {vipRooms.length > 1 && (
-                        <div className="w-1 shrink-0 sm:hidden block"></div>
-                      )}
                     </div>
                   </section>
                 )}
 
-              {/* START (BASIC) SECTION */}
+              {/* ============================================================ */}
+              {/* SEÇÃO 3: SALAS BASIC                                         */}
+              {/* ============================================================ */}
               {(activeTier === "all" || activeTier === "start") &&
                 startRooms.length > 0 && (
-                  <section className="pt-8">
-                    <div className="flex items-center gap-2 mb-4 px-4 sm:px-0">
-                      <Shield className="w-6 h-6 text-slate-400" />
-                      <div>
-                        <h2 className="text-xl font-bold text-slate-900">
-                          Salas Basic
-                        </h2>
-                        <p className="text-xs font-medium text-slate-500">
-                          Conforto e o melhor custo-benefício.
-                        </p>
+                  <section>
+                    <div className="flex items-end justify-between gap-2 mb-3.5 lg:mb-5 px-4 sm:px-0">
+                      <div className="flex items-start gap-2.5 lg:gap-3">
+                        <div className="w-9 h-9 lg:w-10 lg:h-10 rounded-2xl bg-white border border-stone-200 text-stone-700 flex items-center justify-center shrink-0 mt-0.5">
+                          <Shield className="w-4 h-4 lg:w-5 lg:h-5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h2 className="text-lg lg:text-2xl font-bold text-stone-900 tracking-tight">
+                              Consultórios Basic
+                            </h2>
+                            <span className="text-[10px] lg:text-[11px] font-semibold text-stone-500 bg-stone-200/70 px-2 py-0.5 rounded-full">
+                              {startRooms.length}
+                            </span>
+                          </div>
+                          <p className="text-xs sm:text-sm text-stone-500 mt-0.5">
+                            Praticidade e o melhor custo-benefício por consulta.
+                          </p>
+                        </div>
                       </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleOpenPassWithTier("start")}
+                        className="inline-flex items-center gap-0.5 text-[11px] lg:text-xs font-bold text-[#BF4B24] hover:underline cursor-pointer shrink-0"
+                      >
+                        <span className="hidden sm:inline">
+                          Ver pacote Pass+ Basic
+                        </span>
+                        <span className="sm:hidden">Pass+ Basic</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
                     </div>
+
                     {activeTier === "start" &&
                       appliedFilters.modality === "hora" &&
                       renderTargetedPassBanner()}
@@ -1932,8 +3563,8 @@ export function SearchTab({
                     <div
                       className={
                         startRooms.length === 1
-                          ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 px-4 sm:px-0"
-                          : "flex overflow-x-auto gap-4 pb-6 snap-x scrollbar-hide px-4 sm:px-0"
+                          ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 lg:gap-6 px-4 sm:px-0"
+                          : "flex overflow-x-auto gap-3.5 pb-3 snap-x snap-mandatory scrollbar-hide px-4 sm:px-0 lg:grid lg:grid-cols-3 lg:gap-6 lg:overflow-visible lg:pb-0"
                       }
                     >
                       {startRooms.map((room: Room) => (
@@ -1942,7 +3573,9 @@ export function SearchTab({
                           room={{
                             ...room,
                             selectedModality: appliedFilters.modality,
+                            preselectedDate: aiTargetDateISO || undefined,
                           }}
+                          aiMatch={aiMatchesMap[room.id]}
                           bestHourlyRate={bestHourlyRates[room.tier]}
                           isFavorited={favorites.has(room.id)}
                           onToggleFavorite={toggleFavorite}
@@ -1952,9 +3585,6 @@ export function SearchTab({
                           activeTier={activeTier}
                         />
                       ))}
-                      {startRooms.length > 1 && (
-                        <div className="w-1 shrink-0 sm:hidden block"></div>
-                      )}
                     </div>
                   </section>
                 )}
@@ -1968,15 +3598,16 @@ export function SearchTab({
 
 function RoomCard({
   room,
+  aiMatch,
   isFavorited,
   onToggleFavorite,
   onOpen,
   horizontal = false,
   usingLocation = false,
   bestHourlyRate,
-  activeTier,
 }: {
   room: Room;
+  aiMatch?: RoomAvailabilityMatch;
   isFavorited: boolean;
   onToggleFavorite: (e: React.MouseEvent, id: string) => void;
   onOpen?: (room: Room) => void;
@@ -1987,150 +3618,229 @@ function RoomCard({
 }) {
   const isMaster = room.tier === "master";
   const isVip = room.tier === "vip";
-  const isBasic = room.tier === "start";
 
   const isHourly = room.selectedModality === "hora";
-  const showDiscount =
-    isHourly &&
-    activeTier !== "all" &&
-    bestHourlyRate &&
-    room.filterPrice > bestHourlyRate;
+  const fallbackPassRate = bestHourlyRate || (isMaster ? 50 : isVip ? 34 : 26);
+  const showPassComparison =
+    isHourly && room.filterPrice > 0 && room.filterPrice > fallbackPassRate;
+
+  const neighborhood = room.rawAddress?.neighborhood || "Região Central";
+  const city = room.rawAddress?.city || "Unidade Verificada";
 
   return (
     <div
       onClick={() => onOpen && onOpen(room)}
-      className={`group cursor-pointer flex flex-col bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 ${horizontal ? "w-[280px] sm:w-[320px] shrink-0 snap-start" : "w-full"}`}
+      className={`group cursor-pointer flex flex-col bg-white border rounded-[22px] overflow-hidden shadow-[0_4px_20px_rgba(28,25,23,0.04)] hover:shadow-[0_14px_35px_rgba(28,25,23,0.10)] hover:-translate-y-1 transition-all duration-300 ${
+        aiMatch?.exactSlotAvailable && aiMatch?.requestedSlotLabel
+          ? "border-emerald-500/60 ring-1 ring-emerald-500/20"
+          : "border-stone-200/85 hover:border-stone-300"
+      } ${
+        horizontal
+          ? "w-[285px] sm:w-[325px] lg:w-full shrink-0 snap-start"
+          : "w-full"
+      }`}
     >
+      {/* FOTO DO CONSULTÓRIO */}
       <div
-        className={`relative w-full bg-slate-100 ${horizontal ? "h-40 sm:h-48" : "aspect-[4/3]"}`}
+        className={`relative w-full bg-stone-100 overflow-hidden ${
+          horizontal
+            ? "h-44 sm:h-48 lg:h-auto lg:aspect-[16/10]"
+            : "aspect-[16/10]"
+        }`}
       >
         <Image
           src={room.image}
           alt={room.name}
           fill
-          sizes="(max-width: 768px) 100vw, 400px"
+          sizes="(max-width: 768px) 100vw, 420px"
           className="object-cover group-hover:scale-105 transition-transform duration-500"
           onError={(e: any) => {
             e.target.src = "/placeholder.jpg";
           }}
         />
-        <div className="absolute top-2 left-2 flex flex-col gap-1 z-10">
+
+        <div className="absolute inset-0 bg-gradient-to-t from-black/45 via-transparent to-black/15 pointer-events-none" />
+
+        {/* Selos Superiores */}
+        <div className="absolute top-3 left-3 flex items-center gap-1.5 z-10">
           {room.isPartner && (
-            <div className="bg-white/95 backdrop-blur px-2 py-1 rounded-md text-[9px] font-bold text-orange-600 uppercase tracking-wider flex items-center gap-1 shadow-sm">
-              <Sparkles className="w-3 h-3 fill-orange-500" /> Destaque
-            </div>
+            <span className="bg-white/95 backdrop-blur-xs px-2.5 py-1 rounded-full text-[10px] font-bold text-stone-800 flex items-center gap-1 shadow-2xs">
+              <BadgeCheck className="w-3.5 h-3.5 text-[#BF4B24]" />
+              Verificado
+            </span>
           )}
+          <span
+            className={`px-2.5 py-1 rounded-full text-[10px] font-bold flex items-center gap-1 shadow-2xs ${
+              isMaster
+                ? "bg-stone-950/90 text-amber-300 backdrop-blur-xs"
+                : isVip
+                  ? "bg-[#BF4B24] text-white"
+                  : "bg-white/95 text-stone-700"
+            }`}
+          >
+            {isMaster ? (
+              <>
+                <Crown className="w-3 h-3" /> Premium
+              </>
+            ) : isVip ? (
+              <>
+                <Star className="w-3 h-3" /> VIP
+              </>
+            ) : (
+              <>
+                <Shield className="w-3 h-3" /> Basic
+              </>
+            )}
+          </span>
         </div>
-        <div className="absolute top-2 right-2 z-10">
-          {isMaster && (
-            <Badge className="bg-amber-500 text-slate-950 font-black border-0 shadow-sm">
-              <Crown className="w-3 h-3 mr-1" /> Premium
-            </Badge>
-          )}
-          {isVip && (
-            <Badge className="bg-slate-900 text-white font-black border-0 shadow-sm">
-              <Star className="w-3 h-3 mr-1" /> VIP
-            </Badge>
-          )}
-          {isBasic && (
-            <Badge className="bg-white text-slate-700 font-black border border-slate-200 shadow-sm">
-              <Shield className="w-3 h-3 mr-1" /> Basic
-            </Badge>
-          )}
-        </div>
-        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+
+        {/* Botão Favoritar */}
         <button
           onClick={(e) => onToggleFavorite(e, room.id)}
-          className="absolute bottom-3 right-3 p-2 rounded-full bg-white/30 backdrop-blur-md hover:bg-white/80 transition-colors z-10 shadow-sm"
+          aria-label="Salvar nos favoritos"
+          className="absolute top-3 right-3 w-8 h-8 rounded-full bg-white/85 hover:bg-white backdrop-blur-xs flex items-center justify-center transition-transform active:scale-90 z-10 shadow-2xs"
         >
           <Heart
-            className={`h-4 w-4 transition-colors ${isFavorited ? "fill-red-500 text-red-500" : "text-white group-hover:text-slate-900"}`}
+            className={`h-4 w-4 transition-colors ${
+              isFavorited
+                ? "fill-red-500 text-red-500"
+                : "text-stone-700 hover:text-stone-950"
+            }`}
           />
         </button>
+
+        {/* Especialidade sobre a base da foto */}
+        <div className="absolute bottom-2.5 left-3 right-3 flex items-center justify-between z-10">
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-white bg-black/45 backdrop-blur-xs px-2.5 py-1 rounded-lg border border-white/15">
+            <Stethoscope className="w-3 h-3 text-orange-200" />
+            {room.specialty || room.category || "Consultório Clínico"}
+          </span>
+
+          {usingLocation && room.distanceKm && (
+            <span className="text-[10px] font-bold text-white bg-emerald-600/90 backdrop-blur-xs px-2 py-1 rounded-lg flex items-center gap-1">
+              <Navigation className="w-2.5 h-2.5" />
+              {room.distanceKm.toFixed(1)} km
+            </span>
+          )}
+        </div>
       </div>
 
-      <div className="flex flex-col p-4 flex-1 bg-white">
-        <div>
-          <div className="flex justify-between items-start mb-3 gap-2">
-            <h3 className="font-bold text-lg text-slate-900 leading-tight line-clamp-2 group-hover:text-[#BF4B24] transition-colors">
-              {room.name}
-            </h3>
-            {room.reviews_count > 0 ? (
-              <div className="flex items-center gap-1 bg-emerald-50 px-2 py-1 rounded-md shrink-0 border border-emerald-100">
-                <Star className="w-3 h-3 fill-emerald-600 text-emerald-600" />
-                <span className="text-sm font-black text-emerald-900">
-                  {Number(room.rating).toFixed(1)}
-                </span>
-                <span className="text-[10px] font-bold text-emerald-600 ml-0.5">
-                  ({room.reviews_count})
-                </span>
-              </div>
-            ) : (
-              <div className="bg-orange-50 px-2 py-1 rounded-md shrink-0 border border-orange-100">
-                <span className="text-[10px] font-black text-[#BF4B24] uppercase tracking-wider">
-                  Novo
-                </span>
-              </div>
-            )}
-          </div>
+      {/* CORPO DO CARD EDITORIAL */}
+      <div className="flex flex-col p-4 sm:p-5 flex-1 bg-white">
+        {/* Linha 1: Localização + Nota */}
+        <div className="flex items-center justify-between gap-2 text-xs text-stone-500 mb-1">
+          <span className="flex items-center gap-1 font-medium truncate">
+            <MapPin className="w-3.5 h-3.5 text-[#BF4B24] shrink-0" />
+            <span className="truncate">
+              {neighborhood}, {city}
+            </span>
+          </span>
 
-          <div className="space-y-2 mb-4">
-            <div className="flex items-center gap-2 text-slate-500">
-              <MapPin className="w-4 h-4 shrink-0 text-slate-400" />
-              <span className="text-sm font-medium truncate">
-                {room.rawAddress?.neighborhood || "Bairro não inf."},{" "}
-                {room.rawAddress?.city || "Localização pendente"}
+          {room.reviews_count > 0 ? (
+            <span className="flex items-center gap-1 font-bold text-stone-800 shrink-0">
+              <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+              {Number(room.rating).toFixed(1)}
+              <span className="text-stone-400 font-normal">
+                ({room.reviews_count})
               </span>
-            </div>
-            <div className="flex items-center gap-2 text-slate-500">
-              <Stethoscope className="w-4 h-4 shrink-0 text-slate-400" />
-              <span className="text-sm font-medium truncate">
-                {room.specialty || room.category || "Consultório Padrão"}
-              </span>
-            </div>
-          </div>
-          {usingLocation && room.distanceKm && (
-            <p className="text-[10px] font-bold text-emerald-600 bg-emerald-50 w-fit px-2 py-1 rounded-md mb-2 flex items-center gap-1">
-              <Navigation className="w-3 h-3" /> A {room.distanceKm.toFixed(1)}{" "}
-              km
-            </p>
+            </span>
+          ) : (
+            <span className="text-[11px] font-semibold text-[#BF4B24] bg-[#FAF7F4] px-2 py-0.5 rounded-md shrink-0">
+              Novo
+            </span>
           )}
         </div>
 
-        <div className="mt-auto pt-4 border-t border-slate-100 flex items-end justify-between">
+        {/* Linha 2: Nome do Consultório */}
+        <h3 className="font-bold text-base sm:text-[17px] text-stone-900 leading-snug line-clamp-1 group-hover:text-[#BF4B24] transition-colors">
+          {room.name}
+        </h3>
+
+        {/* Linha 3: Horários Disponíveis na Busca IA (Quando ativa) OU Diferenciais Inclusos */}
+        {aiMatch && aiMatch.availableSlots.length > 0 ? (
+          <div className="mt-2 mb-1 p-2.5 rounded-xl bg-[#FAF7F4] border border-stone-200/80">
+            <div className="flex items-center justify-between gap-1 mb-1.5">
+              <span
+                className={`text-[10px] font-bold flex items-center gap-1 ${
+                  aiMatch.exactSlotAvailable
+                    ? "text-emerald-700"
+                    : "text-[#BF4B24]"
+                }`}
+              >
+                <Clock className="w-3 h-3" />
+                {aiMatch.matchReason}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {aiMatch.availableSlots.map((slot) => {
+                const isRequested = slot === aiMatch.requestedSlotLabel;
+                return (
+                  <button
+                    key={slot}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (onOpen) {
+                        onOpen({
+                          ...room,
+                          preselectedSlot: slot,
+                        });
+                      }
+                    }}
+                    className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
+                      isRequested
+                        ? "bg-emerald-600 text-white shadow-2xs"
+                        : "bg-white hover:bg-[#BF4B24] text-stone-800 hover:text-white border border-stone-200"
+                    }`}
+                  >
+                    {slot}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <p className="text-[11px] text-stone-400 font-medium mt-1 truncate">
+            Check-in digital • Recepção e Wi-Fi inclusos
+          </p>
+        )}
+
+        {/* Rodapé de Preço + Âncora Fusion Pass+ */}
+        <div className="mt-auto pt-3.5 border-t border-stone-100 flex items-end justify-between gap-2">
           <div>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">
-              {isHourly
-                ? "Locação Avulsa"
-                : room.selectedModality === "turno"
-                  ? "Turno Mensal (16h)"
-                  : "Locação Fixa"}
-            </p>
-            {showDiscount ? (
-              <div className="flex flex-col">
-                <span className="text-xs font-semibold text-slate-400 line-through mb-0.5">
-                  {room.priceLabel}
-                </span>
-                <span className="text-lg font-black text-emerald-600 leading-none flex items-center gap-1.5 mt-0.5">
-                  R${" "}
-                  {bestHourlyRate.toLocaleString("pt-BR", {
-                    minimumFractionDigits: 2,
-                  })}
-                  /h{" "}
-                  <span className="text-[9px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-md uppercase tracking-wider">
-                    c/ Pass
-                  </span>
-                </span>
-              </div>
-            ) : (
-              <p className="text-lg font-black text-slate-900">
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-base sm:text-lg font-extrabold text-stone-900 tracking-tight">
                 {room.priceLabel}
-              </p>
+              </span>
+              {isHourly && (
+                <span className="text-[11px] text-stone-400 font-medium">
+                  avulso
+                </span>
+              )}
+            </div>
+
+            {showPassComparison ? (
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50/90 px-2 py-0.5 rounded-md mt-1">
+                <span>
+                  ou R$ {fallbackPassRate.toFixed(0)}/h no Fusion Pass+
+                </span>
+              </span>
+            ) : (
+              <span className="text-[11px] text-stone-400 font-medium block mt-0.5">
+                {room.selectedModality === "turno"
+                  ? "Turno fixo semanal"
+                  : room.selectedModality === "fixo"
+                    ? "Sala exclusiva mensal"
+                    : "Reserva imediata"}
+              </span>
             )}
           </div>
-          <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center group-hover:bg-[#BF4B24] group-hover:text-white transition-colors border border-slate-100 text-slate-400">
-            <ArrowRight className="w-5 h-5" />
-          </div>
+
+          <span className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-[#FAF7F4] group-hover:bg-[#BF4B24] text-stone-800 group-hover:text-white text-xs font-bold transition-colors shrink-0">
+            <span>Ver agenda</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </span>
         </div>
       </div>
     </div>

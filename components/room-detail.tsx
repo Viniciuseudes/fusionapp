@@ -65,6 +65,7 @@ import {
   Tag,
   CalendarClock,
   ArrowLeftRight,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -98,8 +99,6 @@ export interface RoomDetailProps {
 const normalizeSlotLabel = (h: string): string => {
   if (!h || typeof h !== "string") return "";
   const parts = h.split("-");
-  if (parts.length < 2) return h;
-
   const rawStart = parts[0].trim().replace("h", ":");
   const hourNumber = parseInt(rawStart.split(":")[0], 10);
 
@@ -107,6 +106,20 @@ const normalizeSlotLabel = (h: string): string => {
 
   const formattedHour = hourNumber.toString().padStart(2, "0");
   return `${formattedHour}:00 - ${formattedHour}:50`;
+};
+
+const parseSlotDateHelper = (dateStr: string, timeStr: string): Date => {
+  const cleanTime = timeStr.trim().replace("h", ":");
+  const parts = cleanTime.split(":");
+  const hh = parseInt(parts[0], 10);
+  const mm = parts[1] ? parseInt(parts[1].substring(0, 2), 10) : 0;
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const dateObj = new Date(year, month - 1, day, hh, mm, 0);
+
+  if (isNaN(dateObj.getTime())) {
+    throw new Error(`Data inválida gerada: ${timeStr} em ${dateStr}`);
+  }
+  return dateObj;
 };
 
 export function RoomDetail(props: RoomDetailProps) {
@@ -117,28 +130,60 @@ export function RoomDetail(props: RoomDetailProps) {
     onNavigateToChat,
     onOpenFusionPass,
   } = props;
+
+  const rawInput = props.roomId || props.room;
+  const targetRoomId: string | null =
+    typeof rawInput === "object" ? rawInput?.id || null : rawInput || null;
+  const preselectedDateStr: string | null =
+    typeof props.room?.preselectedDate === "string"
+      ? props.room.preselectedDate
+      : null;
+  const preselectedSlotStr: string | null =
+    typeof props.room?.preselectedSlot === "string"
+      ? props.room.preselectedSlot
+      : null;
+
+  // ====================================================================
+  // 1. TODOS OS HOOKS DO COMPONENTE (ESTÁVEIS E NO TOPO)
+  // ====================================================================
   const router = useRouter();
   const [supabase] = useState(() => createClient());
   const { toast } = useToast();
 
+  const today = useMemo(() => startOfToday(), []);
+
+  const initialTargetDate = useMemo(() => {
+    if (preselectedDateStr) {
+      const parsed = new Date(`${preselectedDateStr}T12:00:00`);
+      if (
+        !isNaN(parsed.getTime()) &&
+        (!isBefore(parsed, today) || isSameDay(parsed, today))
+      ) {
+        return parsed;
+      }
+    }
+    return today;
+  }, [preselectedDateStr, today]);
+
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [roomData, setRoomData] = useState<any>(null);
-
   const [activeTab, setActiveTab] = useState<"hora" | "turno" | "fixo">("hora");
 
-  const today = startOfToday();
-  const [selectedDate, setSelectedDate] = useState<Date>(today);
+  const [selectedDate, setSelectedDate] = useState<Date>(initialTargetDate);
   const [selectedSlots, setSelectedSlots] = useState<string[]>([]);
   const [currentMonthView, setCurrentMonthView] = useState<Date>(
-    startOfMonth(today),
+    startOfMonth(initialTargetDate),
   );
 
-  const [roomBookings, setRoomBookings] = useState<any[]>([]);
+  const hasAppliedPreselectedSlotRef = useRef<boolean>(false);
   const bookingConfirmedRef = useRef<boolean>(false);
-
   const bookingSectionRef = useRef<HTMLDivElement>(null);
   const fusionPassCardRef = useRef<HTMLDivElement>(null);
+  const checkoutSummaryRef = useRef<any>(null);
+  const lightboxRef = useRef<HTMLDivElement>(null);
+
+  const [roomBookings, setRoomBookings] = useState<any[]>([]);
   const [highlightSchedule, setHighlightSchedule] = useState(false);
 
   const [selectedShift, setSelectedShift] = useState<
@@ -161,7 +206,6 @@ export function RoomDetail(props: RoomDetailProps) {
   const [isAllPhotosOpen, setIsAllPhotosOpen] = useState(false);
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
-  const lightboxRef = useRef<HTMLDivElement>(null);
 
   const [reviews, setReviews] = useState<any[]>([]);
   const [loadingReviews, setLoadingReviews] = useState(true);
@@ -172,72 +216,45 @@ export function RoomDetail(props: RoomDetailProps) {
   const [isPassDetailsExpanded, setIsPassDetailsExpanded] = useState(false);
 
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const [currentTime, setCurrentTime] = useState<number>(Date.now());
+  const [currentTime, setCurrentTime] = useState<number>(() => Date.now());
+
+  useMobileBack(
+    isCheckoutOpen,
+    () => setIsCheckoutOpen(false),
+    "checkout-modal",
+  );
+  useMobileBack(
+    isAllPhotosOpen,
+    () => setIsAllPhotosOpen(false),
+    "galeria-fotos",
+  );
+  useMobileBack(
+    isLightboxOpen,
+    () => setIsLightboxOpen(false),
+    "foto-ampliada",
+  );
+  useMobileBack(
+    showProfileModal,
+    () => setShowProfileModal(false),
+    "modal-perfil-incompleto",
+  );
+
+  useEffect(() => {
+    setSelectedDate(initialTargetDate);
+    setCurrentMonthView(startOfMonth(initialTargetDate));
+    hasAppliedPreselectedSlotRef.current = false;
+  }, [targetRoomId, initialTargetDate, preselectedSlotStr]);
+
+  useEffect(() => {
+    checkoutSummaryRef.current = checkoutSummary;
+  }, [checkoutSummary]);
 
   useEffect(() => {
     const interval = setInterval(() => {
       setCurrentTime(Date.now());
-    }, 5000);
+    }, 15000);
     return () => clearInterval(interval);
   }, []);
-
-  const scrollToBookingSection = () => {
-    if (bookingSectionRef.current) {
-      bookingSectionRef.current.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-      setHighlightSchedule(true);
-      setTimeout(() => setHighlightSchedule(false), 1800);
-    }
-  };
-
-  const handleExpandAndScrollToPass = () => {
-    setIsPassDetailsExpanded(true);
-    if (fusionPassCardRef.current) {
-      fusionPassCardRef.current.scrollIntoView({
-        behavior: "smooth",
-        block: "center",
-      });
-    }
-  };
-
-  const handleGoToFusionPass = () => {
-    const rawTier = String(roomData?.tier || "start")
-      .toLowerCase()
-      .trim();
-    const targetTier =
-      rawTier.includes("master") || rawTier.includes("premium")
-        ? "master"
-        : rawTier.includes("vip")
-          ? "vip"
-          : "start";
-
-    const targetHours = selectedPkgHours ? Number(selectedPkgHours) : null;
-
-    try {
-      sessionStorage.setItem(
-        "fusion_preselect_pass",
-        JSON.stringify({
-          tier: targetTier,
-          hours: targetHours,
-          roomId: roomData?.id,
-        }),
-      );
-    } catch {}
-
-    if (onOpenFusionPass) {
-      onOpenFusionPass(targetTier, targetHours);
-      return;
-    }
-
-    // Abre o modal interativo do Fusion Pass+ diretamente por cima da tela atual (sem perder a sala)
-    window.dispatchEvent(
-      new CustomEvent("open-fusion-pass", {
-        detail: { step: "plans", tier: targetTier, hours: targetHours },
-      }),
-    );
-  };
 
   const fetchRoomBookings = useCallback(async () => {
     if (!roomData?.id) return;
@@ -270,201 +287,106 @@ export function RoomDetail(props: RoomDetailProps) {
     }
   }, [roomData?.id, supabase]);
 
-  useMobileBack(
-    isCheckoutOpen,
-    () => setIsCheckoutOpen(false),
-    "checkout-modal",
-  );
-  useMobileBack(
-    isAllPhotosOpen,
-    () => setIsAllPhotosOpen(false),
-    "galeria-fotos",
-  );
-  useMobileBack(
-    isLightboxOpen,
-    () => setIsLightboxOpen(false),
-    "foto-ampliada",
-  );
-  useMobileBack(
-    showProfileModal,
-    () => setShowProfileModal(false),
-    "modal-perfil-incompleto",
-  );
+  const handleCheckoutClose = useCallback(async () => {
+    setIsCheckoutOpen(false);
+    setSelectedSlots([]);
+    setPixQrCode(null);
+    setPixCopyPaste(null);
+    setActiveBookingId(null);
 
-  useEffect(() => {
-    let isMounted = true;
-    const rawInput = props.roomId || props.room;
-    const idToFetch = typeof rawInput === "object" ? rawInput?.id : rawInput;
+    if (bookingConfirmedRef.current) {
+      setCheckoutSummary(null);
+      await fetchRoomBookings();
+      return;
+    }
 
-    async function fetchRoomDetails() {
-      if (!idToFetch) {
-        if (isMounted) setLoading(false);
-        return;
+    const summary = checkoutSummaryRef.current;
+    if (summary && summary.lockIds) {
+      const lockIds = summary.lockIds;
+      const supabaseClient = createClient();
+
+      const { data: checkBookings } = await supabaseClient
+        .from("bookings")
+        .select("id, status")
+        .in("id", lockIds);
+
+      const pendingIds =
+        checkBookings
+          ?.filter((b: any) => b.status === "pending_payment")
+          .map((b: any) => b.id) || [];
+
+      if (pendingIds.length > 0) {
+        setRoomBookings((prevBookings: any[]) =>
+          prevBookings.filter((b: any) => !pendingIds.includes(b.id)),
+        );
+        await supabaseClient.from("bookings").delete().in("id", pendingIds);
       }
-      if (isMounted) setLoading(true);
+    }
 
+    setCheckoutSummary(null);
+    await fetchRoomBookings();
+  }, [fetchRoomBookings]);
+
+  const isSlotBooked = useCallback(
+    (slotKey: string) => {
       try {
-        const { data, error } = await supabase
-          .from("rooms")
-          .select("*, profiles:host_id(full_name)")
-          .eq("id", idToFetch)
-          .single();
+        const [dateStr, timeStr] = slotKey.split("|");
+        const parts = timeStr.split(" - ");
+        const startSlotStr = parts[0];
+        const endSlotStr = parts[1] || parts[0];
 
-        if (error) throw error;
+        const slotStart = parseSlotDateHelper(dateStr, startSlotStr).getTime();
+        const rawSlotEnd = parseSlotDateHelper(dateStr, endSlotStr).getTime();
+        const slotEnd =
+          rawSlotEnd > slotStart ? rawSlotEnd : slotStart + 50 * 60 * 1000;
 
-        if (isMounted) {
-          setRoomData(data);
-          const mods = data.modalities || [];
+        return roomBookings.some((b: any) => {
+          if (b.status === "cancelled" || b.status === "rejected") return false;
 
-          if (mods.includes(initialModality)) {
-            setActiveTab(initialModality);
-          } else if (mods.includes("hora")) {
-            setActiveTab("hora");
-          } else if (mods.length > 0) {
-            setActiveTab(mods[0]);
+          if (
+            (b.status === "pending_payment" || b.status === "pending") &&
+            b.created_at
+          ) {
+            const lockTime = new Date(b.created_at).getTime();
+            const now = currentTime;
+
+            if (!b.asaas_payment_id && now - lockTime > 6 * 60 * 1000) {
+              return false;
+            }
+
+            if (b.asaas_payment_id && now - lockTime > 30 * 60 * 1000) {
+              return false;
+            }
           }
 
-          const normalizedRoomTier = normalizeCreditTier(data.tier || "start");
-          const { data: allActivePkgs } = await supabase
-            .from("packages")
-            .select("*")
-            .eq("active", true)
-            .order("hours", { ascending: true });
+          const bStart = new Date(b.start_time).getTime();
+          const rawBEnd = new Date(b.end_time).getTime();
+          const bEnd = rawBEnd > bStart ? rawBEnd : bStart + 50 * 60 * 1000;
 
-          const matchingPkgs = (allActivePkgs || []).filter(
-            (p: any) => normalizeCreditTier(p.tier) === normalizedRoomTier,
-          );
-
-          if (matchingPkgs.length > 0) {
-            setPackages(matchingPkgs);
-            setSelectedPkgHours(
-              matchingPkgs[1]?.hours || matchingPkgs[0]?.hours,
-            );
-          } else {
-            const fallbackByTier =
-              normalizedRoomTier === "master"
-                ? [
-                    { id: "m8", tier: "master", hours: 8, price: 500 },
-                    { id: "m16", tier: "master", hours: 16, price: 848.96 },
-                  ]
-                : normalizedRoomTier === "vip"
-                  ? [
-                      { id: "v8", tier: "vip", hours: 8, price: 340 },
-                      { id: "v16", tier: "vip", hours: 16, price: 658.08 },
-                    ]
-                  : [
-                      { id: "b8", tier: "start", hours: 8, price: 280 },
-                      { id: "b16", tier: "start", hours: 16, price: 534.08 },
-                    ];
-            setPackages(fallbackByTier);
-            setSelectedPkgHours(fallbackByTier[1].hours);
-          }
-        }
-      } catch (err) {
-        console.error("Erro ao buscar sala:", err);
-      } finally {
-        if (isMounted) setLoading(false);
+          return slotStart < bEnd && slotEnd > bStart;
+        });
+      } catch {
+        return false;
       }
-    }
+    },
+    [roomBookings, currentTime],
+  );
 
-    fetchRoomDetails();
-    return () => {
-      isMounted = false;
-    };
-  }, [props.roomId, props.room, initialModality, supabase]);
-
-  useEffect(() => {
-    if (!roomData?.id) return;
-
-    fetchRoomBookings();
-
-    const pollInterval = setInterval(fetchRoomBookings, 8000);
-
-    const channel = supabase
-      .channel(`room_bookings_${roomData.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "bookings",
-          filter: `room_id=eq.${roomData.id}`,
-        },
-        () => {
-          fetchRoomBookings();
-        },
-      )
-      .subscribe();
-
-    return () => {
-      clearInterval(pollInterval);
-      supabase.removeChannel(channel);
-    };
-  }, [roomData?.id, supabase, fetchRoomBookings]);
-
-  useEffect(() => {
-    async function fetchReviews() {
-      const rawInput = props.roomId || props.room;
-      const idToFetch = typeof rawInput === "object" ? rawInput?.id : rawInput;
-      if (!idToFetch) return;
-
-      setLoadingReviews(true);
+  const isSlotPast = useCallback(
+    (slotKey: string) => {
       try {
-        const { data, error } = await supabase
-          .from("reviews")
-          .select("*, profiles:guest_id(full_name, avatar_url)")
-          .eq("room_id", idToFetch)
-          .order("created_at", { ascending: false });
-
-        if (error) throw error;
-        setReviews(data || []);
-      } catch (error) {
-        console.error("Erro ao buscar avaliações:", error);
-      } finally {
-        setLoadingReviews(false);
+        const [dateStr, timeStr] = slotKey.split("|");
+        const startSlotStr = timeStr.split(" - ")[0];
+        const slotStart = parseSlotDateHelper(dateStr, startSlotStr).getTime();
+        return slotStart < currentTime;
+      } catch {
+        return true;
       }
-    }
-    fetchReviews();
-  }, [props.roomId, props.room, supabase]);
+    },
+    [currentTime],
+  );
 
-  useEffect(() => {
-    async function checkFavoriteStatus() {
-      const rawInput = props.roomId || props.room;
-      const idToFetch = typeof rawInput === "object" ? rawInput?.id : rawInput;
-      if (!idToFetch) return;
-
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data } = await supabase
-        .from("favorites")
-        .select("id")
-        .eq("user_id", user.id)
-        .eq("room_id", idToFetch)
-        .maybeSingle();
-
-      if (data) setIsFavorited(true);
-    }
-    checkFavoriteStatus();
-  }, [props.roomId, props.room, supabase]);
-
-  const avgRating =
-    reviews.length > 0
-      ? (
-          reviews.reduce(
-            (acc: number, curr: any) => acc + Number(curr.rating || 0),
-            0,
-          ) / reviews.length
-        ).toFixed(1)
-      : "Novo";
-
-  const filteredReviews =
-    reviewFilter === 0
-      ? reviews
-      : reviews.filter((r: any) => r.rating === reviewFilter);
-
+  // FONTE ÚNICA DA VERDADE DA AGENDA DA SALA (NUNCA INJETA HORÁRIOS FECHADOS)
   const availableSlots = useMemo<string[]>(() => {
     if (!roomData || activeTab !== "hora") return [];
 
@@ -480,7 +402,7 @@ export function RoomDetail(props: RoomDetailProps) {
     if (typeof avail === "string") {
       try {
         avail = JSON.parse(avail);
-      } catch (e) {
+      } catch {
         avail = null;
       }
     }
@@ -564,35 +486,271 @@ export function RoomDetail(props: RoomDetailProps) {
     return baseSlots;
   }, [roomData, selectedDate, activeTab]);
 
-  const getBasePrice = () => {
-    let address = roomData?.address_details || {};
-    if (typeof address === "string") {
+  const freeSlotsForSelectedDate = useMemo<string[]>(() => {
+    const datePrefix = format(selectedDate, "yyyy-MM-dd");
+    return availableSlots.filter((slotTime: string) => {
+      const slotKey = `${datePrefix}|${slotTime}`;
+      return !isSlotBooked(slotKey) && !isSlotPast(slotKey);
+    });
+  }, [availableSlots, selectedDate, isSlotBooked, isSlotPast]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function fetchRoomDetails() {
+      if (!targetRoomId) {
+        if (isMounted) setLoading(false);
+        return;
+      }
+      if (isMounted) setLoading(true);
+
       try {
-        address = JSON.parse(address);
-      } catch (e) {
-        address = {};
+        const { data, error } = await supabase
+          .from("rooms")
+          .select("*, profiles:host_id(full_name)")
+          .eq("id", targetRoomId)
+          .single();
+
+        if (error) throw error;
+
+        if (isMounted) {
+          setRoomData(data);
+          const mods = data.modalities || [];
+
+          if (preselectedSlotStr && mods.includes("hora")) {
+            setActiveTab("hora");
+          } else if (mods.includes(initialModality)) {
+            setActiveTab(initialModality);
+          } else if (mods.includes("hora")) {
+            setActiveTab("hora");
+          } else if (mods.length > 0) {
+            setActiveTab(mods[0]);
+          }
+
+          const normalizedRoomTier = normalizeCreditTier(data.tier || "start");
+          const { data: allActivePkgs } = await supabase
+            .from("packages")
+            .select("*")
+            .eq("active", true)
+            .order("hours", { ascending: true });
+
+          const matchingPkgs = (allActivePkgs || []).filter(
+            (p: any) => normalizeCreditTier(p.tier) === normalizedRoomTier,
+          );
+
+          if (matchingPkgs.length > 0) {
+            setPackages(matchingPkgs);
+            setSelectedPkgHours(
+              matchingPkgs[1]?.hours || matchingPkgs[0]?.hours,
+            );
+          } else {
+            const fallbackByTier =
+              normalizedRoomTier === "master"
+                ? [
+                    { id: "m8", tier: "master", hours: 8, price: 500 },
+                    { id: "m16", tier: "master", hours: 16, price: 848.96 },
+                  ]
+                : normalizedRoomTier === "vip"
+                  ? [
+                      { id: "v8", tier: "vip", hours: 8, price: 340 },
+                      { id: "v16", tier: "vip", hours: 16, price: 658.08 },
+                    ]
+                  : [
+                      { id: "b8", tier: "start", hours: 8, price: 280 },
+                      { id: "b16", tier: "start", hours: 16, price: 534.08 },
+                    ];
+            setPackages(fallbackByTier);
+            setSelectedPkgHours(fallbackByTier[1].hours);
+          }
+        }
+      } catch (err) {
+        console.error("Erro ao buscar sala:", err);
+      } finally {
+        if (isMounted) setLoading(false);
       }
     }
-    return Number(address.pricing?.hourly || 45);
+
+    fetchRoomDetails();
+    return () => {
+      isMounted = false;
+    };
+  }, [targetRoomId, preselectedSlotStr, initialModality, supabase]);
+
+  useEffect(() => {
+    if (!roomData?.id) return;
+
+    fetchRoomBookings();
+
+    const pollInterval = setInterval(fetchRoomBookings, 8000);
+
+    const channel = supabase
+      .channel(`room_bookings_${roomData.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "bookings",
+          filter: `room_id=eq.${roomData.id}`,
+        },
+        () => {
+          fetchRoomBookings();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      clearInterval(pollInterval);
+      supabase.removeChannel(channel);
+    };
+  }, [roomData?.id, supabase, fetchRoomBookings]);
+
+  useEffect(() => {
+    async function fetchReviews() {
+      if (!targetRoomId) return;
+
+      setLoadingReviews(true);
+      try {
+        const { data, error } = await supabase
+          .from("reviews")
+          .select("*, profiles:guest_id(full_name, avatar_url)")
+          .eq("room_id", targetRoomId)
+          .order("created_at", { ascending: false });
+
+        if (error) throw error;
+        setReviews(data || []);
+      } catch (error) {
+        console.error("Erro ao buscar avaliações:", error);
+      } finally {
+        setLoadingReviews(false);
+      }
+    }
+    fetchReviews();
+  }, [targetRoomId, supabase]);
+
+  useEffect(() => {
+    async function checkFavoriteStatus() {
+      if (!targetRoomId) return;
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data } = await supabase
+        .from("favorites")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("room_id", targetRoomId)
+        .maybeSingle();
+
+      if (data) setIsFavorited(true);
+    }
+    checkFavoriteStatus();
+  }, [targetRoomId, supabase]);
+
+  // Aplica o horário pré-selecionado SOMENTE SE ele existir em `availableSlots` e estiver livre
+  useEffect(() => {
+    if (
+      loading ||
+      hasAppliedPreselectedSlotRef.current ||
+      !roomData ||
+      !preselectedSlotStr
+    ) {
+      return;
+    }
+
+    hasAppliedPreselectedSlotRef.current = true;
+
+    const normalizedPreSlot = normalizeSlotLabel(preselectedSlotStr);
+    if (!normalizedPreSlot) return;
+
+    // Verifica se o horário realmente faz parte da grade aberta da sala
+    if (!availableSlots.includes(normalizedPreSlot)) return;
+
+    const dateStr = format(initialTargetDate, "yyyy-MM-dd");
+    const targetSlotKey = `${dateStr}|${normalizedPreSlot}`;
+
+    if (!isSlotBooked(targetSlotKey) && !isSlotPast(targetSlotKey)) {
+      setSelectedSlots([targetSlotKey]);
+      setHighlightSchedule(true);
+      setTimeout(() => setHighlightSchedule(false), 2000);
+
+      setTimeout(() => {
+        if (bookingSectionRef.current) {
+          bookingSectionRef.current.scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+          });
+        }
+      }, 200);
+    }
+  }, [
+    loading,
+    roomData,
+    preselectedSlotStr,
+    initialTargetDate,
+    availableSlots,
+    isSlotBooked,
+    isSlotPast,
+  ]);
+
+  // ====================================================================
+  // 2. RETORNOS CONDICIONAIS DE CARREGAMENTO
+  // ====================================================================
+  if (loading) {
+    return (
+      <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-6 text-center">
+        <Loader2 className="h-8 w-8 animate-spin text-[#BF4B24] mb-3" />
+        <h2 className="text-base font-bold text-slate-800">
+          Carregando detalhes do consultório...
+        </h2>
+      </div>
+    );
+  }
+
+  if (!roomData) {
+    return (
+      <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-6 text-center">
+        <AlertCircle className="h-12 w-12 text-slate-300 mb-4" />
+        <h2 className="text-xl font-bold text-slate-900 mb-2">
+          Sala não encontrada
+        </h2>
+        <Button
+          onClick={onBack}
+          className="bg-slate-900 text-white font-bold h-12 px-8 rounded-xl mt-4"
+        >
+          Voltar
+        </Button>
+      </div>
+    );
+  }
+
+  // ====================================================================
+  // 3. FUNÇÕES AUXILIARES PURAS E HANDLERS
+  // ====================================================================
+  let address = roomData.address_details || {};
+  if (typeof address === "string") {
+    try {
+      address = JSON.parse(address);
+    } catch {
+      address = {};
+    }
+  }
+
+  const pricingData = address.pricing || {};
+
+  const getBasePrice = () => {
+    return Number(pricingData.hourly || 45);
   };
 
   const getSlotPrice = (slotKey: string) => {
-    let address = roomData?.address_details || {};
-    if (typeof address === "string") {
-      try {
-        address = JSON.parse(address);
-      } catch (e) {
-        address = {};
-      }
-    }
-    const pricing = address.pricing || {};
-
-    const commercialRate = Number(pricing.hourly || 45);
-    const afterHoursRate = pricing.afterHours
-      ? Number(pricing.afterHours)
+    const commercialRate = Number(pricingData.hourly || 45);
+    const afterHoursRate = pricingData.afterHours
+      ? Number(pricingData.afterHours)
       : commercialRate;
-    const weekendRate = pricing.weekend
-      ? Number(pricing.weekend)
+    const weekendRate = pricingData.weekend
+      ? Number(pricingData.weekend)
       : commercialRate;
 
     if (!slotKey.includes("|")) return commercialRate;
@@ -609,133 +767,74 @@ export function RoomDetail(props: RoomDetailProps) {
     return commercialRate;
   };
 
+  const scrollToBookingSection = () => {
+    if (bookingSectionRef.current) {
+      bookingSectionRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+      setHighlightSchedule(true);
+      setTimeout(() => setHighlightSchedule(false), 1800);
+    }
+  };
+
+  const handleExpandAndScrollToPass = () => {
+    setIsPassDetailsExpanded(true);
+    if (fusionPassCardRef.current) {
+      fusionPassCardRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }
+  };
+
+  const handleGoToFusionPass = () => {
+    const rawTier = String(roomData?.tier || "start")
+      .toLowerCase()
+      .trim();
+    const targetTier =
+      rawTier.includes("master") || rawTier.includes("premium")
+        ? "master"
+        : rawTier.includes("vip")
+          ? "vip"
+          : "start";
+
+    const targetHours = selectedPkgHours ? Number(selectedPkgHours) : null;
+
+    try {
+      sessionStorage.setItem(
+        "fusion_preselect_pass",
+        JSON.stringify({
+          tier: targetTier,
+          hours: targetHours,
+          roomId: roomData?.id,
+        }),
+      );
+    } catch {}
+
+    if (onOpenFusionPass) {
+      onOpenFusionPass(targetTier, targetHours);
+      return;
+    }
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("open-fusion-pass", {
+          detail: { step: "plans", tier: targetTier, hours: targetHours },
+        }),
+      );
+    }
+  };
+
   const totalHourlyCost = selectedSlots.reduce(
     (acc: number, slotKey: string) => acc + getSlotPrice(slotKey),
     0,
   );
 
-  const toggleSlot = (slotKey: string) => {
-    setSelectedSlots((prev: string[]) =>
-      prev.includes(slotKey)
-        ? prev.filter((s: string) => s !== slotKey)
-        : [...prev, slotKey].sort(),
-    );
-  };
-
-  const getPricingData = () => {
-    let address = roomData?.address_details || {};
-    if (typeof address === "string") {
-      try {
-        address = JSON.parse(address);
-      } catch (e) {
-        address = {};
-      }
-    }
-    return address.pricing || {};
-  };
-
-  const pricingData = getPricingData();
   const shiftPrice = selectedShift
     ? Number(pricingData[selectedShift] || 0)
     : 0;
   const totalShiftCost = shiftPrice * selectedDays.length;
-
-  const toggleDay = (day: number) => {
-    setSelectedDays((prev: number[]) =>
-      prev.includes(day)
-        ? prev.filter((d: number) => d !== day)
-        : [...prev, day].sort(),
-    );
-  };
-
-  const parseSlotDate = (dateStr: string, timeStr: string): Date => {
-    try {
-      const cleanTime = timeStr.trim().replace("h", ":");
-      const parts = cleanTime.split(":");
-      const hh = parseInt(parts[0], 10);
-      const mm = parts[1] ? parseInt(parts[1].substring(0, 2), 10) : 0;
-
-      const [year, month, day] = dateStr.split("-").map(Number);
-
-      const dateObj = new Date(year, month - 1, day, hh, mm, 0);
-
-      if (isNaN(dateObj.getTime())) {
-        throw new Error("Data Inválida gerada");
-      }
-      return dateObj;
-    } catch (e) {
-      throw new Error(
-        `Erro ao interpretar horário: ${timeStr} na data ${dateStr}`,
-      );
-    }
-  };
-
-  const isSlotBooked = useCallback(
-    (slotKey: string) => {
-      try {
-        const [dateStr, timeStr] = slotKey.split("|");
-        const parts = timeStr.split(" - ");
-        const startSlotStr = parts[0];
-        const endSlotStr = parts[1] || parts[0];
-
-        const slotStart = parseSlotDate(dateStr, startSlotStr).getTime();
-        const rawSlotEnd = parseSlotDate(dateStr, endSlotStr).getTime();
-        const slotEnd =
-          rawSlotEnd > slotStart ? rawSlotEnd : slotStart + 50 * 60 * 1000;
-
-        return roomBookings.some((b: any) => {
-          if (b.status === "cancelled" || b.status === "rejected") return false;
-
-          if (
-            (b.status === "pending_payment" || b.status === "pending") &&
-            b.created_at
-          ) {
-            const lockTime = new Date(b.created_at).getTime();
-            const now = currentTime;
-
-            if (!b.asaas_payment_id && now - lockTime > 6 * 60 * 1000) {
-              return false;
-            }
-
-            if (b.asaas_payment_id && now - lockTime > 30 * 60 * 1000) {
-              return false;
-            }
-          }
-
-          const bStart = new Date(b.start_time).getTime();
-          const rawBEnd = new Date(b.end_time).getTime();
-          const bEnd = rawBEnd > bStart ? rawBEnd : bStart + 50 * 60 * 1000;
-
-          return slotStart < bEnd && slotEnd > bStart;
-        });
-      } catch {
-        return false;
-      }
-    },
-    [roomBookings, currentTime],
-  );
-
-  const isSlotPast = useCallback(
-    (slotKey: string) => {
-      try {
-        const [dateStr, timeStr] = slotKey.split("|");
-        const startSlotStr = timeStr.split(" - ")[0];
-        const slotStart = parseSlotDate(dateStr, startSlotStr).getTime();
-        return slotStart < currentTime;
-      } catch {
-        return true;
-      }
-    },
-    [currentTime],
-  );
-
-  const freeSlotsForSelectedDate = useMemo<string[]>(() => {
-    const datePrefix = format(selectedDate, "yyyy-MM-dd");
-    return availableSlots.filter((slotTime: string) => {
-      const slotKey = `${datePrefix}|${slotTime}`;
-      return !isSlotBooked(slotKey) && !isSlotPast(slotKey);
-    });
-  }, [availableSlots, selectedDate, isSlotBooked, isSlotPast]);
 
   const handleAction = async () => {
     if (activeTab === "hora" && selectedSlots.length === 0) {
@@ -812,8 +911,8 @@ export function RoomDetail(props: RoomDetailProps) {
           const startSlotStr = slotTime.split(" - ")[0];
           const endSlotStr = slotTime.split(" - ")[1];
 
-          const startTime = parseSlotDate(dateStr, startSlotStr);
-          const endTime = parseSlotDate(dateStr, endSlotStr);
+          const startTime = parseSlotDateHelper(dateStr, startSlotStr);
+          const endTime = parseSlotDateHelper(dateStr, endSlotStr);
 
           return {
             user_id: user.id,
@@ -846,7 +945,7 @@ export function RoomDetail(props: RoomDetailProps) {
         const firstSlot = sortedSlots[0];
         const [startDateStr, startTimeStr] = firstSlot.split("|");
         const startSlotStr = startTimeStr.split(" - ")[0];
-        const startDate = parseSlotDate(startDateStr, startSlotStr);
+        const startDate = parseSlotDateHelper(startDateStr, startSlotStr);
         const totalHours = selectedSlots.length;
         const endDateForApi = new Date(
           startDate.getTime() + totalHours * 60 * 60 * 1000,
@@ -1214,52 +1313,6 @@ export function RoomDetail(props: RoomDetailProps) {
     }
   };
 
-  const checkoutSummaryRef = useRef<any>(null);
-
-  useEffect(() => {
-    checkoutSummaryRef.current = checkoutSummary;
-  }, [checkoutSummary]);
-
-  const handleCheckoutClose = useCallback(async () => {
-    setIsCheckoutOpen(false);
-    setSelectedSlots([]);
-    setPixQrCode(null);
-    setPixCopyPaste(null);
-    setActiveBookingId(null);
-
-    if (bookingConfirmedRef.current) {
-      setCheckoutSummary(null);
-      await fetchRoomBookings();
-      return;
-    }
-
-    const summary = checkoutSummaryRef.current;
-    if (summary && summary.lockIds) {
-      const lockIds = summary.lockIds;
-      const supabaseClient = createClient();
-
-      const { data: checkBookings } = await supabaseClient
-        .from("bookings")
-        .select("id, status")
-        .in("id", lockIds);
-
-      const pendingIds =
-        checkBookings
-          ?.filter((b: any) => b.status === "pending_payment")
-          .map((b: any) => b.id) || [];
-
-      if (pendingIds.length > 0) {
-        setRoomBookings((prevBookings: any[]) =>
-          prevBookings.filter((b: any) => !pendingIds.includes(b.id)),
-        );
-        await supabaseClient.from("bookings").delete().in("id", pendingIds);
-      }
-    }
-
-    setCheckoutSummary(null);
-    await fetchRoomBookings();
-  }, [fetchRoomBookings]);
-
   const handleFavoriteToggle = async () => {
     if (isFavoriteLoading || !roomData) return;
 
@@ -1299,7 +1352,7 @@ export function RoomDetail(props: RoomDetailProps) {
           description: "A sala foi adicionada aos favoritos.",
         });
       }
-    } catch (error: any) {
+    } catch {
       toast({
         variant: "destructive",
         title: "Erro",
@@ -1374,55 +1427,36 @@ export function RoomDetail(props: RoomDetailProps) {
     }
   };
 
+  const toggleSlot = (slotKey: string) => {
+    setSelectedSlots((prev: string[]) =>
+      prev.includes(slotKey)
+        ? prev.filter((s: string) => s !== slotKey)
+        : [...prev, slotKey].sort(),
+    );
+  };
+
+  const toggleDay = (day: number) => {
+    setSelectedDays((prev: number[]) =>
+      prev.includes(day)
+        ? prev.filter((d: number) => d !== day)
+        : [...prev, day].sort(),
+    );
+  };
+
+  const nextMonth = () => setCurrentMonthView(addMonths(currentMonthView, 1));
+  const prevMonth = () => setCurrentMonthView(addMonths(currentMonthView, -1));
+
   const monthStart = startOfMonth(currentMonthView);
   const monthEnd = endOfMonth(monthStart);
   const calendarDays = eachDayOfInterval({
     start: startOfWeek(monthStart),
     end: endOfWeek(monthEnd),
   });
-  const nextMonth = () => setCurrentMonthView(addMonths(currentMonthView, 1));
-  const prevMonth = () => setCurrentMonthView(addMonths(currentMonthView, -1));
+
   const canGoPrevMonth = !isBefore(
     startOfMonth(currentMonthView),
     startOfMonth(today),
   );
-
-  if (loading) {
-    return (
-      <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-6 text-center">
-        <Loader2 className="h-8 w-8 animate-spin text-[#BF4B24] mb-3" />
-        <h2 className="text-base font-bold text-slate-800">
-          Carregando detalhes do consultório...
-        </h2>
-      </div>
-    );
-  }
-
-  if (!roomData) {
-    return (
-      <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-6 text-center">
-        <AlertCircle className="h-12 w-12 text-slate-300 mb-4" />
-        <h2 className="text-xl font-bold text-slate-900 mb-2">
-          Sala não encontrada
-        </h2>
-        <Button
-          onClick={onBack}
-          className="bg-slate-900 text-white font-bold h-12 px-8 rounded-xl mt-4"
-        >
-          Voltar
-        </Button>
-      </div>
-    );
-  }
-
-  let address = roomData.address_details || {};
-  if (typeof address === "string") {
-    try {
-      address = JSON.parse(address);
-    } catch (e) {
-      address = {};
-    }
-  }
 
   const rawGallery = Array.isArray(address.gallery) ? address.gallery : [];
   const allImages: string[] = [roomData.image_url, ...rawGallery].filter(
@@ -1460,7 +1494,21 @@ export function RoomDetail(props: RoomDetailProps) {
 
   const clinicHostName = roomData.profiles?.full_name || "Equipe Fusion Clinic";
 
-  // Cálculos do Fusion Pass+ para o Card Interativo no Topo
+  const avgRating =
+    reviews.length > 0
+      ? (
+          reviews.reduce(
+            (acc: number, curr: any) => acc + Number(curr.rating || 0),
+            0,
+          ) / reviews.length
+        ).toFixed(1)
+      : "Novo";
+
+  const filteredReviews =
+    reviewFilter === 0
+      ? reviews
+      : reviews.filter((r: any) => r.rating === reviewFilter);
+
   const baseAvulsoPrice = getBasePrice();
   const activeSelectedPkg =
     packages.find((p: any) => Number(p.hours) === Number(selectedPkgHours)) ||
@@ -1607,7 +1655,7 @@ export function RoomDetail(props: RoomDetailProps) {
           )}
         </div>
 
-        {/* BARRA RÁPIDA DE HORÁRIOS MOBILE (LOGO ABAIXO DA FOTO) */}
+        {/* BARRA RÁPIDA DE HORÁRIOS MOBILE */}
         <div className="md:hidden px-5 pt-4">
           <div className="bg-stone-50 border border-stone-200/90 rounded-2xl p-3.5 flex flex-col gap-3">
             <div className="flex items-center justify-between gap-2">
@@ -1726,15 +1774,12 @@ export function RoomDetail(props: RoomDetailProps) {
               </div>
             </div>
 
-            {/* ============================================================== */}
-            {/* NOVO COMPONENTE DE ALTA CONVERSÃO FUSION PASS+ (NO TOPO!)      */}
-            {/* ============================================================== */}
+            {/* COMPONENTE DE ALTA CONVERSÃO FUSION PASS+ */}
             {packages.length > 0 && activeTab === "hora" && (
               <div
                 ref={fusionPassCardRef}
                 className="rounded-2xl border border-[#BF4B24]/30 bg-[#FAF7F5] overflow-hidden transition-all duration-300 shadow-2xs"
               >
-                {/* CABEÇALHO DO CARD (SEMPRE VISÍVEL, LIMPO E DESPERTA CURIOSIDADE) */}
                 <div
                   onClick={() => setIsPassDetailsExpanded((prev) => !prev)}
                   className="p-4 sm:p-5 cursor-pointer flex items-center justify-between gap-4 hover:bg-orange-50/40 transition-colors"
@@ -1784,10 +1829,8 @@ export function RoomDetail(props: RoomDetailProps) {
                   </button>
                 </div>
 
-                {/* GAVETA DE DETALHES (SÓ ABRE QUANDO O PROFISSIONAL CLICA) */}
                 {isPassDetailsExpanded && activeSelectedPkg && (
                   <div className="px-4 pb-5 sm:px-5 sm:pb-5 pt-2 border-t border-[#BF4B24]/15 bg-white space-y-4 animate-in fade-in duration-200">
-                    {/* 1. Escolha da quantidade de horas */}
                     <div>
                       <p className="text-xs font-bold text-stone-700 mb-2">
                         1. Escolha quantas horas por mês você costuma atender
@@ -1825,7 +1868,6 @@ export function RoomDetail(props: RoomDetailProps) {
                       </div>
                     </div>
 
-                    {/* 2. Resumo claro da economia do pacote selecionado */}
                     {(() => {
                       const pkgHours = Math.max(
                         1,
@@ -1885,7 +1927,6 @@ export function RoomDetail(props: RoomDetailProps) {
                       );
                     })()}
 
-                    {/* 3. Garantias transparentes (Sem letras miúdas) */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 text-[11px] text-stone-600">
                       <div className="flex items-start gap-2 p-2.5 rounded-xl bg-[#FAF7F5]/60 border border-stone-200/60">
                         <Unlock className="w-3.5 h-3.5 text-[#BF4B24] shrink-0 mt-0.5" />
@@ -1918,7 +1959,6 @@ export function RoomDetail(props: RoomDetailProps) {
                       </div>
                     </div>
 
-                    {/* 4. CTA Direto para Assinar */}
                     <Button
                       type="button"
                       onClick={handleGoToFusionPass}
@@ -2018,7 +2058,7 @@ export function RoomDetail(props: RoomDetailProps) {
             </section>
           </div>
 
-          {/* COLUNA DE AGENDAMENTO */}
+          {/* COLUNA DE AGENDAMENTO (CALENDÁRIO DE RESERVAS) */}
           <div
             ref={bookingSectionRef}
             className="order-2 lg:order-2 lg:col-span-5 flex flex-col gap-6 scroll-mt-20"
@@ -2092,7 +2132,16 @@ export function RoomDetail(props: RoomDetailProps) {
                     </div>
                   </div>
 
-                  {/* PÍLULA ÂNCORA DE PREÇO NO CARD DE RESERVA (ESTILO MELI+ / IFOOD CLUB) */}
+                  {preselectedSlotStr && selectedSlots.length > 0 && (
+                    <div className="mb-3 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200/80 flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-bold text-emerald-800 flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        Horário das {normalizeSlotLabel(preselectedSlotStr)} já
+                        selecionado para você
+                      </span>
+                    </div>
+                  )}
+
                   {packages.length > 0 && (
                     <button
                       type="button"
@@ -2117,7 +2166,6 @@ export function RoomDetail(props: RoomDetailProps) {
                     </button>
                   )}
 
-                  {/* CALENDÁRIO */}
                   <div className="w-full bg-stone-50/60 rounded-xl border border-stone-200/80 p-3.5 mb-5">
                     <div className="flex items-center justify-between mb-3">
                       <button
@@ -2289,7 +2337,6 @@ export function RoomDetail(props: RoomDetailProps) {
                     </div>
                   )}
 
-                  {/* BOTÃO DESKTOP */}
                   <div className="hidden md:block pt-5 border-t border-slate-100 mt-5">
                     {selectedSlots.length > 0 && (
                       <div className="flex items-center justify-between mb-3 text-sm">

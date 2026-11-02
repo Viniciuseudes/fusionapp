@@ -13,15 +13,18 @@ import {
   Heart,
   CalendarDays,
   LogIn,
-  UserPlus,
   Loader2,
-  Tag,
   ChevronRight,
+  ShieldCheck,
+  Clock,
+  Building2,
+  Tag,
+  Percent,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 
 const navItems = [
-  { id: "buscar" as const, label: "Buscar Salas", icon: Search },
+  { id: "buscar" as const, label: "Buscar", icon: Search },
+  { id: "pass" as const, label: "Pass+ (-41%)", icon: Tag, isPromo: true },
   { id: "favoritos" as const, label: "Favoritos", icon: Heart },
   { id: "reservas" as const, label: "Reservas", icon: CalendarDays },
   { id: "entrar" as const, label: "Entrar", icon: LogIn },
@@ -31,41 +34,66 @@ type TabId = (typeof navItems)[number]["id"];
 
 export default function AppPage() {
   const router = useRouter();
-  const supabase = createClient();
+  const [supabase] = useState(() => createClient());
 
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [activeTab, setActiveTab] = useState<TabId>("buscar");
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
+  const [logoError, setLogoError] = useState(false);
 
   useEffect(() => {
+    let isMounted = true;
+
     async function checkAuth() {
       try {
         const {
           data: { session },
         } = await supabase.auth.getSession();
 
-        if (session?.user) {
-          const { data: profile } = await supabase
-            .from("profiles")
-            .select("role")
-            .eq("id", session.user.id)
-            .single();
+        if (!session?.user) {
+          if (isMounted) setIsCheckingAuth(false);
+          return;
+        }
 
-          if (profile?.role === "host") {
-            router.replace("/host");
-          } else if (profile?.role === "admin") {
-            router.replace("/admin/dashboard");
-          } else {
-            router.replace("/dashboard");
-          }
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
+
+        if (userError || !user) {
+          await supabase.auth.signOut().catch(() => {});
+          if (isMounted) setIsCheckingAuth(false);
+          return;
+        }
+
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (!profile?.role) {
+          if (isMounted) setIsCheckingAuth(false);
+          return;
+        }
+
+        if (profile.role === "host") {
+          router.replace("/host");
+        } else if (profile.role === "admin") {
+          router.replace("/admin/dashboard");
         } else {
-          setIsCheckingAuth(false);
+          router.replace("/dashboard");
         }
       } catch (error) {
-        setIsCheckingAuth(false);
+        if (isMounted) setIsCheckingAuth(false);
       }
     }
+
     checkAuth();
+
+    return () => {
+      isMounted = false;
+    };
   }, [router, supabase]);
 
   useEffect(() => {
@@ -132,7 +160,19 @@ export default function AppPage() {
     }
   }, []);
 
+  const handleOpenFusionPassShowcase = useCallback(() => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("open-fusion-pass", { detail: { step: "plans" } }),
+      );
+    }
+  }, []);
+
   const handleTabClick = (id: TabId) => {
+    if (id === "pass") {
+      handleOpenFusionPassShowcase();
+      return;
+    }
     if (id !== "buscar") {
       router.push("/login");
     } else {
@@ -143,109 +183,267 @@ export default function AppPage() {
     }
   };
 
-  const handleOpenFusionPassShowcase = () => {
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(
-        new CustomEvent("open-fusion-pass", { detail: { step: "plans" } }),
-      );
-    }
-  };
-
   if (isCheckingAuth) {
     return (
-      <div className="flex h-screen w-full items-center justify-center bg-slate-50">
+      <div className="flex h-screen w-full items-center justify-center bg-[#FAF7F5]">
         <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-svh flex-col bg-slate-50">
-      {/* Pop-up do Fusion Pass+ */}
+    <div className="flex min-h-svh flex-col bg-[#FAF7F4] font-sans">
+      {/* Ponte de alinhamento exclusiva para o Desktop (lg:) */}
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+            @media (min-width: 1024px) {
+              .fusion-desktop-hero-bridge {
+                margin-top: -4.25rem !important;
+                position: relative !important;
+                z-index: 30 !important;
+              }
+              .fusion-desktop-hero-bridge > div > div:first-child,
+              .fusion-desktop-hero-bridge > div > header:first-child,
+              .fusion-desktop-hero-bridge > div:first-child > div:first-child {
+                background: transparent !important;
+                background-color: transparent !important;
+                background-image: none !important;
+                padding-top: 0 !important;
+                padding-bottom: 1.25rem !important;
+                box-shadow: none !important;
+                border-radius: 0 !important;
+              }
+            }
+          `,
+        }}
+      />
+
+      {/* Pop-up do Fusion Pass+ (4s após carregar as salas, 1x por sessão) */}
       <FusionPassPromoPopup />
 
-      <aside className="hidden lg:flex fixed inset-y-0 left-0 z-40 w-64 flex-col border-r border-slate-200 bg-white shadow-sm">
-        <div className="flex items-center gap-3 px-6 py-5 border-b border-slate-100">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary shadow-sm">
-            <span className="text-primary-foreground font-black text-xl">
-              F
-            </span>
-          </div>
-          <div>
-            <h1 className="text-base font-bold text-slate-900 tracking-tight">
-              Fusion Clinic
-            </h1>
-            <p className="text-xs text-slate-500 font-medium">
-              Encontre seu espaço
-            </p>
-          </div>
-        </div>
-
-        <nav className="flex flex-col gap-1 p-3 flex-1">
-          {navItems.map((item) => {
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => handleTabClick(item.id)}
-                className={cn(
-                  "flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-bold transition-all",
-                  isActive
-                    ? "bg-primary/10 text-primary"
-                    : "text-slate-500 hover:bg-slate-100 hover:text-slate-900",
-                )}
-              >
-                <item.icon className="h-5 w-5" />
-                {item.label}
-              </button>
-            );
-          })}
-        </nav>
-
-        <div className="p-4 border-t border-slate-100 space-y-3 bg-slate-50/50">
-          <p className="text-xs text-slate-500 font-medium text-center">
-            Faça login para reservar salas e ganhar cashback.
-          </p>
-          <Button
-            onClick={() => router.push("/login")}
-            className="w-full bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm"
-          >
-            Entrar no Painel
-          </Button>
-          <Button
-            onClick={() => router.push("/login")}
-            variant="outline"
-            className="w-full text-primary border-primary/20 hover:bg-primary/5 font-bold"
-          >
-            <UserPlus className="w-4 h-4 mr-2" /> Criar Conta
-          </Button>
-        </div>
-      </aside>
-
-      <main
-        className={cn("flex-1 lg:ml-64", selectedRoom ? "" : "pb-20 lg:pb-0")}
-      >
-        {/* AVISO NO TOPO PARA VER OS PLANOS (DESLOGADO) */}
-        {!selectedRoom && (
-          <div className="bg-gradient-to-r from-[#BF4B24] to-[#9A3C1D] px-4 py-2.5 text-white flex items-center justify-between gap-2 shadow-xs">
-            <div className="flex items-center gap-2 min-w-0">
-              <Tag className="w-3.5 h-3.5 text-amber-200 shrink-0" />
-              <p className="text-xs font-medium truncate">
-                <strong className="font-bold">Fusion Pass+:</strong>
-                Horas com até 41% de desconto
+      {/* ==================================================================== */}
+      {/* 1. TOP PROMO BAR PRETA (RESPONSIVA NO MOBILE E INTACTA NO DESKTOP)   */}
+      {/* ==================================================================== */}
+      {!selectedRoom && (
+        <div className="bg-[#0C0A09] text-white px-3.5 lg:px-10 py-2 lg:py-2.5 z-50">
+          <div className="max-w-[1360px] mx-auto flex items-center justify-between gap-2.5 lg:gap-4">
+            <div className="flex items-center gap-2 lg:gap-3 min-w-0">
+              <span className="inline-flex items-center gap-1 lg:gap-1.5 bg-[#EAB308] text-stone-950 text-[9px] lg:text-[10px] font-extrabold uppercase tracking-wider px-2 lg:px-2.5 py-0.5 rounded-full shrink-0 shadow-2xs">
+                <Tag className="w-2.5 h-2.5 lg:w-3 lg:h-3 stroke-[2.5]" />
+                <span className="hidden sm:inline">FUSION PASS+</span>
+                <span className="sm:hidden">PASS+</span>
+              </span>
+              <p className="text-[11px] lg:text-xs font-bold text-[#FBBF24] truncate">
+                <span className="sm:hidden">Horas com até 41% de desconto</span>
+                <span className="hidden sm:inline">
+                  Compre suas horas com até 41% de desconto
+                </span>
+                <span className="hidden md:inline">
+                  {" "}
+                  • Sem fidelidade • Use em qualquer unidade ou transfira horas
+                </span>
               </p>
             </div>
+
             <button
               type="button"
               onClick={handleOpenFusionPassShowcase}
-              className="px-3 py-1 rounded-lg bg-white hover:bg-stone-50 text-[#BF4B24] font-bold text-[11px] shrink-0 shadow-2xs flex items-center gap-0.5 transition-transform active:scale-95 cursor-pointer"
+              className="px-3 lg:px-4 py-1 rounded-full border border-amber-400/80 hover:border-amber-300 hover:bg-amber-400/15 text-[#FBBF24] font-bold text-[11px] lg:text-xs shrink-0 flex items-center gap-0.5 lg:gap-1 transition-all active:scale-95 cursor-pointer"
             >
               <span>Ver Planos</span>
-              <ChevronRight className="w-3 h-3 stroke-[2.5]" />
+              <ChevronRight className="w-3 h-3 lg:w-3.5 lg:h-3.5" />
             </button>
           </div>
-        )}
+        </div>
+      )}
 
+      {/* ==================================================================== */}
+      {/* 2. HEADER DESKTOP BRANCO (100% INTACTO)                              */}
+      {/* ==================================================================== */}
+      {!selectedRoom && (
+        <header className="hidden lg:block sticky top-0 z-40 bg-white border-b border-stone-200/70">
+          <div className="max-w-[1360px] mx-auto px-10 h-20 flex items-center justify-between gap-8">
+            <button
+              type="button"
+              onClick={() => handleTabClick("buscar")}
+              className="flex items-center shrink-0 cursor-pointer focus:outline-none"
+            >
+              {!logoError ? (
+                <img
+                  src="/logo-fusion-orange.png"
+                  alt="Fusion Clinic"
+                  onError={() => setLogoError(true)}
+                  className="h-10 w-auto object-contain"
+                />
+              ) : (
+                <span className="text-xl font-black text-stone-900 tracking-tight">
+                  Fusion<span className="text-[#BF4B24]">.</span>
+                </span>
+              )}
+            </button>
+
+            <nav className="flex items-center gap-9">
+              <button
+                type="button"
+                onClick={() => handleTabClick("buscar")}
+                className={cn(
+                  "relative py-2.5 text-[15px] font-semibold whitespace-nowrap transition-colors cursor-pointer",
+                  activeTab === "buscar"
+                    ? "text-stone-900"
+                    : "text-stone-500 hover:text-stone-900",
+                )}
+              >
+                Explorar Salas
+                {activeTab === "buscar" && (
+                  <span className="absolute bottom-0 inset-x-0 h-[3px] bg-[#C84B20] rounded-full" />
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleOpenFusionPassShowcase}
+                className="py-2.5 text-[15px] font-medium text-stone-700 hover:text-stone-900 whitespace-nowrap flex items-center gap-2 transition-colors cursor-pointer"
+              >
+                <span>Planos Pass+</span>
+                <span className="text-[11px] font-bold text-white bg-gradient-to-r from-[#EA580C] to-[#F59E0B] px-2.5 py-0.5 rounded-full shadow-2xs">
+                  Até -41%
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleTabClick("favoritos")}
+                className="py-2.5 text-[15px] font-medium text-stone-700 hover:text-stone-900 whitespace-nowrap transition-colors cursor-pointer"
+              >
+                Favoritos
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleTabClick("reservas")}
+                className="py-2.5 text-[15px] font-medium text-stone-700 hover:text-stone-900 whitespace-nowrap transition-colors cursor-pointer"
+              >
+                Reservas
+              </button>
+            </nav>
+
+            <div className="flex items-center gap-6 shrink-0">
+              <button
+                type="button"
+                onClick={() => router.push("/login")}
+                className="text-[15px] font-medium text-stone-800 hover:text-[#BF4B24] whitespace-nowrap transition-colors cursor-pointer"
+              >
+                Entrar
+              </button>
+
+              <button
+                type="button"
+                onClick={() => router.push("/login")}
+                className="px-6 py-2.5 rounded-full bg-gradient-to-r from-[#C24116] to-[#DE5D2E] hover:from-[#A83812] hover:to-[#C84B20] text-white text-[15px] font-semibold whitespace-nowrap shadow-[0_6px_20px_rgba(191,75,36,0.3)] transition-all hover:scale-[1.01] active:scale-[0.99] cursor-pointer"
+              >
+                Criar conta
+              </button>
+            </div>
+          </div>
+        </header>
+      )}
+
+      {/* ==================================================================== */}
+      {/* 3. HERO BANNER DESKTOP (100% INTACTO)                                */}
+      {/* ==================================================================== */}
+      {!selectedRoom && activeTab === "buscar" && (
+        <section className="hidden lg:block relative w-full min-h-[430px] xl:min-h-[460px] overflow-hidden bg-[#B83B10]">
+          <div className="absolute inset-y-0 right-0 w-[65%] z-0">
+            <img
+              src="/hero.png"
+              alt="Consultório Fusion Clinic"
+              className="w-full h-full object-cover object-[center_70%]"
+            />
+            <div
+              className="absolute inset-0"
+              style={{
+                background:
+                  "linear-gradient(90deg, #B83B10 0%, #B83B10 12%, rgba(184,59,16,0.90) 28%, rgba(184,59,16,0.22) 52%, rgba(184,59,16,0) 72%)",
+              }}
+            />
+          </div>
+
+          <div
+            className="absolute inset-x-0 bottom-0 h-28 z-10 pointer-events-none"
+            style={{
+              background:
+                "linear-gradient(180deg, rgba(184,59,16,0) 0%, rgba(250,247,244,0.65) 65%, #FAF7F4 100%)",
+            }}
+          />
+
+          <div className="relative z-20 max-w-[1360px] mx-auto px-10 pt-16 pb-32 flex items-end justify-between gap-8">
+            <div className="max-w-[590px] space-y-4 text-white">
+              <h1 className="text-[44px] xl:text-[52px] font-extrabold tracking-tight text-white leading-[1.1]">
+                Consultórios prontos,{" "}
+                <span className="font-serif italic font-normal text-white">
+                  esperando por você.
+                </span>
+              </h1>
+
+              <p className="text-[15px] xl:text-base text-white/95 font-normal leading-relaxed max-w-[510px]">
+                Encontre o espaço ideal para atender seus pacientes. Reserve por
+                hora, turno ou pacote, sem precisar manter um consultório
+                próprio.
+              </p>
+            </div>
+
+            <div className="shrink-0">
+              <button
+                type="button"
+                onClick={handleOpenFusionPassShowcase}
+                className="group relative w-[215px] rounded-[22px] bg-[#FAF7F4]/92 hover:bg-white backdrop-blur-md border border-white/85 p-4 text-left shadow-[0_14px_34px_rgba(28,25,23,0.14)] transition-all duration-300 hover:-translate-y-1 cursor-pointer"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider text-[#BF4B24]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#BF4B24] animate-pulse" />
+                    Fusion Pass+
+                  </span>
+                  <span className="w-6 h-6 rounded-full bg-[#BF4B24]/12 text-[#BF4B24] flex items-center justify-center">
+                    <Percent className="w-3 h-3 stroke-[2.5]" />
+                  </span>
+                </div>
+
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-2xl font-black tracking-tight text-stone-900 leading-none">
+                    Até 41%
+                  </span>
+                  <span className="text-xs font-extrabold uppercase text-[#BF4B24]">
+                    OFF
+                  </span>
+                </div>
+                <p className="text-[11px] font-medium text-stone-500 mt-0.5">
+                  no valor da hora clínica
+                </p>
+
+                <div className="mt-2.5 px-2.5 py-1.5 rounded-xl bg-white border border-stone-200/80 flex items-center justify-between text-[11px]">
+                  <span className="text-stone-400 line-through">R$ 45/h</span>
+                  <span className="font-bold text-stone-800">
+                    por <strong className="text-[#BF4B24]">R$ 26/h</strong>
+                  </span>
+                </div>
+
+                <span className="mt-2.5 inline-flex items-center gap-1 text-xs font-bold text-[#BF4B24] group-hover:translate-x-0.5 transition-transform">
+                  <span>Simular desconto</span>
+                  <ChevronRight className="w-3.5 h-3.5 stroke-[2.5]" />
+                </span>
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* ==================================================================== */}
+      {/* 4. CONTEÚDO PRINCIPAL                                                */}
+      {/* ==================================================================== */}
+      <main
+        className={cn("flex-1 w-full", selectedRoom ? "" : "pb-20 lg:pb-16")}
+      >
         {selectedRoom ? (
           <RoomDetail
             roomId={selectedRoom.id}
@@ -257,38 +455,153 @@ export default function AppPage() {
         ) : (
           <>
             {activeTab === "buscar" && (
-              <SearchTab onOpenRoom={handleOpenRoom} />
+              <div className="w-full fusion-desktop-hero-bridge">
+                <SearchTab onOpenRoom={handleOpenRoom} />
+              </div>
             )}
           </>
         )}
       </main>
 
-      {/* BARRA INFERIOR MOBILE ORIGINAL (APENAS OS 4 ITENS) */}
+      {/* ==================================================================== */}
+      {/* 5. RODAPÉ DESKTOP (100% INTACTO)                                     */}
+      {/* ==================================================================== */}
       {!selectedRoom && (
-        <nav className="fixed inset-x-0 bottom-0 z-50 flex lg:hidden items-stretch justify-around border-t border-slate-200 bg-white/90 backdrop-blur-md pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
-          {navItems.map((item) => {
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => handleTabClick(item.id)}
-                className={cn(
-                  "flex flex-1 flex-col items-center justify-center gap-1.5 py-3 text-[10px] font-bold transition-all",
-                  isActive
-                    ? "text-primary scale-105"
-                    : "text-slate-400 hover:text-slate-700",
-                )}
-              >
-                <item.icon
+        <footer className="hidden lg:block bg-white border-t border-stone-200/80">
+          <div className="max-w-[1360px] mx-auto px-10 py-10">
+            <div className="grid grid-cols-4 gap-8 pb-8 border-b border-stone-100">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2 text-stone-900 font-bold text-sm">
+                  <Clock className="w-4 h-4 text-[#BF4B24]" />
+                  <span>Reserva Instantânea</span>
+                </div>
+                <p className="text-xs text-stone-500 leading-relaxed">
+                  Agenda em tempo real com liberação automática de senha na
+                  fechadura digital.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2 text-stone-900 font-bold text-sm">
+                  <Tag className="w-4 h-4 text-[#BF4B24]" />
+                  <span>Economia com Fusion Pass+</span>
+                </div>
+                <p className="text-xs text-stone-500 leading-relaxed">
+                  Reduza seu custo por hora em até 41%, sem fidelidade e com 30
+                  dias para usar.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2 text-stone-900 font-bold text-sm">
+                  <Building2 className="w-4 h-4 text-[#BF4B24]" />
+                  <span>Pronto para Atender</span>
+                </div>
+                <p className="text-xs text-stone-500 leading-relaxed">
+                  Recepção, Wi-Fi de alta velocidade, climatização, limpeza e
+                  café inclusos.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2 text-stone-900 font-bold text-sm">
+                  <ShieldCheck className="w-4 h-4 text-[#BF4B24]" />
+                  <span>Sem Custos Fixos</span>
+                </div>
+                <p className="text-xs text-stone-500 leading-relaxed">
+                  Reserve apenas pelas horas ou turnos que precisar, sem fiador
+                  ou burocracia.
+                </p>
+              </div>
+            </div>
+
+            <div className="pt-6 flex items-center justify-between text-xs text-stone-400">
+              <p>
+                © {new Date().getFullYear()} Fusion Clinic. Todos os direitos
+                reservados.
+              </p>
+              <div className="flex items-center gap-6 font-medium text-stone-500">
+                <button
+                  type="button"
+                  onClick={handleOpenFusionPassShowcase}
+                  className="hover:text-stone-900 cursor-pointer"
+                >
+                  Planos Pass+
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push("/login")}
+                  className="hover:text-stone-900 cursor-pointer"
+                >
+                  Entrar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push("/login")}
+                  className="hover:text-stone-900 cursor-pointer"
+                >
+                  Criar conta
+                </button>
+              </div>
+            </div>
+          </div>
+        </footer>
+      )}
+
+      {/* ==================================================================== */}
+      {/* 6. BARRA INFERIOR MOBILE ESTILO AIRBNB / BOOKING                     */}
+      {/* ==================================================================== */}
+      {!selectedRoom && (
+        <nav className="fixed inset-x-0 bottom-0 z-50 flex lg:hidden items-stretch justify-around border-t border-stone-200/90 bg-white/95 backdrop-blur-md pb-[env(safe-area-inset-bottom)] shadow-[0_-6px_25px_rgba(28,25,23,0.06)]">
+          <div className="flex justify-between items-stretch w-full max-w-md mx-auto px-1">
+            {navItems.map((item) => {
+              const isActive = activeTab === item.id;
+              const isPromo = Boolean((item as any).isPromo);
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleTabClick(item.id)}
                   className={cn(
-                    "h-5 w-5 transition-colors",
-                    isActive && "fill-primary/20",
+                    "relative flex flex-1 flex-col items-center justify-center gap-1 py-2.5 transition-colors cursor-pointer active:scale-95",
+                    isActive
+                      ? "text-[#BF4B24]"
+                      : isPromo
+                        ? "text-[#BF4B24]/90 hover:text-[#BF4B24]"
+                        : "text-stone-400 hover:text-stone-700",
                   )}
-                />
-                {item.label}
-              </button>
-            );
-          })}
+                >
+                  {isActive && (
+                    <span className="absolute top-0 w-6 h-[2.5px] bg-[#BF4B24] rounded-full" />
+                  )}
+
+                  <item.icon
+                    className={cn(
+                      "h-5 w-5 transition-transform",
+                      isActive
+                        ? "stroke-[2.4px] scale-105"
+                        : isPromo
+                          ? "stroke-[2.2px]"
+                          : "stroke-[1.9px]",
+                    )}
+                  />
+
+                  <span
+                    className={cn(
+                      "text-[10px] leading-none tracking-tight truncate max-w-[68px]",
+                      isActive
+                        ? "font-bold text-[#BF4B24]"
+                        : isPromo
+                          ? "font-bold text-[#BF4B24]"
+                          : "font-medium text-stone-500",
+                    )}
+                  >
+                    {item.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </nav>
       )}
     </div>
