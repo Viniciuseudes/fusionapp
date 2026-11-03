@@ -143,6 +143,22 @@ interface AIConversationExchange {
   targetDateISO: string | null;
 }
 
+// Renderiza destaques em **negrito** vindos do Concierge sem exibir asteriscos
+function renderFormattedText(text?: string) {
+  if (!text) return null;
+  const parts = text.split(/(\*\*.*?\*\*)/g);
+  return parts.map((part, idx) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return (
+        <strong key={idx} className="font-extrabold text-[#BF4B24]">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    return <span key={idx}>{part}</span>;
+  });
+}
+
 const calculateDistance = (
   lat1: number,
   lon1: number,
@@ -313,7 +329,6 @@ export function SearchTab({
     setIsPortalReady(true);
   }, []);
 
-  // Trava o scroll do fundo quando a página do Concierge IA está aberta
   useEffect(() => {
     if (isAISearchExpanded) {
       document.body.style.overflow = "hidden";
@@ -362,29 +377,29 @@ export function SearchTab({
     const specLabel = profile.specialty || "Psicologia";
     return [
       {
-        badge: "Diagnóstico de Rotina",
-        title: "Atendo cerca de 2h a 4h por semana",
-        desc: "Calcula se compensa Hora Avulsa, Fusion Pass+ ou Turno Fixo",
+        badge: "Descobrir meu Plano Ideal",
+        title: "Qual plano vale mais a pena para mim?",
+        desc: "A IA faz 2 perguntas rápidas e calcula sua melhor opção",
         icon: TrendingUp,
       },
       {
-        badge: "Turnos & Preços",
-        title: "Qual o valor em média do turno fixo?",
-        desc: "Veja a média por turno e quando migrar para o Pass+ 16h",
-        icon: Clock,
-      },
-      {
-        badge: "Alta Demanda • 80% Repasse",
-        title: "Como funciona a Sala Fixa com Coanfitrião (80%)?",
-        desc: "Alugue uma sala fixa e subloque horários vagos para abater seu aluguel",
+        badge: "Dúvida Frequente",
+        title: "É possível sublocar uma sala?",
+        desc: "Entenda como alugar horas ou ter sua sala fixa abatendo aluguel",
         icon: Crown,
       },
       {
+        badge: "Turnos & Valores",
+        title: "Qual o valor em média do turno fixo?",
+        desc: "Compare Turno Fixo semanal com pacotes de horas",
+        icon: Clock,
+      },
+      {
         badge: profile.specialty
-          ? `Estrutura • ${profile.specialty}`
+          ? `Salas • ${profile.specialty}`
           : "Mobiliário & Agenda",
-        title: `Quais salas de ${specLabel} têm divã e poltrona?`,
-        desc: "Mostra a estrutura física de cada consultório e horários livres",
+        title: `Ver salas de ${specLabel} disponíveis amanhã`,
+        desc: "Mostra fotos, estrutura física (divã/poltronas) e horários livres",
         icon: Sofa,
       },
     ];
@@ -647,7 +662,7 @@ export function SearchTab({
         toast({
           title: "Digite ou fale sua dúvida",
           description:
-            'Ex: "Atendo 2h a 4h por semana" ou "Qual o valor do turno fixo?"',
+            'Ex: "É possível sublocar uma sala?" ou "Atendo 2h a 4h por semana"',
         });
         return;
       }
@@ -665,11 +680,14 @@ export function SearchTab({
       }, 60);
 
       try {
+        // Inclui headline + recommendationSummary + closingQuestion para a IA lembrar exatamente a pergunta que fez antes!
         const historyPayload = aiExchanges.flatMap((ex) => [
           { role: "user" as const, content: ex.userQuery },
           {
             role: "assistant" as const,
-            content: `${ex.headline} ${ex.recommendationSummary}`,
+            content: [ex.headline, ex.recommendationSummary, ex.closingQuestion]
+              .filter(Boolean)
+              .join(" "),
           },
         ]);
 
@@ -744,14 +762,12 @@ export function SearchTab({
           headline:
             ext?.headline ||
             data.assistantMessage ||
-            "Aqui estão as melhores opções para o seu atendimento:",
+            "Aqui está a melhor recomendação para o seu atendimento:",
           comparisonBlocks: Array.isArray(ext?.comparisonBlocks)
             ? ext.comparisonBlocks
             : [],
           recommendationSummary: ext?.recommendationSummary || "",
-          closingQuestion:
-            ext?.closingQuestion ||
-            "Deseja simular outra data ou comparar os pacotes Fusion Pass+?",
+          closingQuestion: ext?.closingQuestion || "",
           followUpSuggestions: Array.isArray(ext?.followUpSuggestions)
             ? ext.followUpSuggestions
             : dynamicStarterCards.map((c) => c.title),
@@ -1189,8 +1205,7 @@ export function SearchTab({
   const hasActiveWalletCredits = profile.balance > 0 || Boolean(activeSub);
 
   // ==========================================================================
-  // PÁGINA FULL-SCREEN DO CONCIERGE IA (RENDERIZADA NO DOCUMENT.BODY VIA PORTAL)
-  // Garante 100% da tela dedicada ao chat, sem barra superior/inferior do app
+  // PÁGINA FULL-SCREEN DO CONCIERGE IA (DIÁLOGO CURTO + VEREDITO ÚNICO)
   // ==========================================================================
   const fullScreenConciergeOverlay =
     canUseAIConcierge &&
@@ -1201,7 +1216,7 @@ export function SearchTab({
           <div className="fixed inset-0 z-[9999] bg-[#FAF7F4] flex flex-col h-[100dvh] w-screen overflow-hidden font-sans animate-in fade-in duration-200">
             {/* 1. CABEÇALHO EXCLUSIVO DA PÁGINA DO CHAT */}
             <div className="bg-[#141210] text-white px-4 sm:px-6 pt-[max(env(safe-area-inset-top,14px),14px)] pb-3.5 border-b border-white/10 shrink-0 shadow-md">
-              <div className="max-w-4xl mx-auto flex items-center justify-between gap-3">
+              <div className="max-w-3xl mx-auto flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <button
                     type="button"
@@ -1235,8 +1250,8 @@ export function SearchTab({
                     </div>
                     <p className="text-[11px] text-stone-300 truncate">
                       {profile.specialty
-                        ? `Consultoria de rentabilidade e salas para ${profile.specialty}`
-                        : "Simulador de horas, Turno Fixo, Coanfitrião (80%) e agenda"}
+                        ? `Consultoria rápida e direta para ${profile.specialty}`
+                        : "Descubra em 2 perguntas o plano mais econômico para você"}
                     </p>
                   </div>
                 </div>
@@ -1252,7 +1267,7 @@ export function SearchTab({
                       }}
                       className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-[11px] font-bold text-stone-200 transition-colors cursor-pointer"
                     >
-                      Limpar chat
+                      Recomeçar
                     </button>
                   )}
                   <button
@@ -1260,90 +1275,66 @@ export function SearchTab({
                     onClick={() => setIsAISearchExpanded(false)}
                     className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold text-white flex items-center gap-1 cursor-pointer"
                   >
-                    <span className="hidden sm:inline">Voltar às salas</span>
+                    <span className="hidden sm:inline">Fechar</span>
                     <X className="w-4 h-4" />
                   </button>
                 </div>
               </div>
             </div>
 
-            {/* 2. ÁREA DE MENSAGENS COM ROLAGEM 100% ISOLADA */}
+            {/* 2. ÁREA DE DIÁLOGO COM ROLAGEM 100% ISOLADA */}
             <div className="flex-1 overflow-y-auto overscroll-contain px-4 sm:px-6 py-5">
-              <div className="max-w-4xl mx-auto space-y-6 pb-8">
+              <div className="max-w-3xl mx-auto space-y-5 pb-8">
                 {/* GUIA DE CONCLUSÃO DE PERFIL (SE INCOMPLETO) */}
                 {!profile.isComplete && (
-                  <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-amber-50/90 via-orange-50/60 to-white border border-[#BF4B24]/30 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="space-y-2 flex-1">
+                  <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-50/90 via-orange-50/60 to-white border border-[#BF4B24]/30 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="space-y-1 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider bg-[#BF4B24] text-white px-2.5 py-0.5 rounded-full">
+                        <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider bg-[#BF4B24] text-white px-2 py-0.5 rounded-full">
                           <AlertCircle className="w-3 h-3" />
-                          Cadastro {profile.completionPct}% concluído
+                          Perfil {profile.completionPct}%
                         </span>
                         <span className="text-xs font-bold text-stone-900">
-                          Personalize sua experiência e libere o check-in
-                          digital
+                          Falta preencher: {profile.missingFields.join(", ")}
                         </span>
-                      </div>
-                      <p className="text-xs text-stone-600 leading-relaxed">
-                        Notamos que ainda falta preencher:{" "}
-                        <strong className="text-stone-900">
-                          {profile.missingFields.join(", ")}
-                        </strong>
-                        . Ao completar seu perfil, eu recomendo automaticamente
-                        os consultórios equipados para a sua área.
-                      </p>
-                      <div className="w-full max-w-xs h-1.5 bg-stone-200 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-[#BF4B24] rounded-full transition-all duration-500"
-                          style={{ width: `${profile.completionPct}%` }}
-                        />
                       </div>
                     </div>
                     <button
                       type="button"
                       onClick={handleGoToCompleteProfile}
-                      className="px-4 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 shadow-2xs transition-all active:scale-95 cursor-pointer"
+                      className="px-3.5 py-2 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 cursor-pointer"
                     >
-                      <UserCheck className="w-4 h-4 text-[#FBBF24]" />
-                      <span>Completar meu perfil agora</span>
-                      <ChevronRight className="w-3.5 h-3.5" />
+                      <UserCheck className="w-3.5 h-3.5 text-[#FBBF24]" />
+                      <span>Completar perfil</span>
                     </button>
                   </div>
                 )}
 
-                {/* TELA DE BOAS-VINDAS QUANDO O CHAT ESTÁ VAZIO */}
+                {/* TELA INICIAL CONVERSACIONAL */}
                 {aiExchanges.length === 0 && !isRunningAISearch && (
-                  <div className="space-y-5">
+                  <div className="space-y-4">
                     <div className="bg-white rounded-3xl p-5 border border-stone-200/85 shadow-2xs flex items-start gap-3.5">
                       <div className="w-10 h-10 rounded-2xl bg-[#FAF7F4] border border-[#BF4B24]/25 text-[#BF4B24] flex items-center justify-center shrink-0 mt-0.5">
                         <MessageSquareText className="w-5 h-5" />
                       </div>
                       <div className="space-y-1.5">
-                        <h3 className="text-base font-bold text-stone-900">
-                          Olá, Dr(a). {firstName}! Sou seu Consultor Inteligente
-                          na Fusion Clinic.
+                        <h3 className="text-sm sm:text-base font-bold text-stone-900">
+                          Olá, Dr(a). {firstName}! Como posso te ajudar hoje?
                         </h3>
                         <p className="text-xs sm:text-sm text-stone-600 leading-relaxed">
-                          Diga quantas horas por semana você pretende atender (e
-                          se são <strong>horários seguidos ou quebrados</strong>
-                          ) para eu calcular o plano mais lucrativo — desde{" "}
-                          <strong>Hora Avulsa</strong> e{" "}
-                          <strong>Fusion Pass+ (-41%)</strong> até{" "}
-                          <strong>Turno Fixo</strong> ou{" "}
-                          <strong>
-                            Sala Fixa como Coanfitrião (abatendo até 80% do
-                            aluguel)
-                          </strong>
-                          .
+                          Me conte quantas horas por semana pretende atender ou
+                          qual é a sua dúvida. Eu faço as perguntas certas e te
+                          entrego <strong>a melhor recomendação</strong> com o
+                          cálculo exato da sua economia.
                         </p>
                       </div>
                     </div>
 
                     <div>
-                      <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400 mb-3 pl-1">
-                        Escolha uma consultoria rápida ou faça sua pergunta:
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400 mb-2.5 pl-1">
+                        Toque para iniciar a conversa:
                       </p>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                         {dynamicStarterCards.map((card) => {
                           const Icon = card.icon;
                           return (
@@ -1351,9 +1342,9 @@ export function SearchTab({
                               key={card.title}
                               type="button"
                               onClick={() => executeAISearch(card.title)}
-                              className="group p-4 rounded-2xl bg-white hover:bg-orange-50/40 border border-stone-200/90 hover:border-[#BF4B24]/45 text-left transition-all flex items-start gap-3.5 shadow-2xs hover:shadow-sm cursor-pointer active:scale-[0.99]"
+                              className="group p-3.5 rounded-2xl bg-white hover:bg-orange-50/40 border border-stone-200/90 hover:border-[#BF4B24]/45 text-left transition-all flex items-start gap-3 shadow-2xs cursor-pointer active:scale-[0.99]"
                             >
-                              <div className="w-10 h-10 rounded-xl bg-[#FAF7F4] group-hover:bg-[#BF4B24] text-[#BF4B24] group-hover:text-white border border-[#BF4B24]/20 flex items-center justify-center shrink-0 transition-colors mt-0.5">
+                              <div className="w-9 h-9 rounded-xl bg-[#FAF7F4] group-hover:bg-[#BF4B24] text-[#BF4B24] group-hover:text-white border border-[#BF4B24]/20 flex items-center justify-center shrink-0 transition-colors mt-0.5">
                                 <Icon className="w-4 h-4" />
                               </div>
                               <div className="min-w-0 flex-1">
@@ -1361,9 +1352,9 @@ export function SearchTab({
                                   {card.badge}
                                 </span>
                                 <p className="text-xs sm:text-sm font-bold text-stone-900 group-hover:text-[#BF4B24] transition-colors mt-0.5 leading-snug">
-                                  “{card.title}”
+                                  {card.title}
                                 </p>
-                                <p className="text-[11px] text-stone-500 mt-1 line-clamp-2">
+                                <p className="text-[11px] text-stone-500 mt-0.5 line-clamp-1">
                                   {card.desc}
                                 </p>
                               </div>
@@ -1376,428 +1367,379 @@ export function SearchTab({
                   </div>
                 )}
 
-                {/* HISTÓRICO DE PERGUNTAS E RESPOSTAS */}
-                {aiExchanges.map((exchange) => (
-                  <div key={exchange.id} className="space-y-4">
-                    {/* Pergunta do Especialista */}
-                    <div className="flex flex-col items-end">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-1 pr-1">
-                        Dr(a). {firstName}{" "}
-                        {profile.specialty ? `• ${profile.specialty}` : ""}
-                      </span>
-                      <div className="bg-stone-900 text-white px-4 py-3 rounded-2xl rounded-tr-xs text-xs sm:text-sm font-semibold max-w-[88%] sm:max-w-[75%] shadow-xs">
-                        {exchange.userQuery}
-                      </div>
-                    </div>
+                {/* DIÁLOGO ENTRE O PROFISSIONAL E O CONCIERGE */}
+                {aiExchanges.map((exchange) => {
+                  const hasSingleVerdict =
+                    exchange.comparisonBlocks.length === 1;
 
-                    {/* Resposta do Concierge */}
-                    <div className="bg-white rounded-3xl p-4 sm:p-6 border border-stone-200/90 shadow-xs space-y-5">
-                      <div className="flex items-start gap-3">
-                        <div className="w-8 h-8 rounded-xl bg-[#FAF7F4] border border-[#BF4B24]/25 text-[#BF4B24] flex items-center justify-center shrink-0 mt-0.5">
-                          <Sparkles className="w-4 h-4" />
-                        </div>
-                        <div className="space-y-1 flex-1">
-                          <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#BF4B24] block">
-                            Análise do Concierge Fusion
-                          </span>
-                          <p className="text-xs sm:text-[15px] font-bold text-stone-900 leading-relaxed">
-                            {exchange.headline}
-                          </p>
+                  return (
+                    <div key={exchange.id} className="space-y-3.5">
+                      {/* Balão do Profissional */}
+                      <div className="flex flex-col items-end">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-1 pr-1">
+                          Você
+                        </span>
+                        <div className="bg-stone-900 text-white px-4 py-2.5 rounded-2xl rounded-tr-xs text-xs sm:text-sm font-semibold max-w-[85%] shadow-xs">
+                          {exchange.userQuery}
                         </div>
                       </div>
 
-                      {/* VITRINE DE SALAS COM FOTO, DESCRIÇÃO DO MOBILIÁRIO E PREÇOS CLAROS */}
-                      {exchange.recommendedRooms.length > 0 && (
-                        <div className="space-y-3">
-                          <div className="flex items-center justify-between px-1">
-                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
-                              <CalendarCheck className="w-3.5 h-3.5 text-[#BF4B24]" />
-                              Consultórios recomendados (toque para ver fotos e
-                              reservar)
-                            </span>
+                      {/* Balão Direto e Conversacional do Concierge */}
+                      <div className="bg-white rounded-3xl p-4 sm:p-5 border border-stone-200/90 shadow-xs space-y-4">
+                        <div className="flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-xl bg-[#FAF7F4] border border-[#BF4B24]/25 text-[#BF4B24] flex items-center justify-center shrink-0 mt-0.5">
+                            <Sparkles className="w-4 h-4" />
                           </div>
+                          <div className="space-y-1.5 flex-1">
+                            <p className="text-xs sm:text-[15px] font-medium text-stone-800 leading-relaxed">
+                              {renderFormattedText(exchange.headline)}
+                            </p>
+                          </div>
+                        </div>
 
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
-                            {exchange.recommendedRooms.map((match) => {
-                              const fullRoom = dbRooms.find(
-                                (r) => r.id === match.roomId,
-                              );
-                              if (!fullRoom) return null;
-
-                              const isMaster = fullRoom.tier === "master";
-                              const isVip = fullRoom.tier === "vip";
-                              const passRate =
-                                bestHourlyRates[fullRoom.tier] ||
-                                (isMaster ? 50 : isVip ? 34 : 27.95);
-                              const neighborhood =
-                                fullRoom.rawAddress?.neighborhood ||
-                                match.neighborhood ||
-                                "Lagoa Nova";
-                              const hourlyRate =
-                                match.hourlyPrice ||
-                                fullRoom.hourlyPriceNumber ||
-                                45;
-                              const shiftPrice =
-                                match.shiftPrice ?? fullRoom.shiftPriceNumber;
-                              const monthlyPrice =
-                                match.monthlyPrice ??
-                                fullRoom.monthlyPriceNumber;
-
-                              const equipmentSummary =
-                                match.aiPitch ||
-                                fullRoom.description ||
-                                "Consultório climatizado com isolamento acústico, recepção e Wi-Fi.";
-
-                              return (
-                                <div
-                                  key={match.roomId}
-                                  onClick={() => {
-                                    setIsAISearchExpanded(false);
-                                    if (onOpenRoom) {
-                                      onOpenRoom({
-                                        ...fullRoom,
-                                        selectedModality:
-                                          appliedFilters.modality,
-                                        preselectedDate:
-                                          exchange.targetDateISO || undefined,
-                                        preselectedSlot:
-                                          match.exactSlotAvailable &&
-                                          match.requestedSlotLabel
-                                            ? match.requestedSlotLabel
-                                            : match.availableSlots[0] ||
-                                              undefined,
-                                      });
-                                    }
-                                  }}
-                                  className={`group rounded-2xl bg-white border overflow-hidden transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md cursor-pointer flex flex-col ${
-                                    match.exactSlotAvailable
-                                      ? "border-emerald-500/60 ring-1 ring-emerald-500/20"
-                                      : "border-stone-200/90 hover:border-[#BF4B24]/50"
-                                  }`}
-                                >
-                                  <div className="relative w-full h-36 bg-stone-100 overflow-hidden">
-                                    <Image
-                                      src={fullRoom.image}
-                                      alt={fullRoom.name}
-                                      fill
-                                      sizes="(max-width: 768px) 100vw, 320px"
-                                      className="object-cover group-hover:scale-105 transition-transform duration-500"
-                                      onError={(e: any) => {
-                                        e.target.src = "/placeholder.jpg";
-                                      }}
-                                    />
-                                    <div className="absolute inset-0 bg-gradient-to-t from-black/65 via-black/10 to-black/20 pointer-events-none" />
-
-                                    <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-1 z-10">
-                                      <span
-                                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 shadow-2xs ${
-                                          isMaster
-                                            ? "bg-stone-950/90 text-amber-300"
-                                            : isVip
-                                              ? "bg-[#BF4B24] text-white"
-                                              : "bg-white/95 text-stone-800"
-                                        }`}
-                                      >
-                                        {isMaster ? (
-                                          <>
-                                            <Crown className="w-2.5 h-2.5" />{" "}
-                                            Premium
-                                          </>
-                                        ) : isVip ? (
-                                          <>
-                                            <Star className="w-2.5 h-2.5" /> VIP
-                                          </>
-                                        ) : (
-                                          <>
-                                            <Shield className="w-2.5 h-2.5" />{" "}
-                                            Basic
-                                          </>
-                                        )}
+                        {/* CARD DE VEREDITO ÚNICO (LARGURA TOTAL QUANDO HÁ 1 RECOMENDAÇÃO) */}
+                        {exchange.comparisonBlocks.length > 0 && (
+                          <div
+                            className={
+                              hasSingleVerdict
+                                ? "grid grid-cols-1 gap-3"
+                                : exchange.comparisonBlocks.length === 2
+                                  ? "grid grid-cols-1 sm:grid-cols-2 gap-3"
+                                  : "grid grid-cols-1 sm:grid-cols-3 gap-3"
+                            }
+                          >
+                            {exchange.comparisonBlocks.map((block, bIdx) => (
+                              <div
+                                key={bIdx}
+                                className={`p-4 rounded-2xl border flex flex-col justify-between space-y-2.5 ${
+                                  hasSingleVerdict
+                                    ? "bg-gradient-to-br from-[#FAF7F4] to-orange-50/40 border-[#BF4B24]/35 shadow-2xs"
+                                    : "bg-[#FAF7F4] border-stone-200/90"
+                                }`}
+                              >
+                                <div className="space-y-2">
+                                  <div className="pb-2 border-b border-stone-200/70 flex items-center justify-between gap-2 flex-wrap">
+                                    <h4 className="text-xs sm:text-sm font-extrabold text-stone-900">
+                                      {renderFormattedText(block.title)}
+                                    </h4>
+                                    {block.subtitle && (
+                                      <span className="text-[11px] font-bold text-[#BF4B24] bg-white px-2.5 py-0.5 rounded-full border border-[#BF4B24]/20">
+                                        {block.subtitle}
                                       </span>
-
-                                      {fullRoom.reviews_count > 0 && (
-                                        <span className="bg-black/55 backdrop-blur-xs text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
-                                          <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
-                                          {Number(fullRoom.rating).toFixed(1)}
-                                        </span>
-                                      )}
-                                    </div>
-
-                                    <div className="absolute bottom-2 left-2.5 right-2.5 flex items-center justify-between z-10">
-                                      <span
-                                        className={`inline-flex items-center gap-1 text-[10px] font-extrabold px-2 py-0.5 rounded-md shadow-2xs ${
-                                          match.exactSlotAvailable
-                                            ? "bg-emerald-600 text-white"
-                                            : "bg-amber-500 text-stone-950"
-                                        }`}
-                                      >
-                                        <Clock className="w-2.5 h-2.5" />
-                                        {match.matchReason}
-                                      </span>
-                                    </div>
+                                    )}
                                   </div>
+                                  <ul className="space-y-2 pt-0.5">
+                                    {block.bullets.map((bullet, i) => (
+                                      <li
+                                        key={i}
+                                        className="text-xs text-stone-700 leading-relaxed flex items-start gap-2"
+                                      >
+                                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                                        <span>
+                                          {renderFormattedText(bullet)}
+                                        </span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
 
-                                  <div className="p-3.5 flex-1 flex flex-col justify-between bg-white space-y-2.5">
-                                    <div className="space-y-1.5">
-                                      <div className="flex items-center gap-1 text-[11px] text-stone-500 font-medium truncate">
-                                        <MapPin className="w-3 h-3 text-[#BF4B24] shrink-0" />
-                                        <span className="truncate">
+                        {/* VITRINE DE SALAS (SÓ APARECE QUANDO O USUÁRIO PEDE PARA VER SALAS) */}
+                        {exchange.recommendedRooms.length > 0 && (
+                          <div className="space-y-3 pt-1">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                              {exchange.recommendedRooms.map((match) => {
+                                const fullRoom = dbRooms.find(
+                                  (r) => r.id === match.roomId,
+                                );
+                                if (!fullRoom) return null;
+
+                                const isMaster = fullRoom.tier === "master";
+                                const isVip = fullRoom.tier === "vip";
+                                const passRate =
+                                  bestHourlyRates[fullRoom.tier] ||
+                                  (isMaster ? 50 : isVip ? 34 : 27.95);
+                                const neighborhood =
+                                  fullRoom.rawAddress?.neighborhood ||
+                                  match.neighborhood ||
+                                  "Lagoa Nova";
+                                const hourlyRate =
+                                  match.hourlyPrice ||
+                                  fullRoom.hourlyPriceNumber ||
+                                  45;
+                                const shiftPrice =
+                                  match.shiftPrice ?? fullRoom.shiftPriceNumber;
+                                const monthlyPrice =
+                                  match.monthlyPrice ??
+                                  fullRoom.monthlyPriceNumber;
+
+                                const equipmentSummary =
+                                  match.aiPitch ||
+                                  fullRoom.description ||
+                                  "Consultório climatizado com isolamento acústico, recepção e Wi-Fi.";
+
+                                return (
+                                  <div
+                                    key={match.roomId}
+                                    onClick={() => {
+                                      setIsAISearchExpanded(false);
+                                      if (onOpenRoom) {
+                                        onOpenRoom({
+                                          ...fullRoom,
+                                          selectedModality:
+                                            appliedFilters.modality,
+                                          preselectedDate:
+                                            exchange.targetDateISO || undefined,
+                                          preselectedSlot:
+                                            match.exactSlotAvailable &&
+                                            match.requestedSlotLabel
+                                              ? match.requestedSlotLabel
+                                              : match.availableSlots[0] ||
+                                                undefined,
+                                        });
+                                      }
+                                    }}
+                                    className="group rounded-2xl bg-white border border-stone-200/90 hover:border-[#BF4B24]/50 overflow-hidden transition-all duration-300 hover:shadow-md cursor-pointer flex flex-col"
+                                  >
+                                    <div className="relative w-full h-32 bg-stone-100 overflow-hidden">
+                                      <Image
+                                        src={fullRoom.image}
+                                        alt={fullRoom.name}
+                                        fill
+                                        sizes="(max-width: 768px) 100vw, 320px"
+                                        className="object-cover group-hover:scale-105 transition-transform duration-500"
+                                        onError={(e: any) => {
+                                          e.target.src = "/placeholder.jpg";
+                                        }}
+                                      />
+                                      <div className="absolute inset-0 bg-gradient-to-t from-black/65 via-black/10 to-black/20 pointer-events-none" />
+
+                                      <div className="absolute top-2 left-2 right-2 flex items-center justify-between gap-1 z-10">
+                                        <span
+                                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 ${
+                                            isMaster
+                                              ? "bg-stone-950/90 text-amber-300"
+                                              : isVip
+                                                ? "bg-[#BF4B24] text-white"
+                                                : "bg-white/95 text-stone-800"
+                                          }`}
+                                        >
+                                          {isMaster
+                                            ? "Premium"
+                                            : isVip
+                                              ? "VIP"
+                                              : "Basic"}
+                                        </span>
+                                      </div>
+
+                                      <div className="absolute bottom-2 left-2 right-2 z-10">
+                                        <span className="inline-flex items-center gap-1 text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-emerald-600 text-white">
+                                          <Clock className="w-2.5 h-2.5" />
+                                          {match.matchReason}
+                                        </span>
+                                      </div>
+                                    </div>
+
+                                    <div className="p-3 flex-1 flex flex-col justify-between bg-white space-y-2">
+                                      <div className="space-y-1">
+                                        <span className="text-[10px] text-stone-500 font-medium block truncate">
                                           {neighborhood} •{" "}
                                           {fullRoom.specialty ||
                                             fullRoom.category}
                                         </span>
+                                        <h4 className="font-bold text-xs sm:text-sm text-stone-900 group-hover:text-[#BF4B24] transition-colors line-clamp-1">
+                                          {fullRoom.name}
+                                        </h4>
+                                        <p className="text-[11px] text-stone-600 leading-snug line-clamp-2">
+                                          {equipmentSummary}
+                                        </p>
+                                        <div className="pt-1 flex items-baseline gap-1.5 flex-wrap">
+                                          <span className="text-xs font-extrabold text-stone-900">
+                                            R$ {hourlyRate}/h
+                                          </span>
+                                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
+                                            Pass+ R${" "}
+                                            {Number(passRate)
+                                              .toFixed(2)
+                                              .replace(".00", "")}
+                                            /h
+                                          </span>
+                                        </div>
+                                        {(shiftPrice || monthlyPrice) && (
+                                          <div className="flex items-center gap-1 flex-wrap text-[10px] font-semibold text-stone-500">
+                                            {shiftPrice && (
+                                              <span>Turno R$ {shiftPrice}</span>
+                                            )}
+                                            {shiftPrice && monthlyPrice && (
+                                              <span>•</span>
+                                            )}
+                                            {monthlyPrice && (
+                                              <span>
+                                                Mensal R$ {monthlyPrice}
+                                              </span>
+                                            )}
+                                          </div>
+                                        )}
                                       </div>
 
-                                      <h4 className="font-bold text-sm text-stone-900 group-hover:text-[#BF4B24] transition-colors line-clamp-1">
-                                        {fullRoom.name}
-                                      </h4>
-
-                                      {/* Descrição da Estrutura Física da Sala (Poltrona, Divã, Maca, etc.) */}
-                                      <p className="text-[11px] text-stone-600 leading-snug line-clamp-2 bg-[#FAF7F4] p-2 rounded-lg border border-stone-200/70">
-                                        {equipmentSummary}
-                                      </p>
-
-                                      {/* Preço por Hora + Pass+ */}
-                                      <div className="pt-1 flex items-baseline gap-1.5 flex-wrap">
-                                        <span className="text-xs font-extrabold text-stone-900">
-                                          R$ {hourlyRate}/h avulso
-                                        </span>
-                                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
-                                          ou R${" "}
-                                          {Number(passRate)
-                                            .toFixed(2)
-                                            .replace(".00", "")}
-                                          /h no Pass+
-                                        </span>
-                                      </div>
-
-                                      {/* Preços de Turno e Sala Fixa Mensal (se disponíveis) */}
-                                      {(shiftPrice || monthlyPrice) && (
-                                        <div className="flex items-center gap-1.5 flex-wrap text-[10px] font-semibold text-stone-500">
-                                          {shiftPrice && (
-                                            <span className="bg-stone-100 px-1.5 py-0.5 rounded">
-                                              Turno: R$ {shiftPrice}
-                                            </span>
-                                          )}
-                                          {monthlyPrice && (
-                                            <span className="bg-orange-50 text-[#BF4B24] px-1.5 py-0.5 rounded">
-                                              Fixo Mensal: R$ {monthlyPrice}
-                                            </span>
-                                          )}
+                                      {match.availableSlots.length > 0 && (
+                                        <div className="flex items-center gap-1.5 flex-wrap pt-1.5 border-t border-stone-100">
+                                          {match.availableSlots
+                                            .slice(0, 3)
+                                            .map((slot) => (
+                                              <button
+                                                key={slot}
+                                                type="button"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  setIsAISearchExpanded(false);
+                                                  if (onOpenRoom) {
+                                                    onOpenRoom({
+                                                      ...fullRoom,
+                                                      selectedModality: "hora",
+                                                      preselectedDate:
+                                                        exchange.targetDateISO ||
+                                                        undefined,
+                                                      preselectedSlot: slot,
+                                                    });
+                                                  }
+                                                }}
+                                                className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-[#FAF7F4] hover:bg-[#BF4B24] text-stone-800 hover:text-white border border-stone-200"
+                                              >
+                                                {slot}
+                                              </button>
+                                            ))}
                                         </div>
                                       )}
                                     </div>
-
-                                    {match.availableSlots.length > 0 && (
-                                      <div className="space-y-1.5 pt-2 border-t border-stone-100">
-                                        <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block">
-                                          Toque no horário para reservar:
-                                        </span>
-                                        <div className="flex items-center gap-1.5 flex-wrap">
-                                          {match.availableSlots
-                                            .slice(0, 3)
-                                            .map((slot) => {
-                                              const isReq =
-                                                slot ===
-                                                match.requestedSlotLabel;
-                                              return (
-                                                <button
-                                                  key={slot}
-                                                  type="button"
-                                                  onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    setIsAISearchExpanded(
-                                                      false,
-                                                    );
-                                                    if (onOpenRoom) {
-                                                      onOpenRoom({
-                                                        ...fullRoom,
-                                                        selectedModality:
-                                                          "hora",
-                                                        preselectedDate:
-                                                          exchange.targetDateISO ||
-                                                          undefined,
-                                                        preselectedSlot: slot,
-                                                      });
-                                                    }
-                                                  }}
-                                                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                                                    isReq
-                                                      ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs"
-                                                      : "bg-[#FAF7F4] hover:bg-[#BF4B24] text-stone-800 hover:text-white border border-stone-200/90"
-                                                  }`}
-                                                >
-                                                  {slot}
-                                                </button>
-                                              );
-                                            })}
-                                        </div>
-                                      </div>
-                                    )}
-
-                                    <div className="pt-2 border-t border-stone-100 flex items-center justify-between text-xs font-bold text-[#BF4B24]">
-                                      <span>Ver fotos e detalhes</span>
-                                      <ArrowRight className="w-3.5 h-3.5" />
-                                    </div>
                                   </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* BLOCOS COMPARATIVOS */}
-                      {exchange.comparisonBlocks.length > 0 && (
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          {exchange.comparisonBlocks.map((block, bIdx) => (
-                            <div
-                              key={bIdx}
-                              className="p-4 rounded-2xl bg-[#FAF7F4] border border-stone-200/90 flex flex-col justify-between space-y-2.5"
-                            >
-                              <div className="space-y-2">
-                                <div className="pb-2 border-b border-stone-200/70">
-                                  <h4 className="text-xs sm:text-sm font-extrabold text-stone-900">
-                                    {block.title}
-                                  </h4>
-                                  {block.subtitle && (
-                                    <p className="text-[11px] font-bold text-[#BF4B24] mt-0.5">
-                                      {block.subtitle}
-                                    </p>
-                                  )}
-                                </div>
-                                <ul className="space-y-2 pt-0.5">
-                                  {block.bullets.map((bullet, i) => (
-                                    <li
-                                      key={i}
-                                      className="text-[11px] sm:text-xs text-stone-700 leading-snug flex items-start gap-2"
-                                    >
-                                      <CheckCircle2 className="w-3.5 h-3.5 text-[#BF4B24] shrink-0 mt-0.5" />
-                                      <span>{bullet}</span>
-                                    </li>
-                                  ))}
-                                </ul>
-                              </div>
+                                );
+                              })}
                             </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* RECOMENDAÇÃO DE BOLSO */}
-                      {exchange.recommendationSummary && (
-                        <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-emerald-50/90 to-teal-50/50 border border-emerald-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <div className="flex items-start gap-2.5">
-                            <BadgeCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                            <p className="text-xs text-emerald-950 font-medium leading-relaxed">
-                              <strong className="font-extrabold">
-                                Orientação do Concierge:
-                              </strong>{" "}
-                              {exchange.recommendationSummary}
-                            </p>
                           </div>
-
-                          {exchange.suggestedCta === "complete_profile" && (
-                            <button
-                              type="button"
-                              onClick={handleGoToCompleteProfile}
-                              className="px-4 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
-                            >
-                              <UserCheck className="w-3.5 h-3.5 text-[#FBBF24]" />
-                              <span>Completar perfil em 1 min</span>
-                            </button>
-                          )}
-
-                          {exchange.suggestedCta === "open_pass_modal" && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setIsAISearchExpanded(false);
-                                handleOpenPassWithTier("vip");
-                              }}
-                              className="px-4 py-2.5 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
-                            >
-                              <Tag className="w-3.5 h-3.5" />
-                              <span>Simular Fusion Pass+ (-41%)</span>
-                            </button>
-                          )}
-
-                          {exchange.suggestedCta === "switch_to_turno" && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setIsAISearchExpanded(false);
-                                setPendingFilters((p) => ({
-                                  ...p,
-                                  modality: "turno",
-                                }));
-                                setAppliedFilters((p) => ({
-                                  ...p,
-                                  modality: "turno",
-                                }));
-                              }}
-                              className="px-4 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                            >
-                              <span>Ver Salas para Turno / Fixo</span>
-                              <ChevronRight className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      )}
-
-                      {/* PRÓXIMAS PERGUNTAS SUGERIDAS */}
-                      <div className="pt-1 space-y-2.5">
-                        {exchange.closingQuestion && (
-                          <p className="text-xs font-bold text-stone-700">
-                            {exchange.closingQuestion}
-                          </p>
                         )}
-                        <div className="flex flex-wrap gap-2">
-                          {exchange.followUpSuggestions.map(
-                            (followUp, fIdx) => (
+
+                        {/* NOTA COMPLEMENTAR + BOTÃO DE AÇÃO DO VEREDITO */}
+                        {(exchange.recommendationSummary ||
+                          exchange.suggestedCta !== "none") && (
+                          <div className="p-3.5 rounded-2xl bg-emerald-50/80 border border-emerald-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            {exchange.recommendationSummary ? (
+                              <div className="flex items-start gap-2">
+                                <BadgeCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                                <p className="text-xs text-emerald-950 font-medium leading-relaxed">
+                                  {renderFormattedText(
+                                    exchange.recommendationSummary,
+                                  )}
+                                </p>
+                              </div>
+                            ) : (
+                              <span className="text-xs font-bold text-emerald-950">
+                                Deseja avançar com esta recomendação?
+                              </span>
+                            )}
+
+                            {exchange.suggestedCta === "complete_profile" && (
                               <button
-                                key={fIdx}
                                 type="button"
-                                onClick={() => executeAISearch(followUp)}
-                                className="text-[11px] sm:text-xs font-semibold text-[#BF4B24] bg-[#FAF7F4] hover:bg-[#BF4B24] hover:text-white border border-[#BF4B24]/30 px-3.5 py-2 rounded-full transition-all cursor-pointer text-left flex items-center gap-1.5 shadow-2xs"
+                                onClick={handleGoToCompleteProfile}
+                                className="px-4 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 cursor-pointer"
                               >
-                                <span>{followUp}</span>
-                                <ArrowRight className="w-3 h-3 opacity-70" />
+                                <UserCheck className="w-3.5 h-3.5 text-[#FBBF24]" />
+                                <span>Completar perfil</span>
                               </button>
-                            ),
-                          )}
-                        </div>
+                            )}
+
+                            {exchange.suggestedCta === "open_pass_modal" && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsAISearchExpanded(false);
+                                  handleOpenPassWithTier("vip");
+                                }}
+                                className="px-4 py-2.5 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
+                              >
+                                <Tag className="w-3.5 h-3.5" />
+                                <span>Abrir Planos Fusion Pass+</span>
+                              </button>
+                            )}
+
+                            {exchange.suggestedCta === "switch_to_turno" && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsAISearchExpanded(false);
+                                  setPendingFilters((p) => ({
+                                    ...p,
+                                    modality: "turno",
+                                  }));
+                                  setAppliedFilters((p) => ({
+                                    ...p,
+                                    modality: "turno",
+                                  }));
+                                }}
+                                className="px-4 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 cursor-pointer"
+                              >
+                                <span>Ver Salas para Turno / Fixo</span>
+                                <ChevronRight className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        )}
+
+                        {/* PERGUNTA DIRETA DO CONCIERGE + RESPOSTAS RÁPIDAS */}
+                        {(exchange.closingQuestion ||
+                          exchange.followUpSuggestions.length > 0) && (
+                          <div className="pt-2 border-t border-stone-100 space-y-2.5">
+                            {exchange.closingQuestion && (
+                              <p className="text-xs sm:text-sm font-bold text-stone-900 leading-snug">
+                                {renderFormattedText(exchange.closingQuestion)}
+                              </p>
+                            )}
+                            <div className="flex flex-wrap gap-2">
+                              {exchange.followUpSuggestions.map(
+                                (followUp, fIdx) => (
+                                  <button
+                                    key={fIdx}
+                                    type="button"
+                                    onClick={() => executeAISearch(followUp)}
+                                    className="text-xs font-bold text-[#BF4B24] bg-[#FAF7F4] hover:bg-[#BF4B24] hover:text-white border border-[#BF4B24]/35 px-3.5 py-2 rounded-xl transition-all cursor-pointer text-left flex items-center gap-1.5 shadow-2xs active:scale-95"
+                                  >
+                                    <span>{followUp}</span>
+                                    <ArrowRight className="w-3.5 h-3.5 opacity-80 shrink-0" />
+                                  </button>
+                                ),
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
 
-                {/* CARREGAMENTO ANIMADO */}
+                {/* ESTADO DE CARREGAMENTO */}
                 {isRunningAISearch && (
                   <div className="space-y-3 animate-in fade-in duration-150">
                     {pendingUserQuestion && (
                       <div className="flex flex-col items-end">
                         <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-1 pr-1">
-                          Dr(a). {firstName}
+                          Você
                         </span>
-                        <div className="bg-stone-900 text-white px-4 py-3 rounded-2xl rounded-tr-xs text-xs sm:text-sm font-semibold max-w-[85%]">
+                        <div className="bg-stone-900 text-white px-4 py-2.5 rounded-2xl rounded-tr-xs text-xs sm:text-sm font-semibold max-w-[85%]">
                           {pendingUserQuestion}
                         </div>
                       </div>
                     )}
-                    <div className="bg-white rounded-3xl p-5 border border-stone-200/90 shadow-2xs flex items-center gap-3.5">
-                      <div className="w-9 h-9 rounded-xl bg-[#FAF7F4] border border-[#BF4B24]/25 flex items-center justify-center shrink-0">
+                    <div className="bg-white rounded-3xl p-4 border border-stone-200/90 shadow-2xs flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-xl bg-[#FAF7F4] border border-[#BF4B24]/25 flex items-center justify-center shrink-0">
                         <Loader2 className="w-4 h-4 text-[#BF4B24] animate-spin" />
                       </div>
-                      <div>
-                        <p className="text-xs sm:text-sm font-bold text-stone-900">
-                          Analisando estrutura das salas, preços e calculando o
-                          melhor cenário...
-                        </p>
-                        <p className="text-[11px] text-stone-500">
-                          Cruzando Hora Avulsa, Fusion Pass+, Turno Fixo e
-                          Coanfitrião (80%)
-                        </p>
-                      </div>
+                      <p className="text-xs sm:text-sm font-semibold text-stone-700">
+                        Analisando sua resposta...
+                      </p>
                     </div>
                   </div>
                 )}
@@ -1806,9 +1748,9 @@ export function SearchTab({
               </div>
             </div>
 
-            {/* 3. RODAPÉ FIXO DE DIGITAÇÃO E COMANDO DE VOZ */}
+            {/* 3. RODAPÉ FIXO DE RESPOSTA */}
             <div className="bg-white border-t border-stone-200/90 px-4 sm:px-6 pt-3 pb-[max(env(safe-area-inset-bottom,14px),14px)] shrink-0 shadow-[0_-8px_30px_rgba(0,0,0,0.06)]">
-              <div className="max-w-4xl mx-auto flex items-center gap-2">
+              <div className="max-w-3xl mx-auto flex items-center gap-2">
                 <div className="relative flex-1">
                   <input
                     ref={aiInputRef}
@@ -1818,11 +1760,7 @@ export function SearchTab({
                     onKeyDown={(e) => {
                       if (e.key === "Enter") executeAISearch();
                     }}
-                    placeholder={
-                      profile.specialty
-                        ? `Pergunte sobre horas/semana, turno fixo, coanfitrião ou salas de ${profile.specialty}...`
-                        : 'Ex: "Atendo 2h a 4h por semana", "Valor do turno fixo?"...'
-                    }
+                    placeholder="Responda aqui ou digite sua dúvida..."
                     className="w-full h-12 pl-4 pr-10 rounded-2xl bg-[#FAF7F4] border border-stone-200/95 text-xs sm:text-sm text-stone-900 placeholder:text-stone-400 focus:outline-none focus:border-[#BF4B24] focus:bg-white transition-colors"
                   />
                   {aiQuery && (
@@ -1938,10 +1876,10 @@ export function SearchTab({
                   </div>
                   <div>
                     <span className="text-xs font-extrabold text-[#FBBF24] block">
-                      Abrir Chat do Concierge IA
+                      Conversar com o Concierge IA
                     </span>
                     <span className="text-[11px] text-stone-300">
-                      Simule horas/semana, Turno Fixo, Coanfitrião ou agenda
+                      Descubra o plano mais econômico para sua rotina
                     </span>
                   </div>
                 </div>
@@ -2322,7 +2260,7 @@ export function SearchTab({
       <header className="relative overflow-hidden bg-[#B83B10] px-4 pt-3.5 pb-12 lg:bg-none lg:bg-transparent lg:shadow-none lg:pt-14 lg:pb-16 rounded-b-[28px] lg:rounded-none shadow-xs z-30 lg:pointer-events-none">
         <div className="lg:hidden absolute inset-y-0 right-0 w-[62%] z-0 pointer-events-none">
           <img
-            src="/hero.png"
+            src="/images/room-consultorio.jpg"
             alt="Consultório Fusion Clinic"
             className="w-full h-full object-cover object-[center_65%] opacity-55"
           />
@@ -2384,8 +2322,8 @@ export function SearchTab({
                 </span>
               </h1>
               <p className="text-xs text-orange-50/90 leading-relaxed max-w-[310px]">
-                Reserve consultórios por hora, turno ou tire dúvidas no
-                Concierge IA para escolher a melhor opção.
+                Reserve consultórios por hora, turno ou converse com o Concierge
+                IA para descobrir o plano ideal.
               </p>
             </div>
           ) : (
@@ -3267,7 +3205,10 @@ export function SearchTab({
                         Conversa aberta no Concierge IA • Toque para retomar
                       </span>
                       <p className="text-xs font-medium text-stone-200 truncate">
-                        {aiExchanges[aiExchanges.length - 1].headline}
+                        {aiExchanges[aiExchanges.length - 1].headline.replace(
+                          /\*\*/g,
+                          "",
+                        )}
                       </p>
                     </div>
                   </div>
