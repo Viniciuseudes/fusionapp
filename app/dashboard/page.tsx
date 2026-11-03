@@ -63,6 +63,13 @@ function DashboardContent() {
   const [supabase] = useState(() => createClient());
   const searchParams = useSearchParams();
 
+  // FLAG DE VIA EXPRESSA: Verifica se o profissional está entrando via NFC/QR da porta
+  const scanParam =
+    searchParams.get("scan") ||
+    searchParams.get("room") ||
+    searchParams.get("door");
+  const isScanningDoor = !!scanParam;
+
   const [activeTab, setActiveTab] = useState<TabType>("search");
   const [selectedRoom, setSelectedRoom] = useState<any | null>(null);
   const [pendingReviewBooking, setPendingReviewBooking] = useState<any | null>(
@@ -81,7 +88,6 @@ function DashboardContent() {
     specialty: null,
   });
 
-  // Estado da Carteira e Modo Assinante
   const [walletState, setWalletState] = useState<{
     isSubscriber: boolean;
     activeTier: CreditTier | null;
@@ -99,10 +105,9 @@ function DashboardContent() {
   });
 
   useEffect(() => {
-    const scanParam = searchParams.get("scan");
     const currentHash = window.location.hash.replace("#", "");
 
-    if (scanParam && currentHash !== "bookings") {
+    if (isScanningDoor && currentHash !== "bookings") {
       window.history.replaceState(
         null,
         "",
@@ -150,7 +155,7 @@ function DashboardContent() {
 
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [activeTab, searchParams]);
+  }, [activeTab, searchParams, isScanningDoor]);
 
   const handleTabChange = (tab: TabType) => {
     if (activeTab === tab && !selectedRoom) return;
@@ -345,32 +350,35 @@ function DashboardContent() {
           masterCredits,
         });
 
-        const now = new Date().toISOString();
-        const { data: bookings } = await supabase
-          .from("bookings")
-          .select(`id, room_id, start_time, end_time, status, rooms ( name )`)
-          .eq("user_id", user.id)
-          .in("status", ["confirmed", "completed"])
-          .lt("end_time", now)
-          .order("end_time", { ascending: false })
-          .limit(5);
+        // Só exibe popup de review pendente se o médico não estiver focado na porta
+        if (!isScanningDoor) {
+          const now = new Date().toISOString();
+          const { data: bookings } = await supabase
+            .from("bookings")
+            .select(`id, room_id, start_time, end_time, status, rooms ( name )`)
+            .eq("user_id", user.id)
+            .in("status", ["confirmed", "completed"])
+            .lt("end_time", now)
+            .order("end_time", { ascending: false })
+            .limit(5);
 
-        if (bookings && bookings.length > 0) {
-          for (const booking of bookings) {
-            const isSkipped = localStorage.getItem(
-              `fusion_review_skipped_${booking.id}`,
-            );
-            if (isSkipped === "true") continue;
+          if (bookings && bookings.length > 0) {
+            for (const booking of bookings) {
+              const isSkipped = localStorage.getItem(
+                `fusion_review_skipped_${booking.id}`,
+              );
+              if (isSkipped === "true") continue;
 
-            const { data: reviewData } = await supabase
-              .from("reviews")
-              .select("id")
-              .eq("booking_id", booking.id)
-              .maybeSingle();
+              const { data: reviewData } = await supabase
+                .from("reviews")
+                .select("id")
+                .eq("booking_id", booking.id)
+                .maybeSingle();
 
-            if (!reviewData) {
-              setPendingReviewBooking(booking);
-              break;
+              if (!reviewData) {
+                setPendingReviewBooking(booking);
+                break;
+              }
             }
           }
         }
@@ -380,7 +388,7 @@ function DashboardContent() {
     }
 
     initializeDashboard();
-  }, [supabase, router]);
+  }, [supabase, router, isScanningDoor]);
 
   const renderTab = () => {
     switch (activeTab) {
@@ -430,7 +438,6 @@ function DashboardContent() {
 
   return (
     <div className="flex min-h-svh flex-col bg-[#FAF7F4] font-sans">
-      {/* Ponte de alinhamento exclusiva para o Desktop (lg:) */}
       <style
         dangerouslySetInnerHTML={{
           __html: `
@@ -456,12 +463,15 @@ function DashboardContent() {
         }}
       />
 
-      <FusionPassPromoPopup {...promoPopupProps} />
-      <PushRegistry />
+      {/* BLOQUEIA POP-UPS PROMOCIONAIS SE ESTIVER LENDO A PORTA */}
+      {!isScanningDoor && (
+        <>
+          <FusionPassPromoPopup {...promoPopupProps} />
+          <PushRegistry />
+        </>
+      )}
 
-      {/* ==================================================================== */}
-      {/* 1. TOP BAR DINÂMICA (OTIMIZADA PARA MOBILE E INTACTA NO DESKTOP)     */}
-      {/* ==================================================================== */}
+      {/* 1. TOP BAR DINÂMICA */}
       {!selectedRoom && (
         <div className="bg-[#0C0A09] text-white px-3.5 lg:px-10 py-2 lg:py-2.5 z-50">
           <div className="max-w-[1360px] mx-auto flex items-center justify-between gap-2.5 lg:gap-4">
@@ -483,7 +493,6 @@ function DashboardContent() {
                     </span>
                   </p>
                 </div>
-
                 <button
                   type="button"
                   onClick={() => handleOpenFusionPassShowcase(nextUpgradeTier)}
@@ -513,7 +522,6 @@ function DashboardContent() {
                     </span>
                   </p>
                 </div>
-
                 <button
                   type="button"
                   onClick={() => handleOpenFusionPassShowcase("vip")}
@@ -528,9 +536,7 @@ function DashboardContent() {
         </div>
       )}
 
-      {/* ==================================================================== */}
-      {/* 2. HEADER DESKTOP (100% INTACTO)                                     */}
-      {/* ==================================================================== */}
+      {/* 2. HEADER DESKTOP */}
       {!selectedRoom && (
         <header className="hidden lg:block sticky top-0 z-40 bg-white border-b border-stone-200/70">
           <div className="max-w-[1360px] mx-auto px-6 xl:px-8 h-20 flex items-center justify-between gap-4">
@@ -606,7 +612,6 @@ function DashboardContent() {
               <div className="relative flex items-center">
                 <NotificationBell />
               </div>
-
               <button
                 type="button"
                 onClick={() => handleTabChange("profile")}
@@ -635,7 +640,6 @@ function DashboardContent() {
                     </span>
                   )}
                 </div>
-
                 <div className="relative w-8 h-8 rounded-full bg-gradient-to-r from-[#C24116] to-[#DE5D2E] text-white flex items-center justify-center overflow-hidden font-bold text-xs shrink-0 ring-2 ring-white">
                   {specialistInfo.avatarUrl ? (
                     <img
@@ -653,9 +657,7 @@ function DashboardContent() {
         </header>
       )}
 
-      {/* ==================================================================== */}
-      {/* 3. HERO BANNER DESKTOP (100% INTACTO)                                */}
-      {/* ==================================================================== */}
+      {/* 3. HERO BANNER DESKTOP */}
       {!selectedRoom && activeTab === "search" && (
         <section className="hidden lg:block relative w-full min-h-[430px] xl:min-h-[460px] overflow-hidden bg-[#B83B10]">
           <div className="absolute inset-y-0 right-0 w-[65%] z-0">
@@ -689,14 +691,12 @@ function DashboardContent() {
                   Estrutura pronta para você.
                 </span>
               </h1>
-
               <p className="text-[15px] xl:text-base text-white/95 font-normal leading-relaxed max-w-[510px]">
                 {walletState.isSubscriber
                   ? `Você possui ${walletState.totalCredits}h ativas na sua Carteira Fusion Pass+ (${currentTierName}). Escolha o consultório abaixo para reservar com seus créditos.`
                   : "Escolha seu próximo consultório por hora, turno ou ative um pacote Fusion Pass+ para economizar até 41% em cada atendimento."}
               </p>
             </div>
-
             {!walletState.isSubscriber && (
               <div className="shrink-0">
                 <button
@@ -715,7 +715,6 @@ function DashboardContent() {
                       NA HORA
                     </span>
                   </div>
-
                   <div>
                     <div className="flex items-center gap-1.5 text-[11px] text-stone-300 font-medium">
                       <span>Hora avulsa</span>
@@ -739,9 +738,7 @@ function DashboardContent() {
         </section>
       )}
 
-      {/* ==================================================================== */}
-      {/* 4. CONTEÚDO PRINCIPAL (COM SINO MOBILE ALINHADO AO TOPO DO HERO)     */}
-      {/* ==================================================================== */}
+      {/* 4. CONTEÚDO PRINCIPAL */}
       <main
         className={`relative flex-1 min-w-0 w-full ${
           !selectedRoom ? "pb-20 lg:pb-12" : ""
@@ -764,9 +761,7 @@ function DashboardContent() {
         </div>
       </main>
 
-      {/* ==================================================================== */}
-      {/* 5. BARRA INFERIOR MOBILE ESTILO AIRBNB / BOOKING (RÓTULOS VISÍVEIS)  */}
-      {/* ==================================================================== */}
+      {/* 5. BARRA INFERIOR MOBILE */}
       {!selectedRoom && (
         <nav className="fixed inset-x-0 bottom-0 z-50 flex lg:hidden items-stretch justify-around border-t border-stone-200/90 bg-white/95 backdrop-blur-md pb-[env(safe-area-inset-bottom)] shadow-[0_-6px_25px_rgba(28,25,23,0.06)]">
           <ul className="flex justify-between items-stretch w-full max-w-md mx-auto px-1">
@@ -883,11 +878,9 @@ function MobileNavItem({
             : "text-stone-400 hover:text-stone-700 active:scale-95"
         }`}
       >
-        {/* Indicador superior estilo Airbnb */}
         {isActive && (
           <span className="absolute top-0 w-6 h-[2.5px] bg-[#BF4B24] rounded-full" />
         )}
-
         <div className="relative flex items-center justify-center">
           <Icon
             className={`w-5 h-5 transition-transform ${
@@ -899,7 +892,6 @@ function MobileNavItem({
             }`}
           />
         </div>
-
         <span
           className={`text-[10px] leading-none tracking-tight truncate max-w-[64px] ${
             isActive

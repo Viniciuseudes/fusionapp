@@ -138,6 +138,15 @@ export function BookingsTab({
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [adjacentMap, setAdjacentMap] = useState<Record<string, boolean>>({});
 
+  // Flag visual: esconde a tab inteira durante o processamento NFC para ser instantâneo
+  const [isProcessingSmartDoor, setIsProcessingSmartDoor] = useState(
+    !!(
+      searchParams.get("scan") ||
+      searchParams.get("room") ||
+      searchParams.get("door")
+    ),
+  );
+
   // Filtros
   const [upcomingFilter, setUpcomingFilter] = useState<
     "all" | "today" | "tomorrow" | "custom"
@@ -393,7 +402,6 @@ export function BookingsTab({
     }
   };
 
-  // --- LÓGICA DE OVERTIME AUTOMÁTICO (NOVA HORA) ---
   const handleAutoExtend = async (booking: Booking) => {
     try {
       const {
@@ -438,7 +446,7 @@ export function BookingsTab({
   };
 
   // ============================================================================
-  // EXECUÇÃO DIRETA DE CHECK-IN E CHECK-OUT (PARA NFC, QR CODE E 1-CLIQUE)
+  // EXECUÇÃO DIRETA DE CHECK-IN E CHECK-OUT
   // ============================================================================
   const executeInstantCheckin = async (
     targetBooking: Booking,
@@ -485,6 +493,7 @@ export function BookingsTab({
       });
     } finally {
       setActionLoading(false);
+      setIsProcessingSmartDoor(false);
     }
   };
 
@@ -541,11 +550,12 @@ export function BookingsTab({
       });
     } finally {
       setActionLoading(false);
+      setIsProcessingSmartDoor(false);
     }
   };
 
   // ============================================================================
-  // DETECTOR INTELIGENTE DE TAG NFC / QR CODE NA PORTA (`?scan=ID_DA_SALA`)
+  // DETECTOR INTELIGENTE DE TAG NFC / QR CODE NA PORTA
   // ============================================================================
   useEffect(() => {
     const rawScan =
@@ -554,10 +564,18 @@ export function BookingsTab({
       searchParams.get("door");
     const targetBookingId = searchParams.get("bookingId");
 
-    if (!rawScan || loading) return;
+    if (!rawScan) {
+      setIsProcessingSmartDoor(false);
+      return;
+    }
+
+    if (loading) return;
 
     const scanSignature = `${rawScan}:${targetBookingId || ""}`;
-    if (processedScanRef.current === scanSignature) return;
+    if (processedScanRef.current === scanSignature) {
+      setIsProcessingSmartDoor(false);
+      return;
+    }
     processedScanRef.current = scanSignature;
 
     const clearUrlScanParams = () => {
@@ -566,105 +584,113 @@ export function BookingsTab({
       }
     };
 
-    // Caso 1: Formato antigo (?scan=checkin&bookingId=...)
-    if (
-      (rawScan === "checkin" || rawScan === "checkout") &&
-      targetBookingId &&
-      bookings.length > 0
-    ) {
-      const targetBooking = bookings.find((b) => b.id === targetBookingId);
-      if (targetBooking) {
-        clearUrlScanParams();
-        if (rawScan === "checkout" || targetBooking.status === "in_progress") {
-          executeInstantCheckout(targetBooking, true);
-        } else {
-          executeInstantCheckin(targetBooking, true);
+    const processScan = async () => {
+      // Caso 1: Formato antigo (?scan=checkin&bookingId=...)
+      if (
+        (rawScan === "checkin" || rawScan === "checkout") &&
+        targetBookingId &&
+        bookings.length > 0
+      ) {
+        const targetBooking = bookings.find((b) => b.id === targetBookingId);
+        if (targetBooking) {
+          clearUrlScanParams();
+          if (
+            rawScan === "checkout" ||
+            targetBooking.status === "in_progress"
+          ) {
+            await executeInstantCheckout(targetBooking, true);
+          } else {
+            await executeInstantCheckin(targetBooking, true);
+          }
+          return; // as funções de checkin/out já fecham o isProcessing
         }
       }
-      return;
-    }
 
-    // Caso 2: Tag NFC ou QR Code da Porta (?scan=ID_DA_SALA ou código de 6 dígitos da sala)
-    const cleanScan = rawScan.trim().toLowerCase();
-    const nowMs = Date.now();
+      // Caso 2: Tag NFC ou QR Code da Porta (?scan=ID_DA_SALA ou código de 6 dígitos)
+      const cleanScan = rawScan.trim().toLowerCase();
+      const nowMs = Date.now();
 
-    // Procura reservas do especialista para HOJE
-    const todayActiveBookings = bookings.filter((b) => {
-      if (!["confirmed", "in_progress"].includes(b.status)) return false;
-      const s = parseISO(b.start_time);
-      const e = parseISO(b.end_time);
-      return (
-        isSameDay(s, new Date()) ||
-        (nowMs >= s.getTime() - 60 * 60 * 1000 &&
-          nowMs <= e.getTime() + 2 * 60 * 60 * 1000)
+      const todayActiveBookings = bookings.filter((b) => {
+        if (!["confirmed", "in_progress"].includes(b.status)) return false;
+        const s = parseISO(b.start_time);
+        const e = parseISO(b.end_time);
+        return (
+          isSameDay(s, new Date()) ||
+          (nowMs >= s.getTime() - 60 * 60 * 1000 &&
+            nowMs <= e.getTime() + 2 * 60 * 60 * 1000)
+        );
+      });
+
+      const matchingRoomBookings = todayActiveBookings.filter((b) => {
+        const rId = String(b.room_id || "").toLowerCase();
+        return (
+          rId === cleanScan ||
+          rId.startsWith(cleanScan) ||
+          cleanScan.includes(rId)
+        );
+      });
+
+      clearUrlScanParams();
+
+      // A) CHECK-OUT imediato!
+      const inProgressInRoom = matchingRoomBookings.find(
+        (b) => b.status === "in_progress",
       );
-    });
+      if (inProgressInRoom) {
+        await executeInstantCheckout(inProgressInRoom, true);
+        return; // isProcessingSmartDoor é fechado no finally da função
+      }
 
-    // Verifica reservas que batem com a sala da Tag NFC
-    const matchingRoomBookings = todayActiveBookings.filter((b) => {
-      const rId = String(b.room_id || "").toLowerCase();
-      return (
-        rId === cleanScan ||
-        rId.startsWith(cleanScan) ||
-        cleanScan.includes(rId)
+      // B) CHECK-IN imediato!
+      const readyForCheckinInRoom = matchingRoomBookings.find((b) => {
+        const startMs = new Date(b.start_time).getTime();
+        const endMs = new Date(b.end_time).getTime();
+        const hasBackToBack = adjacentMap[b.id] || false;
+        const earlyWindowMs = hasBackToBack ? 0 : 15 * 60 * 1000;
+        return nowMs >= startMs - earlyWindowMs && nowMs < endMs;
+      });
+
+      if (readyForCheckinInRoom) {
+        await executeInstantCheckin(readyForCheckinInRoom, true);
+        return; // isProcessingSmartDoor é fechado no finally da função
+      }
+
+      // C) Muito cedo
+      const futureBookingInRoom = matchingRoomBookings.find(
+        (b) => new Date(b.start_time).getTime() > nowMs,
       );
-    });
+      if (futureBookingInRoom) {
+        setDoorSmartModal({
+          isOpen: true,
+          mode: "too_early",
+          booking: futureBookingInRoom,
+        });
+        setIsProcessingSmartDoor(false);
+        return;
+      }
 
-    clearUrlScanParams();
+      // D) Sala ERRADA
+      if (todayActiveBookings.length > 0) {
+        const correctBooking = todayActiveBookings[0];
+        setDoorSmartModal({
+          isOpen: true,
+          mode: "wrong_room",
+          booking: correctBooking,
+        });
+        setIsProcessingSmartDoor(false);
+        return;
+      }
 
-    // A) Se já existe uma sessão EM ANDAMENTO (`in_progress`) nessa sala -> Faz CHECK-OUT imediato!
-    const inProgressInRoom = matchingRoomBookings.find(
-      (b) => b.status === "in_progress",
-    );
-    if (inProgressInRoom) {
-      executeInstantCheckout(inProgressInRoom, true);
-      return;
-    }
-
-    // B) Se existe uma reserva CONFIRMADA na janela de Check-in (até 20 min antes do início até o fim) -> Faz CHECK-IN imediato!
-    const readyForCheckinInRoom = matchingRoomBookings.find((b) => {
-      const startMs = new Date(b.start_time).getTime();
-      const endMs = new Date(b.end_time).getTime();
-      const hasBackToBack = adjacentMap[b.id] || false;
-      const earlyWindowMs = hasBackToBack ? 5 * 60 * 1000 : 20 * 60 * 1000;
-      return nowMs >= startMs - earlyWindowMs && nowMs < endMs;
-    });
-
-    if (readyForCheckinInRoom) {
-      executeInstantCheckin(readyForCheckinInRoom, true);
-      return;
-    }
-
-    // C) Se ele tem reserva confirmada nessa sala hoje, mas ainda está muito cedo
-    const futureBookingInRoom = matchingRoomBookings.find(
-      (b) => new Date(b.start_time).getTime() > nowMs,
-    );
-    if (futureBookingInRoom) {
+      // E) Nenhuma reserva ativa para hoje
       setDoorSmartModal({
         isOpen: true,
-        mode: "too_early",
-        booking: futureBookingInRoom,
+        mode: "no_booking",
+        booking: null,
       });
-      return;
-    }
+      setIsProcessingSmartDoor(false);
+    };
 
-    // D) Se ele encostou na porta ERRADA (tem reserva hoje, mas em OUTRO consultório!)
-    if (todayActiveBookings.length > 0) {
-      const correctBooking = todayActiveBookings[0];
-      setDoorSmartModal({
-        isOpen: true,
-        mode: "wrong_room",
-        booking: correctBooking,
-      });
-      return;
-    }
-
-    // E) Não tem nenhuma reserva ativa para hoje
-    setDoorSmartModal({
-      isOpen: true,
-      mode: "no_booking",
-      booking: null,
-    });
+    processScan();
   }, [searchParams, bookings, loading, adjacentMap]);
 
   // --- FILTRAGEM INTELIGENTE ---
@@ -728,27 +754,7 @@ export function BookingsTab({
   const displayBookings =
     activeTab === "upcoming" ? upcomingBookings : pastBookings;
 
-  // --- MÉTODOS DE AÇÃO ---
-  const handleCheckinSuccess = async () => {
-    if (!scannerConfig.booking) return;
-    const currentBooking = scannerConfig.booking;
-    const actionType = scannerConfig.type;
-
-    setScannerConfig({
-      isOpen: false,
-      type: "checkin",
-      booking: null,
-      cameraFailed: false,
-    });
-    setManualCode("");
-
-    if (actionType === "checkout" || currentBooking.status === "in_progress") {
-      await executeInstantCheckout(currentBooking, true);
-    } else {
-      await executeInstantCheckin(currentBooking, true);
-    }
-  };
-
+  // --- MÉTODOS DE AÇÃO UI ---
   const handleOpenChat = async (booking: Booking, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     setActionLoading(true);
@@ -943,7 +949,6 @@ CNPJ: 49.351.127/0001-44
     window.location.href = `mailto:?subject=${subject}&body=${body}`;
   };
 
-  // --- FUNÇÕES DE EXIBIÇÃO INTELIGENTE (UX) ---
   const getPaymentDisplay = (booking: Booking) => {
     const taxaHora = 45;
 
@@ -1022,7 +1027,7 @@ CNPJ: 49.351.127/0001-44
     const fullAddress = `${address.street || ""}, ${address.number || ""} ${address.complement ? `- ${address.complement}` : ""}`;
 
     const hasBackToBack = adjacentMap[booking.id] || false;
-    const checkInWindowMs = hasBackToBack ? 5 * 60 * 1000 : 20 * 60 * 1000;
+    const checkInWindowMs = hasBackToBack ? 0 : 15 * 60 * 1000;
     const isReadyForCheckin =
       booking.status === "confirmed" &&
       startTimeMs - nowTime <= checkInWindowMs &&
@@ -1169,7 +1174,7 @@ CNPJ: 49.351.127/0001-44
           {isInProgress ? (
             <>
               <Button
-                onClick={() => executeInstantCheckout(booking, true)}
+                onClick={() => executeInstantCheckout(booking, false)}
                 disabled={actionLoading}
                 className="w-full h-12 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl shadow-lg shadow-emerald-600/20"
               >
@@ -1186,7 +1191,7 @@ CNPJ: 49.351.127/0001-44
           ) : isReadyForCheckin ? (
             <>
               <Button
-                onClick={() => executeInstantCheckin(booking, true)}
+                onClick={() => executeInstantCheckin(booking, false)}
                 disabled={actionLoading}
                 className="w-full h-12 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
               >
@@ -1287,6 +1292,24 @@ CNPJ: 49.351.127/0001-44
       </div>
     );
   };
+
+  // TELA DE CARREGAMENTO INTELIGENTE ("Conectando à porta...")
+  if (isProcessingSmartDoor) {
+    return (
+      <div className="fixed inset-0 z-[300] bg-stone-950 flex flex-col items-center justify-center p-6 text-center text-white animate-in fade-in duration-200">
+        <div className="relative mb-6">
+          <div className="absolute inset-0 bg-[#BF4B24] rounded-full blur-xl opacity-20 animate-pulse" />
+          <div className="w-20 h-20 bg-stone-900 border border-stone-800 rounded-full flex items-center justify-center relative z-10">
+            <SmartphoneNfc className="w-10 h-10 text-[#BF4B24] animate-pulse" />
+          </div>
+        </div>
+        <h2 className="text-2xl font-black mb-2">Conectando à porta...</h2>
+        <p className="text-sm text-stone-400 max-w-xs leading-relaxed">
+          Verificando sua reserva e autenticando o acesso de forma segura.
+        </p>
+      </div>
+    );
+  }
 
   if (activeSessionBooking) {
     return (
@@ -1768,9 +1791,7 @@ CNPJ: 49.351.127/0001-44
               const fullAddress = `${address.street || ""}, ${address.number || ""} ${address.complement ? `- ${address.complement}` : ""}`;
 
               const hasBackToBack = adjacentMap[selectedBooking.id] || false;
-              const checkInWindowMs = hasBackToBack
-                ? 5 * 60 * 1000
-                : 20 * 60 * 1000;
+              const checkInWindowMs = hasBackToBack ? 0 : 15 * 60 * 1000;
               const isReadyForCheckin =
                 selectedBooking.status === "confirmed" &&
                 startObj.getTime() - nowTime <= checkInWindowMs &&
@@ -1933,7 +1954,7 @@ CNPJ: 49.351.127/0001-44
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <Button
                               onClick={() =>
-                                executeInstantCheckout(selectedBooking, true)
+                                executeInstantCheckout(selectedBooking, false)
                               }
                               disabled={actionLoading}
                               className="w-full h-14 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl shadow-lg"
@@ -1956,7 +1977,7 @@ CNPJ: 49.351.127/0001-44
                           <Button
                             onClick={() => {
                               setIsSheetOpen(false);
-                              executeInstantCheckin(selectedBooking, true);
+                              executeInstantCheckin(selectedBooking, false);
                             }}
                             disabled={actionLoading}
                             className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl shadow-lg"
@@ -2074,7 +2095,7 @@ CNPJ: 49.351.127/0001-44
               onClick={() => {
                 const b = extendModal.booking;
                 setExtendModal({ isOpen: false, booking: null });
-                if (b) executeInstantCheckout(b, true);
+                if (b) executeInstantCheckout(b, false);
               }}
               variant="outline"
               className="flex-1 h-12 rounded-xl font-bold border-emerald-200 bg-emerald-50 text-emerald-800"
@@ -2396,84 +2417,6 @@ CNPJ: 49.351.127/0001-44
             })()}
         </DialogContent>
       </Dialog>
-
-      {/* SCANNER QR CODE COM FALLBACK MANUAL */}
-      {scannerConfig.isOpen &&
-        scannerConfig.booking &&
-        (scannerConfig.cameraFailed ? (
-          <Dialog
-            open={true}
-            onOpenChange={() =>
-              setScannerConfig({
-                isOpen: false,
-                type: "checkin",
-                booking: null,
-                cameraFailed: false,
-              })
-            }
-          >
-            <DialogContent className="sm:max-w-md rounded-[2rem] p-6 bg-white border-0">
-              <DialogTitle className="text-xl font-black text-slate-900">
-                Check-in Manual
-              </DialogTitle>
-              <DialogDescription className="text-sm font-medium text-slate-500 mb-4">
-                O acesso à câmera foi bloqueado. Por favor, digite o código de 6
-                dígitos que está colado na porta da sala para liberar seu
-                acesso.
-              </DialogDescription>
-              <div className="space-y-4">
-                <div className="relative">
-                  <Keyboard className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                  <Input
-                    value={manualCode}
-                    onChange={(e) =>
-                      setManualCode(e.target.value.toUpperCase())
-                    }
-                    placeholder="Ex: AB1234"
-                    className="h-14 pl-12 rounded-xl border-slate-200 bg-slate-50 font-black tracking-widest uppercase"
-                    maxLength={6}
-                  />
-                </div>
-                <Button
-                  onClick={() => {
-                    if (manualCode.length < 4) {
-                      toast({
-                        variant: "destructive",
-                        title: "Código inválido",
-                        description:
-                          "O código precisa ter pelo menos 4 caracteres.",
-                      });
-                      return;
-                    }
-                    handleCheckinSuccess();
-                  }}
-                  className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
-                >
-                  Confirmar Check-in
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
-        ) : (
-          <RoomQRScanner
-            key="checkin-scanner"
-            expectedRoomId={scannerConfig.booking.room_id}
-            type={scannerConfig.type}
-            onSuccess={handleCheckinSuccess}
-            onCancel={() =>
-              setScannerConfig({
-                isOpen: false,
-                type: "checkin",
-                booking: null,
-                cameraFailed: false,
-              })
-            }
-            onError={(err) => {
-              console.error("Câmera bloqueada/falhou:", err);
-              setScannerConfig((prev) => ({ ...prev, cameraFailed: true }));
-            }}
-          />
-        ))}
     </>
   );
 }

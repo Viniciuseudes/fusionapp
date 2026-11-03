@@ -21,6 +21,7 @@ export interface AISearchExtraction {
     | "room_search"
     | "comparison_question"
     | "financial_simulation"
+    | "routine_diagnosis"
     | "profile_guidance";
   shouldApplyFilters: boolean;
   city: string;
@@ -32,9 +33,9 @@ export interface AISearchExtraction {
     | "Odontologia"
     | "Estética"
     | "Multiuso";
-  dateISO: string | null; // YYYY-MM-DD
-  requestedHour: number | null; // 8 a 21
-  requestedDurationHours: number; // ex: 1, 2, 3, 4 horas
+  dateISO: string | null;
+  requestedHour: number | null;
+  requestedDurationHours: number;
   shift: "manha" | "tarde" | "noite" | "";
   modality: RentalType;
   tier: TierFilter;
@@ -59,6 +60,8 @@ export interface RoomAvailabilityMatch {
   city: string;
   hourlyPrice: number;
   passHourlyPrice: number;
+  shiftPrice: number | null;
+  monthlyPrice: number | null;
   score: number;
   exactSlotAvailable: boolean;
   consecutiveSlotsAvailable: boolean;
@@ -69,7 +72,7 @@ export interface RoomAvailabilityMatch {
 }
 
 const PASS_RATES_BY_TIER: Record<"start" | "vip" | "master", number> = {
-  start: 26,
+  start: 27.95,
   vip: 34,
   master: 50,
 };
@@ -134,6 +137,54 @@ export function mapProfileSpecialtyToCategory(
   return "Todas as Salas";
 }
 
+// Extrai os preços reais (Hora, Turno e Mensal) e um resumo elegante da descrição/mobiliário da sala
+function inspectRoomDetails(room: any) {
+  let addr = room.address_details || {};
+  if (typeof addr === "string") {
+    try {
+      addr = JSON.parse(addr);
+    } catch {
+      addr = {};
+    }
+  }
+  const pricing = addr.pricing || {};
+  const hourly = Number(pricing.hourly || 45);
+
+  const shiftCandidates = [pricing.morning, pricing.afternoon, pricing.night]
+    .map((v) => Number(v))
+    .filter((v) => !isNaN(v) && v > 0);
+
+  const minShift =
+    shiftCandidates.length > 0 ? Math.min(...shiftCandidates) : null;
+  const monthly =
+    pricing.monthly && Number(pricing.monthly) > 0
+      ? Number(pricing.monthly)
+      : null;
+
+  const rawDesc = String(room.description || "").trim();
+  const cleanDesc =
+    rawDesc.length > 0
+      ? rawDesc.length > 130
+        ? `${rawDesc.slice(0, 127).trim()}...`
+        : rawDesc
+      : room.specialty?.toLowerCase().includes("psico")
+        ? "Ambiente acolhedor com isolamento acústico, poltronas confortáveis e climatização."
+        : "Consultório completo, climatizado, com recepção e Wi-Fi de alta velocidade.";
+
+  return {
+    neighborhood: addr.neighborhood || "Lagoa Nova",
+    city: addr.city || "Natal",
+    hourly,
+    morning: pricing.morning ? Number(pricing.morning) : null,
+    afternoon: pricing.afternoon ? Number(pricing.afternoon) : null,
+    night: pricing.night ? Number(pricing.night) : null,
+    minShift,
+    monthly,
+    cleanDesc,
+    fullDesc: rawDesc,
+  };
+}
+
 function getBrazilNow(): {
   todayISO: string;
   tomorrowISO: string;
@@ -173,11 +224,11 @@ function getBrazilNow(): {
   };
 }
 
-// Pré-detecta a data solicitada na frase do especialista antes mesmo de chamar o Gemini
 function preDetectTargetDateISO(
   rawQuery: string,
   todayISO: string,
   tomorrowISO: string,
+  currentHour: number,
 ): string {
   const q = rawQuery.toLowerCase();
   if (q.includes("depois de amanhã") || q.includes("depois de amanha")) {
@@ -188,7 +239,6 @@ function preDetectTargetDateISO(
   if (q.includes("amanhã") || q.includes("amanha")) {
     return tomorrowISO;
   }
-  // Formato DD/MM
   const dmMatch = q.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?\b/);
   if (dmMatch) {
     const day = String(dmMatch[1]).padStart(2, "0");
@@ -196,13 +246,17 @@ function preDetectTargetDateISO(
     const year = dmMatch[3] || todayISO.slice(0, 4);
     return `${year}-${month}-${day}`;
   }
+  if (q.includes("hoje") && currentHour < 20) {
+    return todayISO;
+  }
+  if (currentHour >= 19) {
+    return tomorrowISO;
+  }
   return todayISO;
 }
 
 // ============================================================================
-// MOTOR DETERMINÍSTICO DE DISPONIBILIDADE REAL (ESPELHO EXATO DO ROOM-DETAIL)
-// Verifica: blocked_dates + availability (weekConfig + exceptions) +
-//           room_contracts exclusivos + bookings (com timeout de pending_payment)
+// MOTOR DETERMINÍSTICO DE DISPONIBILIDADE REAL
 // ============================================================================
 function getVerifiedRoomFreeHoursForDate(
   room: any,
@@ -211,12 +265,10 @@ function getVerifiedRoomFreeHoursForDate(
   exclusiveLockedRoomIds: Set<string>,
   nowMs: number,
 ): number[] {
-  // 1. Contrato exclusivo ativo sem sublocação
   if (exclusiveLockedRoomIds.has(room.id)) {
     return [];
   }
 
-  // 2. Data bloqueada em blocked_dates
   if (
     Array.isArray(room.blocked_dates) &&
     room.blocked_dates.includes(targetDateISO)
@@ -224,7 +276,6 @@ function getVerifiedRoomFreeHoursForDate(
     return [];
   }
 
-  // 3. Leitura obrigatória de room.availability
   let avail = room.availability;
   if (typeof avail === "string") {
     try {
@@ -243,7 +294,6 @@ function getVerifiedRoomFreeHoursForDate(
   const partialBlockedHours = new Set<number>();
   let extraHoursOverride: number[] | null = null;
 
-  // 4. Exceções na data selecionada (bloqueio total, bloqueio parcial ou horário extra)
   if (exceptions.length > 0) {
     const exception = exceptions.find((e: any) => {
       if (!e?.date) return false;
@@ -282,7 +332,6 @@ function getVerifiedRoomFreeHoursForDate(
     }
   }
 
-  // 5. Configuração do dia da semana (weekConfig)
   let baseHours: number[] = [];
   if (extraHoursOverride !== null) {
     baseHours = extraHoursOverride;
@@ -320,7 +369,6 @@ function getVerifiedRoomFreeHoursForDate(
     return [];
   }
 
-  // 6. Remove horários que já passaram (se for hoje) e horários já reservados em `bookings`
   const freeHours = baseHours.filter((h) => {
     const hh = String(h).padStart(2, "0");
     const slotStart = new Date(
@@ -330,12 +378,10 @@ function getVerifiedRoomFreeHoursForDate(
       `${targetDateISO}T${hh}:50:00-03:00`,
     ).getTime();
 
-    // Horário já passou
     if (slotStart < nowMs) {
       return false;
     }
 
-    // Verifica colisão com reservas ativas ou em checkout
     const isBooked = roomBookings.some((b: any) => {
       if (b.status === "cancelled" || b.status === "rejected") return false;
 
@@ -376,108 +422,302 @@ function filterHoursByShift(
 }
 
 // ============================================================================
-// CONTINGÊNCIA INTELIGENTE LOCAL
+// MOTOR CONSULTIVO ESPECIALISTA EM SAÚDE & PRECIFICAÇÃO FUSION (SUPERMÁQUINA)
+// Usa os dados reais de preço e descrição (divã, poltrona, etc.) das salas!
 // ============================================================================
-function fallbackConsultativeIntent(
+function buildSpecialistAdvisoryResponse(
   rawQuery: string,
+  rooms: any[],
   availableCities: string[],
-  todayISO: string,
-  tomorrowISO: string,
+  defaultDateISO: string,
   walletBalance: number,
+  activeTier: string | null,
   userSpecialty: string | null,
   isProfileComplete: boolean,
   missingProfileFields: string[],
-): AISearchExtraction {
+): AISearchExtraction | null {
   const q = rawQuery.toLowerCase();
   const mappedProfileCategory = mapProfileSpecialtyToCategory(userSpecialty);
+  const specDisplay = userSpecialty || "sua especialidade";
 
-  if (
-    q.includes("cadastro") ||
-    q.includes("perfil") ||
-    q.includes("documento") ||
-    q.includes("cpf") ||
-    q.includes("como reserv") ||
-    q.includes("fechadura")
-  ) {
+  // Filtra as salas mais relevantes para a especialidade do usuário para citar exemplos reais (ex: Sala Fusion 03 com divã/poltronas)
+  const relevantRooms = rooms.filter((r) => {
+    if (mappedProfileCategory === "Todas as Salas") return true;
+    const spec = String(r.specialty || "").toLowerCase();
+    return (
+      spec.includes(mappedProfileCategory.split(" ")[0].toLowerCase()) ||
+      spec.includes("multiuso")
+    );
+  });
+  const showcaseRooms = (
+    relevantRooms.length > 0 ? relevantRooms : rooms
+  ).slice(0, 3);
+
+  const roomDescriptionsBullets = showcaseRooms.map((r) => {
+    const info = inspectRoomDetails(r);
+    const priceParts = [`Avulso R$ ${info.hourly}/h`];
+    if (info.minShift) priceParts.push(`Turno R$ ${info.minShift}`);
+    if (info.monthly) priceParts.push(`Mensal R$ ${info.monthly}`);
+    return `${r.name} (${info.neighborhood}): ${info.cleanDesc} [${priceParts.join(" • ")}]`;
+  });
+
+  // --------------------------------------------------------------------------
+  // 1. DÚVIDAS DE PREÇO DE TURNO FIXO OU MENSAL (Ex: "Qual o valor em média do turno fixo")
+  // --------------------------------------------------------------------------
+  const isAskingShiftOrMonthlyPrice =
+    (q.includes("turno") || q.includes("mensal") || q.includes("sala fixa")) &&
+    (q.includes("valor") ||
+      q.includes("preço") ||
+      q.includes("preco") ||
+      q.includes("quanto") ||
+      q.includes("média") ||
+      q.includes("media") ||
+      q.includes("custa") ||
+      q.includes("como funciona"));
+
+  if (isAskingShiftOrMonthlyPrice) {
+    const roomsWithShift = rooms
+      .map((r) => ({ r, info: inspectRoomDetails(r) }))
+      .filter((x) => x.info.minShift !== null || x.info.monthly !== null);
+
+    const shiftValues = roomsWithShift
+      .map((x) => x.info.minShift)
+      .filter((v): v is number => v !== null);
+    const monthlyValues = roomsWithShift
+      .map((x) => x.info.monthly)
+      .filter((v): v is number => v !== null);
+
+    const minShiftVal =
+      shiftValues.length > 0 ? Math.min(...shiftValues) : 140;
+    const maxShiftVal =
+      shiftValues.length > 0 ? Math.max(...shiftValues) : 220;
+    const avgMonthlyVal =
+      monthlyValues.length > 0 ? Math.min(...monthlyValues) : 2500;
+
     return {
-      intentType: "profile_guidance",
+      intentType: "financial_simulation",
       shouldApplyFilters: false,
       city: "Qualquer lugar",
       neighborhood: null,
       category: mappedProfileCategory,
       dateISO: null,
       requestedHour: null,
-      requestedDurationHours: 1,
+      requestedDurationHours: 4,
       shift: "",
-      modality: "hora",
+      modality: "turno",
       tier: "all",
-      headline: isProfileComplete
-        ? `Seu perfil profissional (${userSpecialty || "Especialista"}) já está 100% completo e verificado para reservas instantâneas!`
-        : `Para liberar suas reservas com check-in digital na porta, falta apenas concluir ${missingProfileFields.length} item(ns) no seu perfil:`,
+      headline: `Na Fusion Clinic, o valor do Turno Fixo varia conforme o padrão da sala e a quantidade de dias na semana. Veja os valores médios reais e quando compensa migrar para o Pass+ ou para a Sala Fixa com Coanfitrião:`,
       comparisonBlocks: [
         {
-          title: "1. Especialidade Clínica",
-          subtitle: userSpecialty
-            ? `Preenchido: ${userSpecialty}`
-            : "Pendente no seu perfil",
+          title: "1. Valor do Turno Fixo (Manhã, Tarde ou Noite)",
+          subtitle: `Média de R$ ${minShiftVal} a R$ ${maxShiftVal} por turno (4h a 5h)`,
           bullets: [
-            "Permite que o Concierge IA recomende consultórios com a estrutura exata da sua área (divã, maca, cadeira odontológica ou bioimpedância).",
+            "Garante o mesmo consultório toda semana no seu dia e período fixo (Manhã 08h-12h, Tarde 13h-17h ou Noite 18h-21h).",
+            "Reduz o custo da hora avulsa e dá previsibilidade total para pacientes de acompanhamento contínuo.",
+            "Negociação flexível direto pelo Chat Seguro com a clínica.",
           ],
         },
         {
-          title: "2. CPF e Data de Nascimento",
-          subtitle: missingProfileFields.includes("CPF")
-            ? "Pendente no seu perfil"
-            : "Verificado",
+          title: "2. Alternativa Flexível: Fusion Pass+ (16h)",
+          subtitle: "A partir de R$ 27,95/h a R$ 34/h (-41% OFF)",
           bullets: [
-            "Obrigatório para emissão automática de cobrança PIX/Cartão no Asaas e geração da sua senha individual na fechadura eletrônica.",
+            "Se você atende 1 turno por semana (4h/semana = 16h/mês), o pacote Pass+ de 16h entrega custo equivalente ou menor que o turno fixo.",
+            "Vantagem: se um paciente desmarcar ou houver feriado, você não perde o turno — pode usar os créditos em qualquer outro dia ou sala.",
           ],
         },
         {
-          title: "3. Endereço Profissional",
-          subtitle: missingProfileFields.includes("Endereço")
-            ? "Pendente no seu perfil"
-            : "Verificado",
+          title: "3. Alta Demanda: Sala Fixa + Coanfitrião (80%)",
+          subtitle: `A partir de R$ ${avgMonthlyVal}/mês (Abata seu aluguel!)`,
           bullets: [
-            "Necessário para emissão do comprovante de locação e segurança de acesso às unidades Fusion Clinic.",
+            "Se você atende muitos horários na semana, pode alugar uma sala exclusiva mensal e ativar o Modo Coanfitrião.",
+            "Nos turnos em que você não estiver na sala, outros profissionais alugam pela plataforma e você recebe 80% do valor de cada locação para abater sua mensalidade!",
           ],
         },
       ],
-      recommendationSummary: isProfileComplete
-        ? "Você já pode escolher qualquer horário livre abaixo e confirmar sua reserva em 1 clique."
-        : `Toque no botão ao lado para preencher (${missingProfileFields.join(", ")}) em menos de 1 minuto.`,
+      recommendationSummary:
+        roomDescriptionsBullets.length > 0
+          ? `Destaques para ${specDisplay}: ${roomDescriptionsBullets.join(" | ")}`
+          : "Toque em 'Ver Salas com Turno Fixo' ao lado se quiser abrir uma proposta de turno direto no chat da sala.",
       closingQuestion:
-        "Deseja que eu já filtre os consultórios ideais para a sua especialidade?",
+        "Quantos turnos ou horas por semana você planeja atender? Assim eu calculo se o seu caso pede Turno Fixo, Pass+ 16h ou Sala Exclusiva como Coanfitrião.",
       followUpSuggestions: [
-        `Mostrar consultórios para ${userSpecialty || "minha especialidade"} hoje`,
-        "Vale mais a pena Hora Avulsa ou Fusion Pass+?",
-        "Diferença entre Sala Basic, VIP e Premium?",
+        "Atendo cerca de 2h a 4h por semana",
+        "Atendo mais de 8h a 12h por semana (quero entender o Coanfitrião)",
+        `Quais salas de ${specDisplay} têm divã e poltrona?`,
+        "Ver consultórios disponíveis para Turno Fixo",
       ],
-      suggestedCta: isProfileComplete ? "none" : "complete_profile",
+      suggestedCta: "switch_to_turno",
     };
   }
 
-  const isDifferenceOrComparison =
-    q.includes("diferença") ||
-    q.includes("diferenca") ||
-    q.includes("qual escolher") ||
-    q.includes("vale mais a pena") ||
-    q.includes("compensa") ||
-    q.includes("como funciona") ||
-    q.includes("basic e vip") ||
-    q.includes("vip e premium") ||
-    q.includes("avulso ou pass") ||
-    q.includes("hora ou turno");
+  // --------------------------------------------------------------------------
+  // 2. PERGUNTA SOBRE ESTRUTURA FÍSICA DAS SALAS (Divã, Poltronas, Maca, Equipamentos)
+  // --------------------------------------------------------------------------
+  const isAskingRoomEquipment =
+    q.includes("divã") ||
+    q.includes("diva") ||
+    q.includes("poltrona") ||
+    q.includes("maca") ||
+    q.includes("bioimped") ||
+    q.includes("balança") ||
+    q.includes("cadeira odonto") ||
+    q.includes("estrutura") ||
+    q.includes("equipamento") ||
+    q.includes("o que tem na sala");
 
-  if (
-    isDifferenceOrComparison &&
-    (q.includes("basic") ||
-      q.includes("vip") ||
-      q.includes("premium") ||
-      q.includes("padrão"))
-  ) {
+  if (isAskingRoomEquipment && !q.includes("hoje") && !q.includes("amanhã")) {
     return {
       intentType: "comparison_question",
+      shouldApplyFilters: true,
+      city: "Qualquer lugar",
+      neighborhood: null,
+      category: mappedProfileCategory,
+      dateISO: defaultDateISO,
+      requestedHour: null,
+      requestedDurationHours: 1,
+      shift: "",
+      modality: "hora",
+      tier: "all",
+      headline: `Confira a estrutura detalhada e o mobiliário dos consultórios preparados para ${specDisplay} na Fusion Clinic:`,
+      comparisonBlocks: showcaseRooms.map((r) => {
+        const info = inspectRoomDetails(r);
+        const tierLabel =
+          r.tier === "master"
+            ? "Padrão Premium"
+            : r.tier === "vip"
+              ? "Padrão VIP"
+              : "Padrão Basic";
+        return {
+          title: `${r.name} (${info.neighborhood})`,
+          subtitle: `${tierLabel} • Avulso R$ ${info.hourly}/h`,
+          bullets: [
+            info.fullDesc || info.cleanDesc,
+            "Inclui recepção, Wi-Fi de alta velocidade, ar-condicionado, água/café e check-in inteligente na porta.",
+            info.monthly
+              ? `Disponível por Hora, Pacote Pass+ ou Sala Fixa Mensal (R$ ${info.monthly}/mês).`
+              : "Disponível para reserva imediata por Hora ou Pacote Fusion Pass+.",
+          ],
+        };
+      }),
+      recommendationSummary:
+        "Abaixo você já pode ver as fotos reais de cada consultório e os próximos horários livres.",
+      closingQuestion:
+        "Alguma dessas salas chamou mais a sua atenção pelo mobiliário ou localização?",
+      followUpSuggestions: [
+        "Atendo cerca de 2h a 4h por semana, qual plano compensa?",
+        "Atendo mais de 8h a 12h por semana (Coanfitrião)",
+        "Diferença entre Sala Basic, VIP e Premium?",
+      ],
+      suggestedCta: "none",
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // 3. DIAGNÓSTICO DE VOLUME SEMANAL / MENSAL (Baixo/Médio vs. Alto Volume)
+  // --------------------------------------------------------------------------
+  const isWeeklyVolumeQuery =
+    q.includes("por semana") ||
+    q.includes("/semana") ||
+    q.includes("semanal") ||
+    q.includes("vezes por semana") ||
+    q.includes("pacientes por semana") ||
+    q.includes("horas no mês") ||
+    q.includes("horas por mês") ||
+    q.includes("2h a 4h") ||
+    q.includes("8h a 12h") ||
+    q.includes("atendo muito") ||
+    q.includes("agenda cheia");
+
+  if (isWeeklyVolumeQuery) {
+    const nums = (q.match(/\d+/g) || [])
+      .map((n) => parseInt(n, 10))
+      .filter((n) => n > 0 && n <= 60);
+
+    const minWeekly =
+      nums.length >= 2 ? Math.min(nums[0], nums[1]) : nums[0] || 3;
+    const maxWeekly =
+      nums.length >= 2 ? Math.max(nums[0], nums[1]) : minWeekly;
+
+    // Se o profissional atende MUITO (6h+ por semana / 24h+ no mês ou pediu Coanfitrião):
+    if (
+      maxWeekly >= 6 ||
+      q.includes("atendo muito") ||
+      q.includes("agenda cheia") ||
+      q.includes("coanfitri")
+    ) {
+      const monthlyHrs = maxWeekly * 4;
+      const sampleRoom = showcaseRooms[0];
+      const sampleInfo = sampleRoom ? inspectRoomDetails(sampleRoom) : null;
+      const monthlyRent = sampleInfo?.monthly || 2500;
+      // Simulação realista: sublocando 12h/semana ociosas a R$ 45/h = R$ 2.160 * 80% = R$ 1.728 de abatimento!
+      const subleasedHoursMonth = 40;
+      const cashback80 = Math.round(subleasedHoursMonth * 45 * 0.8);
+      const netCostAfterCohost = Math.max(350, monthlyRent - cashback80);
+
+      return {
+        intentType: "routine_diagnosis",
+        shouldApplyFilters: false,
+        city: "Qualquer lugar",
+        neighborhood: null,
+        category: mappedProfileCategory,
+        dateISO: null,
+        requestedHour: null,
+        requestedDurationHours: 1,
+        shift: "",
+        modality: "fixo",
+        tier: "all",
+        headline: `Para uma carga elevada de ${minWeekly}h a ${maxWeekly}h por semana (~${monthlyHrs}h/mês), além dos Turnos Fixos, você destrava a estratégia mais inteligente da Fusion: a Sala Fixa Mensal com Modo Coanfitrião (80% de repasse)!`,
+        comparisonBlocks: [
+          {
+            title: "1. Pacote Pass+ 16h/24h ou Turnos Fixos",
+            subtitle: "Para quem não quer gestão de sala",
+            bullets: [
+              `Com ${monthlyHrs}h/mês, você pode combinar 2 Turnos Fixos na semana ou pacotes Pass+ com até 41% de desconto.`,
+              "Ideal se você prefere pagar estritamente pelas horas/turnos utilizados sem compromisso mensal de exclusividade.",
+            ],
+          },
+          {
+            title: "2. Sala Fixa Exclusiva + Modo Coanfitrião",
+            subtitle: "Abata seu aluguel sublocando horários vagos (80% seu)",
+            bullets: [
+              `Você aluga uma sala fixa exclusiva (ex: R$ ${monthlyRent}/mês) e tem prioridade total de agenda.`,
+              `Nos dias/horários em que você NÃO estiver atendendo, você libera a sala na plataforma Fusion como Coanfitrião.`,
+              `Você recebe 80% de todas as reservas feitas na sua sala!`,
+            ],
+          },
+          {
+            title: "3. Matemática Real do Abatimento",
+            subtitle: "Como a sala se paga quase sozinha",
+            bullets: [
+              `Exemplo prático: se outros profissionais alugarem apenas 10h por semana dos seus horários ociosos (40h/mês), os seus 80% geram ~R$ ${cashback80}/mês de receita para você.`,
+              `Na prática, sua sala exclusiva de R$ ${monthlyRent}/mês passa a custar apenas ~R$ ${netCostAfterCohost}/mês líquidos!`,
+            ],
+          },
+        ],
+        recommendationSummary: sampleRoom
+          ? `Sugestão para seu perfil: a ${sampleRoom.name} (${sampleInfo?.cleanDesc}) permite contrato mensal exclusivo com ativação do Modo Coanfitrião.`
+          : "Você transforma um custo fixo em uma fonte de renda passiva dentro da própria clínica.",
+        closingQuestion:
+          "Você gostaria de iniciar uma negociação de Sala Fixa / Turno com essa vantagem de Coanfitrião ou prefere simular pacotes de horas no Pass+?",
+        followUpSuggestions: [
+          "Quero ver as salas disponíveis para Sala Fixa / Turno",
+          "Como ativo o Modo Coanfitrião na prática?",
+          "Quero comparar com o pacote Fusion Pass+",
+        ],
+        suggestedCta: "switch_to_turno",
+      };
+    }
+
+    // Volume de 2h a 5h por semana (8h a 20h por mês)
+    const minMonthly = minWeekly * 4;
+    const maxMonthly = maxWeekly * 4;
+    const avulsoVipMin = minMonthly * 55;
+    const avulsoVipMax = maxMonthly * 55;
+    const passVipMax = Math.round(maxMonthly * 34);
+    const savingsMax = avulsoVipMax - passVipMax;
+
+    return {
+      intentType: "routine_diagnosis",
       shouldApplyFilters: false,
       city: "Qualquer lugar",
       neighborhood: null,
@@ -488,58 +728,57 @@ function fallbackConsultativeIntent(
       shift: "",
       modality: "hora",
       tier: "all",
-      headline: `Para atendimentos de ${userSpecialty || "Saúde"}, a diferença entre os padrões Basic, VIP e Premium está no posicionamento de imagem e na flexibilidade dos créditos:`,
+      headline: `Excelente! Atender de ${minWeekly}h a ${maxWeekly}h por semana equivale a ${minMonthly}h a ${maxMonthly}h por mês. Fiz o cálculo financeiro para seus atendimentos de ${specDisplay} e a melhor escolha depende de como sua agenda se comporta:`,
       comparisonBlocks: [
         {
-          title: "Salas Basic",
-          subtitle: "Foco em margem líquida por consulta",
+          title: `1. Hora Avulsa (${minMonthly}h a ${maxMonthly}h/mês)`,
+          subtitle: "Custo mais alto neste volume",
           bullets: [
-            "Valor avulso médio: R$ 45/h (ou a partir de R$ 26/h no Pass+)",
-            "Estrutura clínica completa: climatização, Wi-Fi rápido, recepção e limpeza",
-            "Ideal para atendimentos recorrentes com o menor custo operacional",
+            `Pagando hora avulsa, seu investimento mensal fica entre R$ ${minMonthly * 45} (Basic) e R$ ${avulsoVipMax} (VIP).`,
+            "A hora avulsa só é indicada se você atender menos de 4 horas no mês inteiro.",
           ],
         },
         {
-          title: "Salas VIP",
-          subtitle: "Equilíbrio entre sofisticação e custo-benefício",
+          title: "2. Horários Quebrados → Fusion Pass+ (8h ou 16h)",
+          subtitle: `Economia imediata de até R$ ${savingsMax}/mês (-41%)`,
           bullets: [
-            "Valor avulso médio: R$ 55/h (ou a partir de R$ 34/h no Pass+)",
-            "Mobiliário e arquitetura diferenciados que elevam o valor percebido da consulta",
-            "Créditos Pass+ VIP liberam tanto salas VIP quanto salas Basic",
+            "Ideal se você atende em dias separados (ex: 1h na segunda, 2h na quinta conforme a demanda dos pacientes).",
+            "A hora cai para a faixa de R$ 27,95/h (Basic) a R$ 34/h (VIP), sem fidelidade, com 30 dias de validade e opção de doar/repassar horas.",
           ],
         },
         {
-          title: "Salas Premium",
-          subtitle: "Posicionamento executivo High-Ticket",
+          title: "3. Horários Seguidos → Turno Fixo ou Coanfitrião",
+          subtitle: "Para blocos de 4h seguidas ou crescimento de agenda",
           bullets: [
-            "Valor avulso médio: R$ 80/h (ou a partir de R$ 50/h no Pass+)",
-            "Arquitetura assinada, máximo conforto acústico e localização nobre",
-            "Passe livre total: créditos Premium liberam 100% das salas (Premium, VIP e Basic)",
+            `Se essas ${maxWeekly}h são seguidas no mesmo dia (ex: toda quarta à tarde), o Turno Fixo trava a mesma sala toda semana para você.`,
+            "E quando sua agenda crescer acima de 8h/semana, você pode pegar uma Sala Fixa e sublocar horários vagos como Coanfitrião (recebendo 80%)!",
           ],
         },
       ],
-      recommendationSummary: !isProfileComplete
-        ? `Dica: antes de reservar, complete seu cadastro (${missingProfileFields.join(", ")}) para liberar seu acesso imediato.`
-        : "Comece pelo Basic para maximizar seu lucro líquido inicial, ou escolha VIP/Premium para consultas particulares de maior ticket.",
+      recommendationSummary:
+        roomDescriptionsBullets.length > 0
+          ? `Consultórios recomendados para ${specDisplay}: ${roomDescriptionsBullets.slice(0, 2).join(" | ")}`
+          : `Com o Fusion Pass+, você economiza até R$ ${savingsMax}/mês mantendo liberdade total de agenda.`,
       closingQuestion:
-        "Qual padrão combina mais com o perfil dos seus pacientes atuais?",
+        "Essas 2h a 4h semanais costumam ser em horários quebrados (dias diferentes) ou seguidos no mesmo turno?",
       followUpSuggestions: [
-        `Ver salas VIP para ${userSpecialty || "minha área"}`,
-        "Vale mais a pena Hora Avulsa ou Fusion Pass+?",
-        "Como funciona o Turno Fixo semanal?",
+        "São horários quebrados ao longo da semana",
+        "São horários seguidos no mesmo dia (bloco de 3h a 4h)",
+        "E se minha agenda crescer para 8h+ na semana (Coanfitrião)?",
+        `Mostrar salas de ${specDisplay} disponíveis amanhã`,
       ],
-      suggestedCta: !isProfileComplete ? "complete_profile" : "open_pass_modal",
+      suggestedCta: "open_pass_modal",
     };
   }
 
+  // --------------------------------------------------------------------------
+  // 4. RESPOSTA AO DIAGNÓSTICO: HORÁRIOS QUEBRADOS
+  // --------------------------------------------------------------------------
   if (
-    isDifferenceOrComparison &&
-    (q.includes("pass") ||
-      q.includes("assinatura") ||
-      q.includes("pacote") ||
-      q.includes("turno") ||
-      q.includes("avulso") ||
-      q.includes("desconto"))
+    q.includes("quebrado") ||
+    q.includes("separado") ||
+    q.includes("dias diferentes") ||
+    q.includes("variado")
   ) {
     return {
       intentType: "financial_simulation",
@@ -553,47 +792,192 @@ function fallbackConsultativeIntent(
       shift: "",
       modality: "hora",
       tier: "all",
-      headline: `Comparei as 3 modalidades na Fusion pensando na sua rotina de ${userSpecialty || "atendimentos"}:`,
+      headline: `Para horários quebrados ao longo da semana, a escolha matematicamente perfeita para seus atendimentos de ${specDisplay} é o Fusion Pass+ (pacote de 8h ou 16h):`,
       comparisonBlocks: [
         {
-          title: "1. Hora Avulsa (50 min)",
-          subtitle: "Para até 4 atendimentos no mês",
+          title: "Liberdade Total de Agenda",
+          subtitle: "Encaixe pacientes em qualquer dia ou turno",
           bullets: [
-            "Custo médio: R$ 45/h a R$ 80/h conforme a sala",
-            "Pague apenas quando tiver paciente agendado, sem compromisso mensal",
-            "Liberação imediata de senha na fechadura digital",
+            "Você não fica preso a um único dia da semana como no turno fixo.",
+            "Surgiu paciente na terça de manhã e outro na quinta à noite? Basta reservar 1h em cada dia usando seus créditos da carteira.",
           ],
         },
         {
-          title: "2. Fusion Pass+ (Pacotes de 8h ou 16h)",
-          subtitle: "Até 41% de economia (A partir de 2h por semana)",
+          title: "Desconto de Atacado (-41% OFF)",
+          subtitle: "Hora a partir de R$ 27,95 (Basic) e R$ 34 (VIP)",
           bullets: [
-            "Derruba o custo da hora para a faixa de R$ 26/h a R$ 50/h",
-            "Sem fidelidade: cancele quando quiser pelo painel, sem multa",
-            "Validade de 30 dias — se sobrarem horas, você pode doar ou negociar com colegas",
+            "Você paga valor de pacote fechado mas usa de forma 100% fracionada.",
+            "Sem fidelidade (cancele a renovação quando quiser) e se sobrarem horas no fim dos 30 dias você pode transferir para outro profissional.",
           ],
         },
         {
-          title: "3. Turno Fixo ou Sala Mensal",
-          subtitle: "Para agenda cheia em dia fixo da semana",
-          bullets: [
-            "Garante a mesma sala toda semana (Manhã, Tarde ou Noite)",
-            "Na modalidade Mensal Exclusiva, você ainda pode sublocar horários vagos como Coanfitrião",
-          ],
+          title: "Salas Ideais para Você",
+          subtitle: `Estrutura pronta para ${specDisplay}`,
+          bullets:
+            roomDescriptionsBullets.length > 0
+              ? roomDescriptionsBullets
+              : [
+                  "Consultórios equipados com poltronas, divã, climatização e isolamento acústico.",
+                ],
         },
       ],
       recommendationSummary:
-        "Regra prática de bolso: Se você atende 5 horas ou mais no mês, o Fusion Pass+ já se paga e coloca até 41% mais margem no seu bolso.",
+        "Clique em 'Simular Fusion Pass+' ao lado para escolher seu pacote de 8h ou 16h, ou veja abaixo a agenda das salas.",
       closingQuestion:
-        "Quantas horas por semana você planeja atender neste mês?",
+        "Deseja abrir o simulador do Fusion Pass+ agora ou consultar os horários livres de amanhã?",
       followUpSuggestions: [
-        "Atendo cerca de 2h a 4h por semana",
         "Quero simular os pacotes do Fusion Pass+",
-        `Ver salas de ${userSpecialty || "atendimento"} livres hoje`,
+        `Ver salas de ${specDisplay} livres amanhã`,
+        "E se minha agenda crescer para uma Sala Fixa (Coanfitrião)?",
       ],
       suggestedCta: "open_pass_modal",
     };
   }
+
+  // --------------------------------------------------------------------------
+  // 5. RESPOSTA AO DIAGNÓSTICO: HORÁRIOS SEGUIDOS NO MESMO DIA
+  // --------------------------------------------------------------------------
+  if (
+    q.includes("seguido") ||
+    q.includes("bloco") ||
+    q.includes("mesmo dia") ||
+    q.includes("mesmo turno")
+  ) {
+    return {
+      intentType: "financial_simulation",
+      shouldApplyFilters: false,
+      city: "Qualquer lugar",
+      neighborhood: null,
+      category: mappedProfileCategory,
+      dateISO: null,
+      requestedHour: null,
+      requestedDurationHours: 4,
+      shift: "",
+      modality: "turno",
+      tier: "all",
+      headline: `Para blocos de 3h a 4h seguidas no mesmo dia, você pode travar um Turno Fixo Semanal ou usar o Pass+ 16h:`,
+      comparisonBlocks: [
+        {
+          title: "Opção A: Turno Fixo Semanal",
+          subtitle: "A mesma sala garantida toda semana",
+          bullets: [
+            "Você escolhe o turno (Manhã, Tarde ou Noite) e o dia da semana, garantindo que nenhum outro profissional ocupe sua sala naquele período.",
+            "O atendimento do seu 1º paciente do dia já paga praticamente todo o turno — os demais pacientes são 100% lucro líquido.",
+          ],
+        },
+        {
+          title: "Opção B: Fusion Pass+ 16h",
+          subtitle: "4 blocos de 4h/mês podendo alternar o dia",
+          bullets: [
+            "Se você atende 4h seguidas mas às vezes precisa mudar de quarta para quinta-feira, o Pass+ 16h permite reservar 4 horários seguidos no calendário com até 41% de desconto.",
+          ],
+        },
+        {
+          title: "Consultórios Recomendados",
+          subtitle: `Estrutura completa para ${specDisplay}`,
+          bullets:
+            roomDescriptionsBullets.length > 0
+              ? roomDescriptionsBullets
+              : [
+                  "Salas equipadas com divã, poltronas confortáveis, recepção e isolamento acústico.",
+                ],
+        },
+      ],
+      recommendationSummary:
+        "Para fechar um Turno Fixo, basta tocar em 'Ver Salas com Turno Fixo', abrir a sala desejada na aba 'Por Turno' e clicar em Solicitar Proposta.",
+      closingQuestion:
+        "Prefere ver as salas na modalidade Turno Fixo ou simular o pacote Pass+ de 16h?",
+      followUpSuggestions: [
+        "Ver consultórios disponíveis para Turno Fixo",
+        "Quero simular o pacote Pass+ de 16h",
+        "Como funciona a Sala Fixa com Coanfitrião (80% de repasse)?",
+      ],
+      suggestedCta: "switch_to_turno",
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // 6. COMO FUNCIONA O MODO COANFITRIÃO / SALA FIXA MENSAL (80% REPASSE)
+  // --------------------------------------------------------------------------
+  if (
+    q.includes("coanfitri") ||
+    q.includes("subloca") ||
+    q.includes("abater") ||
+    q.includes("abatendo") ||
+    q.includes("80%") ||
+    q.includes("consultório próprio") ||
+    q.includes("consultorio proprio")
+  ) {
+    return {
+      intentType: "financial_simulation",
+      shouldApplyFilters: false,
+      city: "Qualquer lugar",
+      neighborhood: null,
+      category: mappedProfileCategory,
+      dateISO: null,
+      requestedHour: null,
+      requestedDurationHours: 1,
+      shift: "",
+      modality: "fixo",
+      tier: "all",
+      headline:
+        "O Modo Coanfitrião da Fusion Clinic é a forma mais inteligente de ter seu próprio consultório fixo abatendo até 80% do aluguel:",
+      comparisonBlocks: [
+        {
+          title: "1. Você Aluga a Sala Fixa Mensal",
+          subtitle: "Consultório 100% pronto sem fiador ou reforma",
+          bullets: [
+            "Você fecha o contrato mensal de uma sala (ex: Sala Fusion 03 com divã e poltronas) sem gastar 1 real com obras, móveis, condomínio, limpeza ou recepcionista.",
+            "Você define todos os dias e horários da semana em que vai atender seus pacientes.",
+          ],
+        },
+        {
+          title: "2. Libera os Horários Ociosos no App",
+          subtitle: "Painel 'Minha Sala (80%)' no seu Dashboard",
+          bullets: [
+            "Sabe aqueles dias ou turnos em que você não está no consultório? Em vez de a sala ficar trancada dando prejuízo, você libera esses horários na vitrine da Fusion.",
+            "A Fusion cuida de tudo: cobrança no PIX/Cartão, controle de check-in NFC na porta e limpeza.",
+          ],
+        },
+        {
+          title: "3. Recebe 80% para Abater seu Aluguel",
+          subtitle: "Sua sala trabalhando para você",
+          bullets: [
+            "80% do valor de cada hora ou turno sublocado na sua sala vai direto para você!",
+            "Na prática, a sublocação dos seus horários vagos paga grande parte (ou até 100%) da sua mensalidade.",
+          ],
+        },
+      ],
+      recommendationSummary:
+        "Para iniciar uma proposta de Sala Fixa Mensal com Coanfitrião, basta abrir a sala desejada, selecionar a aba 'Fixo Mensal' e clicar em Iniciar Negociação.",
+      closingQuestion:
+        "Quer que eu filtre os consultórios disponíveis para contrato Mensal / Coanfitrião agora?",
+      followUpSuggestions: [
+        `Ver salas de ${specDisplay} disponíveis para Fixo Mensal`,
+        "Qual o valor em média do turno fixo?",
+        "Atendo cerca de 2h a 4h por semana",
+      ],
+      suggestedCta: "switch_to_turno",
+    };
+  }
+
+  return null;
+}
+
+// ============================================================================
+// CONTINGÊNCIA PARA BUSCA DE SALAS QUANDO O USUÁRIO PEDE AGENDA/HORÁRIOS
+// ============================================================================
+function fallbackRoomSearchIntent(
+  rawQuery: string,
+  availableCities: string[],
+  defaultDateISO: string,
+  walletBalance: number,
+  userSpecialty: string | null,
+  isProfileComplete: boolean,
+  missingProfileFields: string[],
+): AISearchExtraction {
+  const q = rawQuery.toLowerCase();
+  const mappedProfileCategory = mapProfileSpecialtyToCategory(userSpecialty);
 
   let detectedCity = "Qualquer lugar";
   for (const city of availableCities) {
@@ -634,11 +1018,9 @@ function fallbackConsultativeIntent(
     category = mappedProfileCategory;
   }
 
-  const dateISO = preDetectTargetDateISO(rawQuery, todayISO, tomorrowISO);
-
   let requestedDurationHours = 1;
   const durationMatch = q.match(
-    /(?:por|durante|reservar|preciso de)\s*(\d{1,2})\s*(?:h|hora|horas)\b/i,
+    /(?:por|durante|reservar|preciso de|bloco de)\s*(\d{1,2})\s*(?:h|hora|horas)\b/i,
   );
   if (durationMatch) {
     const d = parseInt(durationMatch[1], 10);
@@ -685,64 +1067,49 @@ function fallbackConsultativeIntent(
   else if (q.includes("vip")) tier = "vip";
   else if (q.includes("basic") || q.includes("básic")) tier = "start";
 
-  const comparisonBlocks: ComparisonBlock[] = [];
-  if (requestedDurationHours >= 3 && walletBalance <= 0) {
-    comparisonBlocks.push({
-      title: `Dica de Economia para ${requestedDurationHours} horas`,
-      subtitle: "Comparativo Hora Avulsa vs. Fusion Pass+ / Turno",
-      bullets: [
-        `Reservando ${requestedDurationHours}h no avulso, o investimento médio fica entre R$ ${requestedDurationHours * 45} e R$ ${requestedDurationHours * 55}.`,
-        `Com o Fusion Pass+, sua hora cai até 41% (a partir de R$ 26/h) e as horas restantes ficam na carteira por 30 dias.`,
-        `Se você atende ${requestedDurationHours}h toda semana, o Turno Fixo garante a mesma sala com valor reduzido.`,
-      ],
-    });
-  }
-
   return {
     intentType: "room_search",
     shouldApplyFilters: true,
     city: detectedCity,
     neighborhood: null,
     category,
-    dateISO,
+    dateISO: defaultDateISO,
     requestedHour,
     requestedDurationHours,
     shift,
     modality,
     tier,
-    headline: `Verifiquei a agenda real das salas para ${
-      dateISO === tomorrowISO ? "amanhã" : dateISO === todayISO ? "hoje" : dateISO
-    }:`,
-    comparisonBlocks,
+    headline: `Separei os consultórios ideais para ${
+      userSpecialty || category
+    } com seus diferenciais de estrutura e horários verificados:`,
+    comparisonBlocks: [],
     recommendationSummary: !isProfileComplete
-      ? `Importante: para concluir sua reserva e receber a senha da fechadura digital, finalize seu perfil (${missingProfileFields.join(", ")}).`
+      ? `Lembrete: finalize seu perfil (${missingProfileFields.join(", ")}) para liberar o check-in na porta.`
       : walletBalance > 0
-        ? `Você possui ${walletBalance}h ativas na carteira e pode reservar qualquer horário livre abaixo.`
-        : "Toque em um dos horários livres verificados abaixo para abrir a sala já com a agenda marcada.",
+        ? `Você possui ${walletBalance}h ativas na carteira e pode reservar qualquer horário livre abaixo sem custo extra.`
+        : "Cada card abaixo mostra a estrutura da sala (como divã, poltronas ou maca) e os horários livres para reserva imediata.",
     closingQuestion:
-      "Gostaria de comparar o valor avulso com o pacote Fusion Pass+ ou consultar outro turno?",
+      "Deseja simular sua carga horária semanal ou conhecer a Sala Fixa com Modo Coanfitrião (80% de repasse)?",
     followUpSuggestions: [
-      "Vale mais a pena Hora Avulsa ou Fusion Pass+?",
+      "Atendo cerca de 2h a 4h por semana",
+      "Qual o valor em média do turno fixo?",
+      "Como funciona a Sala Fixa com Coanfitrião (80%)?",
       "Diferença entre Sala Basic, VIP e Premium?",
-      "E se eu precisar de 3 horas seguidas?",
     ],
-    suggestedCta: !isProfileComplete
-      ? "complete_profile"
-      : requestedDurationHours >= 3
-        ? "open_pass_modal"
-        : "none",
+    suggestedCta: !isProfileComplete ? "complete_profile" : "none",
   };
 }
 
 // ============================================================================
-// MOTOR CONSULTIVO COM GOOGLE GEMINI (ALIMENTADO COM AGENDA REAL VERIFICADA)
+// CHAMADA AO GEMINI 2.5 FLASH COM CATÁLOGO COMPLETO (DESCRIÇÃO + PREÇOS REAIS)
 // ============================================================================
 async function extractConsultativeWithGemini(
   query: string,
   history: ConversationTurn[],
+  rooms: any[],
   availableCities: string[],
-  availableNeighborhoods: string[],
   verifiedRoomsScheduleSummary: string,
+  packagesSummary: string,
   preDetectedDateISO: string,
   walletBalance: number,
   activeTier: string | null,
@@ -751,17 +1118,34 @@ async function extractConsultativeWithGemini(
   missingProfileFields: string[],
 ): Promise<AISearchExtraction> {
   const { todayISO, tomorrowISO, weekdayName } = getBrazilNow();
+
+  // 1. Verifica cenários consultivos determinísticos (Turno Fixo, Coanfitrião, Volume Semanal, Mobiliário)
+  const deterministicAdvisory = buildSpecialistAdvisoryResponse(
+    query,
+    rooms,
+    availableCities,
+    preDetectedDateISO,
+    walletBalance,
+    activeTier,
+    userSpecialty,
+    isProfileComplete,
+    missingProfileFields,
+  );
+
+  if (deterministicAdvisory) {
+    return deterministicAdvisory;
+  }
+
   const apiKey =
     process.env.GEMINI_API_KEY ||
     process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
     process.env.NEXT_PUBLIC_GEMINI_API_KEY;
 
   if (!apiKey) {
-    return fallbackConsultativeIntent(
+    return fallbackRoomSearchIntent(
       query,
       availableCities,
-      todayISO,
-      tomorrowISO,
+      preDetectedDateISO,
       walletBalance,
       userSpecialty,
       isProfileComplete,
@@ -783,31 +1167,27 @@ async function extractConsultativeWithGemini(
       : "Início da conversa.";
 
   const systemPrompt = `
-Você é o Concierge Inteligente da Fusion Clinic — assistente consultivo exclusivo para profissionais de saúde cadastrados.
+Você é o Concierge e Consultor Comercial Sênior da Fusion Clinic — uma supermáquina de inteligência em saúde, precificação de consultórios e rentabilidade médica/clínica.
 
-REGRA DE OURO CONTRA ALUCINAÇÃO DE AGENDA (CRÍTICO):
-Abaixo está a DISPONIBILIDADE REAL E VERIFICADA no banco de dados para a data ${preDetectedDateISO}.
-- NUNCA invente que uma sala está livre se ela estiver listada como "FECHADA / SEM VAGAS" no turno solicitado.
-- Se uma sala estiver fechada pela manhã (08h-11h) mas tiver horários à tarde, diga explicitamente que pela manhã ela está fechada/ocupada e informe apenas os horários reais livres.
-
-Contexto Temporal (Fuso America/Fortaleza):
-- Hoje é: ${todayISO} (${weekdayName})
-- Amanhã é: ${tomorrowISO}
-- Data alvo pré-detectada para consulta de agenda: ${preDetectedDateISO}
-
-Perfil do Especialista Logado:
-- Especialidade cadastrada no perfil: ${userSpecialty ? `"${userSpecialty}" (Categoria padrão sugerida: "${mappedProfileCategory}")` : "Ainda não informada no perfil"}
-- Cadastro completo para reserva instantânea? ${isProfileComplete ? "SIM (100% completo)" : `NÃO — Faltam os campos: ${missingProfileFields.join(", ")}`}
-- Saldo atual na carteira Fusion Pass+: ${walletBalance} horas (${activeTier ? `Categoria ${activeTier}` : "Sem assinatura ativa"})
-
-DISPONIBILIDADE REAL DAS SALAS EM ${preDetectedDateISO}:
+CONHECIMENTO COMPLETO DE CADA SALA (ESTRUTURA, DIVÃ, POLTRONAS, PREÇOS E AGENDA):
 ${verifiedRoomsScheduleSummary}
 
-Diretrizes de Personalização:
-1. Se o especialista fizer uma busca por salas/horários, defina shouldApplyFilters = true e preencha shift ("manha", "tarde", "noite" ou "") e requestedHour (se citou hora exata).
-2. Se o especialista não especificar a especialidade na frase mas tiver "${userSpecialty || ""}" no perfil, use category = "${mappedProfileCategory}". Unless ele peça explicitamente "todas as salas" ou outra especialidade.
-3. Se o cadastro estiver incompleto (isProfileComplete = false), lembre-o em recommendationSummary que faltam (${missingProfileFields.join(", ")}) e defina suggestedCta = "complete_profile".
-4. Horários coloquiais: "de 3 horas", "às 3 horas" -> requestedHour = 15. "por 3 horas" ou "3 horas seguidas" -> requestedDurationHours = 3.
+PACOTES FUSION PASS+ ATIVOS:
+${packagesSummary}
+
+DIRETRIZES DE OURO (COMO AGIR COMO UM CONSULTOR DE ELITE):
+1. FALE DA ESTRUTURA FÍSICA DAS SALAS:
+   - Sempre que recomendar ou comparar uma sala, mencione o que ela tem na descrição (ex: se tem divã, duas poltronas confortáveis, maca, pia, iluminação acolhedora, isolamento acústico, Smart TV). Isso gera desejo imediato no especialista!
+2. DOMINE TODAS AS MODALIDADES E PREÇOS:
+   - Hora Avulsa (50 min): Para quem atende até 4h no mês.
+   - Fusion Pass+ (8h ou 16h/mês): Até 41% de desconto na hora (a partir de R$ 27,95/h no Basic e R$ 34/h no VIP). Ideal para quem atende de 2h a 4h por semana em HORÁRIOS QUEBRADOS/VARIADOS. Sem fidelidade, dura 30 dias e permite doar/repassar horas.
+   - Turno Fixo Semanal (Manhã, Tarde ou Noite): Ideal para quem atende 3h a 4h SEGUIDAS no mesmo dia toda semana.
+   - Sala Fixa Mensal + Modo Coanfitrião (80% de repasse): Se o especialista tem carga horária alta (6h+, 8h+, 10h+ por semana) ou quer uma sala fixa exclusiva (ex: R$ 2.500/mês), apresente a vantagem matadora de virar COANFITRIÃO: nos horários em que ele não estiver usando a sala, a Fusion subloca para outros profissionais e repassa 80% do valor para abater o aluguel dele!
+3. NÃO CONFUNDA DÚVIDAS DE PREÇO COM BUSCA DE HORÁRIO:
+   - Se o especialista perguntar "Qual o valor do turno fixo?", "Quanto custa por mês?", "Atendo X horas por semana", defina intentType = "financial_simulation" ou "routine_diagnosis" e shouldApplyFilters = false! Só use intentType = "room_search" e shouldApplyFilters = true quando ele quiser ver salas disponíveis para agendar.
+
+Contexto Temporal: Hoje é ${todayISO} (${weekdayName}) | Amanhã é ${tomorrowISO} | Data alvo: ${preDetectedDateISO}
+Perfil do Especialista: ${userSpecialty || "Especialista"} (Categoria padrão: ${mappedProfileCategory}) | Saldo na carteira: ${walletBalance}h
 `.trim();
 
   const responseSchema = {
@@ -819,6 +1199,7 @@ Diretrizes de Personalização:
           "room_search",
           "comparison_question",
           "financial_simulation",
+          "routine_diagnosis",
           "profile_guidance",
         ],
       },
@@ -920,7 +1301,7 @@ Diretrizes de Personalização:
             },
           ],
           generationConfig: {
-            temperature: 0.1,
+            temperature: 0.2,
             responseMimeType: "application/json",
             responseSchema,
           },
@@ -929,11 +1310,10 @@ Diretrizes de Personalização:
     );
 
     if (!res.ok) {
-      return fallbackConsultativeIntent(
+      return fallbackRoomSearchIntent(
         query,
         availableCities,
-        todayISO,
-        tomorrowISO,
+        preDetectedDateISO,
         walletBalance,
         userSpecialty,
         isProfileComplete,
@@ -944,11 +1324,10 @@ Diretrizes de Personalização:
     const data = await res.json();
     const rawJson = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!rawJson) {
-      return fallbackConsultativeIntent(
+      return fallbackRoomSearchIntent(
         query,
         availableCities,
-        todayISO,
-        tomorrowISO,
+        preDetectedDateISO,
         walletBalance,
         userSpecialty,
         isProfileComplete,
@@ -969,11 +1348,10 @@ Diretrizes de Personalização:
 
     return parsed;
   } catch {
-    return fallbackConsultativeIntent(
+    return fallbackRoomSearchIntent(
       query,
       availableCities,
-      todayISO,
-      tomorrowISO,
+      preDetectedDateISO,
       walletBalance,
       userSpecialty,
       isProfileComplete,
@@ -1014,16 +1392,37 @@ export async function POST(req: Request) {
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // 1. Busca todas as salas ativas INCLUINDO `availability` e `blocked_dates`
-    const { data: roomsData } = await supabase
-      .from("rooms")
-      .select(
-        "id, name, specialty, tier, modalities, address_details, availability, blocked_dates, is_active, is_paused",
-      )
-      .eq("is_active", true)
-      .eq("is_paused", false);
+    // 1. Busca salas (INCLUINDO `description`!) e pacotes reais em paralelo
+    const [roomsRes, pkgsRes] = await Promise.all([
+      supabase
+        .from("rooms")
+        .select(
+          "id, name, description, specialty, tier, modalities, address_details, availability, blocked_dates, is_active, is_paused",
+        )
+        .eq("is_active", true)
+        .eq("is_paused", false),
+      supabase
+        .from("packages")
+        .select("tier, hours, price, active")
+        .eq("active", true)
+        .order("hours", { ascending: true }),
+    ]);
 
-    const rooms = roomsData || [];
+    const rooms = roomsRes.data || [];
+    const packages = pkgsRes.data || [];
+
+    const packagesSummary =
+      packages.length > 0
+        ? packages
+            .map((p: any) => {
+              const h = Math.max(1, Number(p.hours) || 1);
+              const pr = Number(p.price) || 0;
+              const total = h > 1 && pr <= 120 ? pr * h : pr;
+              const rate = (total / h).toFixed(2);
+              return `${String(p.tier).toUpperCase()} ${h}h: Total R$ ${total.toFixed(2)} (R$ ${rate}/h)`;
+            })
+            .join(" | ")
+        : "Basic 8h (R$ 35/h), Basic 16h (R$ 27,95/h) | VIP 8h (R$ 42/h), VIP 16h (R$ 34/h) | Premium 8h (R$ 62/h), Premium 16h (R$ 50/h)";
 
     const availableCities = Array.from(
       new Set(
@@ -1033,22 +1432,15 @@ export async function POST(req: Request) {
       ),
     );
 
-    const availableNeighborhoods = Array.from(
-      new Set(
-        rooms
-          .map((r: any) => r.address_details?.neighborhood)
-          .filter((n): n is string => Boolean(n && typeof n === "string")),
-      ),
-    );
-
-    const { todayISO, tomorrowISO, nowMs } = getBrazilNow();
+    const { todayISO, tomorrowISO, currentHour, nowMs } = getBrazilNow();
     const preDetectedDateISO = preDetectTargetDateISO(
       query,
       todayISO,
       tomorrowISO,
+      currentHour,
     );
 
-    // 2. Busca reservas e contratos ativos com janela de segurança para fuso UTC-3
+    // 2. Busca reservas e contratos ativos
     const baseDateObj = new Date(`${preDetectedDateISO}T12:00:00-03:00`);
     const windowStartISO = new Date(
       baseDateObj.getTime() - 36 * 60 * 60 * 1000,
@@ -1090,9 +1482,10 @@ export async function POST(req: Request) {
       bookingsByRoom.get(b.room_id)!.push(b);
     });
 
-    // 3. Monta o resumo de disponibilidade 100% REAL de cada sala para enviar ao Gemini
+    // 3. Monta o dossiê completo de cada sala (Descrição Física + Preços Reais de Hora/Turno/Mensal + Horários Livres)
     const verifiedRoomsScheduleSummary = rooms
       .map((r: any) => {
+        const info = inspectRoomDetails(r);
         const freeHrs = getVerifiedRoomFreeHoursForDate(
           r,
           preDetectedDateISO,
@@ -1110,26 +1503,31 @@ export async function POST(req: Request) {
           .filter((h) => h >= 18 && h <= 21)
           .map(formatHourSlot);
 
-        const hrPrice = r.address_details?.pricing?.hourly || 45;
-        const neigh = r.address_details?.neighborhood || "Centro";
-        const ct = r.address_details?.city || "Natal";
-
         const scheduleDesc =
           freeHrs.length === 0
-            ? "FECHADA / SEM NENHUM HORÁRIO LIVRE NESTA DATA"
+            ? "FECHADA / SEM VAGAS NESTA DATA"
             : `Manhã: ${morningHrs.length > 0 ? morningHrs.join(", ") : "FECHADO/OCUPADO"} | Tarde: ${afternoonHrs.length > 0 ? afternoonHrs.join(", ") : "FECHADO/OCUPADO"} | Noite: ${nightHrs.length > 0 ? nightHrs.join(", ") : "FECHADO/OCUPADO"}`;
 
-        return `- ${r.name} (${r.specialty || "Multiuso"}, Padrão: ${r.tier || "start"}, Local: ${neigh}/${ct}, R$ ${hrPrice}/h) -> [${scheduleDesc}]`;
+        const priceDetails = [
+          `Avulso: R$ ${info.hourly}/h`,
+          info.minShift ? `Turno Fixo: R$ ${info.minShift}` : null,
+          info.monthly ? `Sala Fixa Mensal: R$ ${info.monthly}/mês` : null,
+        ]
+          .filter(Boolean)
+          .join(" | ");
+
+        return `- ${r.name} (${r.specialty || "Multiuso"}, Padrão: ${r.tier || "start"}, Local: ${info.neighborhood}/${info.city}) | Estrutura/Descrição: "${info.cleanDesc}" | Preços: [${priceDetails}] | Agenda em ${preDetectedDateISO}: [${scheduleDesc}]`;
       })
       .join("\n");
 
-    // 4. Chama o Gemini já com a agenda real verificada no prompt
+    // 4. Executa o Motor Consultivo
     const extraction = await extractConsultativeWithGemini(
       query,
       history,
+      rooms,
       availableCities,
-      availableNeighborhoods,
       verifiedRoomsScheduleSummary,
+      packagesSummary,
       preDetectedDateISO,
       walletBalance,
       activeTier,
@@ -1138,246 +1536,227 @@ export async function POST(req: Request) {
       missingProfileFields,
     );
 
-    const targetDateISO = extraction.dateISO || preDetectedDateISO;
-
-    // Se o Gemini extraiu uma data diferente da pré-detectada, busca as reservas da data exata
-    if (targetDateISO !== preDetectedDateISO) {
-      const targetObj = new Date(`${targetDateISO}T12:00:00-03:00`);
-      const wStart = new Date(
-        targetObj.getTime() - 36 * 60 * 60 * 1000,
-      ).toISOString();
-      const wEnd = new Date(
-        targetObj.getTime() + 36 * 60 * 60 * 1000,
-      ).toISOString();
-
-      const { data: newBookings } = await supabase
-        .from("bookings")
-        .select(
-          "id, room_id, start_time, end_time, status, created_at, asaas_payment_id",
-        )
-        .gte("start_time", wStart)
-        .lte("start_time", wEnd)
-        .neq("status", "cancelled");
-
-      bookingsByRoom.clear();
-      (newBookings || []).forEach((b: any) => {
-        if (!b.room_id) return;
-        if (!bookingsByRoom.has(b.room_id)) {
-          bookingsByRoom.set(b.room_id, []);
-        }
-        bookingsByRoom.get(b.room_id)!.push(b);
+    // Se NÃO for busca de agenda (`shouldApplyFilters === false`), retorna a consultoria pura imediatamente
+    if (
+      extraction.intentType !== "room_search" &&
+      !extraction.shouldApplyFilters
+    ) {
+      return NextResponse.json({
+        extraction,
+        matches: [],
+        assistantMessage: extraction.headline,
       });
     }
 
-    // 5. Calcula Score e Disponibilidade Estrita de cada sala (Zero Alucinação)
-    const reqHour = extraction.requestedHour;
-    const reqDuration = Math.max(1, extraction.requestedDurationHours || 1);
-    const reqShift = extraction.shift;
-    const mappedProfileCat = mapProfileSpecialtyToCategory(userSpecialty);
+    let targetDateISO = extraction.dateISO || preDetectedDateISO;
 
-    const shiftLabelMap: Record<string, string> = {
-      manha: "manhã",
-      tarde: "tarde",
-      noite: "noite",
-    };
+    const buildMatchesForDate = (dateToUse: string) => {
+      const reqHour = extraction.requestedHour;
+      const reqDuration = Math.max(1, extraction.requestedDurationHours || 1);
+      const reqShift = extraction.shift;
+      const mappedProfileCat = mapProfileSpecialtyToCategory(userSpecialty);
 
-    const roomMatches: RoomAvailabilityMatch[] = rooms.map((r: any) => {
-      let score = 0;
-      const roomCity = String(r.address_details?.city || "").toLowerCase();
-      const roomNeighborhood = String(
-        r.address_details?.neighborhood || "",
-      ).toLowerCase();
-      const roomSpec = String(r.specialty || "Multiuso").toLowerCase();
-      const roomModalities: string[] = Array.isArray(r.modalities)
-        ? r.modalities
-        : ["hora"];
-      const tierKey: "start" | "vip" | "master" =
-        r.tier === "master" ? "master" : r.tier === "vip" ? "vip" : "start";
-      const hourlyPrice = Number(r.address_details?.pricing?.hourly || 45);
-      const passHourlyPrice = PASS_RATES_BY_TIER[tierKey];
+      const shiftLabelMap: Record<string, string> = {
+        manha: "manhã",
+        tarde: "tarde",
+        noite: "noite",
+      };
 
-      // Horários 100% verificados na agenda real da sala (`weekConfig` + `exceptions` + `blocked_dates` + `bookings`)
-      const allFreeHours = getVerifiedRoomFreeHoursForDate(
-        r,
-        targetDateISO,
-        bookingsByRoom.get(r.id) || [],
-        exclusiveLockedRoomIds,
-        nowMs,
-      );
+      const list: RoomAvailabilityMatch[] = rooms.map((r: any) => {
+        let score = 0;
+        const info = inspectRoomDetails(r);
+        const roomCity = info.city.toLowerCase();
+        const roomNeighborhood = info.neighborhood.toLowerCase();
+        const roomSpec = String(r.specialty || "Multiuso").toLowerCase();
+        const roomModalities: string[] = Array.isArray(r.modalities)
+          ? r.modalities
+          : ["hora"];
+        const tierKey: "start" | "vip" | "master" =
+          r.tier === "master" ? "master" : r.tier === "vip" ? "vip" : "start";
+        const passHourlyPrice = PASS_RATES_BY_TIER[tierKey];
 
-      const shiftFreeHours = filterHoursByShift(allFreeHours, reqShift);
+        const allFreeHours = getVerifiedRoomFreeHoursForDate(
+          r,
+          dateToUse,
+          bookingsByRoom.get(r.id) || [],
+          exclusiveLockedRoomIds,
+          nowMs,
+        );
 
-      // Se a sala NÃO tem nenhum horário livre no dia inteiro, recebe score negativo e nunca é oferecida como livre
-      if (allFreeHours.length === 0) {
+        const shiftFreeHours = filterHoursByShift(allFreeHours, reqShift);
+
+        if (allFreeHours.length === 0) {
+          return {
+            roomId: r.id,
+            roomName: r.name || "Consultório Fusion",
+            specialty: r.specialty || "Multiuso",
+            tier: tierKey,
+            neighborhood: info.neighborhood,
+            city: info.city,
+            hourlyPrice: info.hourly,
+            passHourlyPrice,
+            shiftPrice: info.minShift,
+            monthlyPrice: info.monthly,
+            score: -999,
+            exactSlotAvailable: false,
+            consecutiveSlotsAvailable: false,
+            requestedSlotLabel:
+              reqHour !== null ? formatHourSlot(reqHour) : null,
+            availableSlots: [],
+            matchReason: "Agenda fechada ou sem vagas nesta data",
+            aiPitch: info.cleanDesc,
+          };
+        }
+
+        if (
+          extraction.city !== "Qualquer lugar" &&
+          roomCity.includes(extraction.city.toLowerCase())
+        ) {
+          score += 40;
+        }
+        if (
+          extraction.neighborhood &&
+          roomNeighborhood.includes(extraction.neighborhood.toLowerCase())
+        ) {
+          score += 25;
+        }
+
+        const wantedCatFirstWord = extraction.category
+          .split(" ")[0]
+          .toLowerCase();
+        const isExactCategory =
+          extraction.category === "Todas as Salas" ||
+          roomSpec.includes(wantedCatFirstWord);
+        const isCompatibleMultiuso = roomSpec.includes("multiuso");
+
+        if (isExactCategory) score += 50;
+        else if (isCompatibleMultiuso) score += 20;
+
+        if (
+          mappedProfileCat !== "Todas as Salas" &&
+          roomSpec.includes(mappedProfileCat.split(" ")[0].toLowerCase())
+        ) {
+          score += 25;
+        }
+
+        if (roomModalities.includes(extraction.modality)) score += 15;
+        if (extraction.tier !== "all" && r.tier === extraction.tier)
+          score += 25;
+
+        let exactSlotAvailable = false;
+        let consecutiveSlotsAvailable = false;
+        let displaySlots: string[] = [];
+        let matchReason = "";
+
+        if (reqHour !== null) {
+          const reqLabel = formatHourSlot(reqHour);
+          exactSlotAvailable = allFreeHours.includes(reqHour);
+
+          consecutiveSlotsAvailable = exactSlotAvailable;
+          if (exactSlotAvailable && reqDuration > 1) {
+            for (let i = 0; i < reqDuration; i++) {
+              if (!allFreeHours.includes(reqHour + i)) {
+                consecutiveSlotsAvailable = false;
+                break;
+              }
+            }
+          }
+
+          const closestHours = [...allFreeHours].sort(
+            (a, b) => Math.abs(a - reqHour) - Math.abs(b - reqHour),
+          );
+          displaySlots = closestHours
+            .slice(0, 4)
+            .sort((a, b) => a - b)
+            .map(formatHourSlot);
+
+          if (reqDuration > 1 && consecutiveSlotsAvailable) {
+            score += 80;
+            matchReason = `${reqDuration}h seguidas livres a partir das ${reqLabel}`;
+          } else if (exactSlotAvailable) {
+            score += 65;
+            matchReason = `Livre às ${reqLabel}`;
+          } else {
+            score -= 50;
+            matchReason = `Ocupada às ${reqLabel} • Livre às ${displaySlots.slice(0, 2).join(" e ")}`;
+          }
+        } else if (reqShift !== "") {
+          const sLabel = shiftLabelMap[reqShift] || reqShift;
+          if (shiftFreeHours.length > 0) {
+            exactSlotAvailable = true;
+            consecutiveSlotsAvailable = shiftFreeHours.length >= reqDuration;
+            score += 65;
+            displaySlots = shiftFreeHours.slice(0, 4).map(formatHourSlot);
+            matchReason = `Livre pela ${sLabel}: ${displaySlots.slice(0, 3).join(", ")}`;
+          } else {
+            exactSlotAvailable = false;
+            consecutiveSlotsAvailable = false;
+            score -= 80;
+            displaySlots = allFreeHours.slice(0, 3).map(formatHourSlot);
+            matchReason = `Fechada pela ${sLabel} • Vagas às ${displaySlots.join(", ")}`;
+          }
+        } else {
+          exactSlotAvailable = allFreeHours.length > 0;
+          consecutiveSlotsAvailable = allFreeHours.length >= reqDuration;
+          score += 30;
+          displaySlots = allFreeHours.slice(0, 4).map(formatHourSlot);
+          matchReason = `Horários livres: ${displaySlots.slice(0, 3).join(", ")}`;
+        }
+
         return {
           roomId: r.id,
           roomName: r.name || "Consultório Fusion",
           specialty: r.specialty || "Multiuso",
           tier: tierKey,
-          neighborhood: r.address_details?.neighborhood || "Centro",
-          city: r.address_details?.city || "Natal",
-          hourlyPrice,
+          neighborhood: info.neighborhood,
+          city: info.city,
+          hourlyPrice: info.hourly,
           passHourlyPrice,
-          score: -999,
-          exactSlotAvailable: false,
-          consecutiveSlotsAvailable: false,
+          shiftPrice: info.minShift,
+          monthlyPrice: info.monthly,
+          score,
+          exactSlotAvailable,
+          consecutiveSlotsAvailable,
           requestedSlotLabel: reqHour !== null ? formatHourSlot(reqHour) : null,
-          availableSlots: [],
-          matchReason: "Agenda fechada ou sem vagas nesta data",
-          aiPitch: `Consultório sem horários disponíveis em ${targetDateISO}.`,
+          availableSlots: displaySlots,
+          matchReason,
+          // Agora o aiPitch traz a descrição real da estrutura da sala (poltronas, divã, maca, etc.)!
+          aiPitch: info.cleanDesc,
         };
-      }
+      });
 
-      // Pontuação de Cidade, Bairro e Especialidade
-      if (
-        extraction.city !== "Qualquer lugar" &&
-        roomCity.includes(extraction.city.toLowerCase())
-      ) {
-        score += 40;
-      }
-      if (
-        extraction.neighborhood &&
-        roomNeighborhood.includes(extraction.neighborhood.toLowerCase())
-      ) {
-        score += 25;
-      }
+      list.sort((a, b) => b.score - a.score);
+      return list;
+    };
 
-      const wantedCatFirstWord = extraction.category
-        .split(" ")[0]
-        .toLowerCase();
-      const isExactCategory =
-        extraction.category === "Todas as Salas" ||
-        roomSpec.includes(wantedCatFirstWord);
-      const isCompatibleMultiuso = roomSpec.includes("multiuso");
+    let roomMatches = buildMatchesForDate(targetDateISO);
+    let openRoomsOnDate = roomMatches.filter(
+      (m) => m.availableSlots.length > 0,
+    );
 
-      if (isExactCategory) score += 50;
-      else if (isCompatibleMultiuso) score += 20;
+    if (openRoomsOnDate.length === 0 && targetDateISO === todayISO) {
+      targetDateISO = tomorrowISO;
+      roomMatches = buildMatchesForDate(tomorrowISO);
+      openRoomsOnDate = roomMatches.filter((m) => m.availableSlots.length > 0);
+    }
 
-      if (
-        mappedProfileCat !== "Todas as Salas" &&
-        roomSpec.includes(mappedProfileCat.split(" ")[0].toLowerCase())
-      ) {
-        score += 25;
-      }
-
-      if (roomModalities.includes(extraction.modality)) score += 15;
-      if (extraction.tier !== "all" && r.tier === extraction.tier) score += 25;
-
-      // Verificação estrita do Horário ou Turno solicitado
-      let exactSlotAvailable = false;
-      let consecutiveSlotsAvailable = false;
-      let displaySlots: string[] = [];
-      let matchReason = "";
-
-      if (reqHour !== null) {
-        const reqLabel = formatHourSlot(reqHour);
-        exactSlotAvailable = allFreeHours.includes(reqHour);
-
-        consecutiveSlotsAvailable = exactSlotAvailable;
-        if (exactSlotAvailable && reqDuration > 1) {
-          for (let i = 0; i < reqDuration; i++) {
-            if (!allFreeHours.includes(reqHour + i)) {
-              consecutiveSlotsAvailable = false;
-              break;
-            }
-          }
-        }
-
-        const closestHours = [...allFreeHours].sort(
-          (a, b) => Math.abs(a - reqHour) - Math.abs(b - reqHour),
-        );
-        displaySlots = closestHours
-          .slice(0, 4)
-          .sort((a, b) => a - b)
-          .map(formatHourSlot);
-
-        if (reqDuration > 1 && consecutiveSlotsAvailable) {
-          score += 80;
-          matchReason = `${reqDuration}h seguidas livres a partir das ${reqLabel}`;
-        } else if (exactSlotAvailable) {
-          score += 65;
-          matchReason = `Livre às ${reqLabel}`;
-        } else {
-          score -= 50; // Penaliza sala ocupada/fechada no horário pedido
-          matchReason = `Fechada/Ocupada às ${reqLabel} • Livre às ${displaySlots.slice(0, 2).join(" e ")}`;
-        }
-      } else if (reqShift !== "") {
-        const sLabel = shiftLabelMap[reqShift] || reqShift;
-        if (shiftFreeHours.length > 0) {
-          exactSlotAvailable = true;
-          consecutiveSlotsAvailable = shiftFreeHours.length >= reqDuration;
-          score += 65;
-          displaySlots = shiftFreeHours.slice(0, 4).map(formatHourSlot);
-          matchReason = `Livre pela ${sLabel}: ${displaySlots.slice(0, 3).join(", ")}`;
-        } else {
-          // A sala NÃO tem vagas no turno pedido (ex: fechada pela manhã), mas tem em outro turno
-          exactSlotAvailable = false;
-          consecutiveSlotsAvailable = false;
-          score -= 80; // Penaliza fortemente para nunca passar na frente nem parecer livre no turno pedido
-          displaySlots = allFreeHours.slice(0, 3).map(formatHourSlot);
-          matchReason = `Fechada pela ${sLabel} • Vagas apenas às ${displaySlots.join(", ")}`;
-        }
-      } else {
-        exactSlotAvailable = allFreeHours.length > 0;
-        consecutiveSlotsAvailable = allFreeHours.length >= reqDuration;
-        score += 30;
-        displaySlots = allFreeHours.slice(0, 4).map(formatHourSlot);
-        matchReason = `Horários livres: ${displaySlots.slice(0, 3).join(", ")}`;
-      }
-
-      const tierName =
-        tierKey === "master" ? "Premium" : tierKey === "vip" ? "VIP" : "Basic";
-      const aiPitch = `Consultório ${tierName} de ${r.specialty || "Multiuso"} em ${
-        r.address_details?.neighborhood || "localização central"
-      } — R$ ${hourlyPrice}/h avulso ou R$ ${passHourlyPrice}/h no Fusion Pass+.`;
-
-      return {
-        roomId: r.id,
-        roomName: r.name || "Consultório Fusion",
-        specialty: r.specialty || "Multiuso",
-        tier: tierKey,
-        neighborhood: r.address_details?.neighborhood || "Centro",
-        city: r.address_details?.city || "Natal",
-        hourlyPrice,
-        passHourlyPrice,
-        score,
-        exactSlotAvailable,
-        consecutiveSlotsAvailable,
-        requestedSlotLabel: reqHour !== null ? formatHourSlot(reqHour) : null,
-        availableSlots: displaySlots,
-        matchReason,
-        aiPitch,
-      };
-    });
-
-    roomMatches.sort((a, b) => b.score - a.score);
-
-    // 6. Validação Determinística do Headline (Garante transparência total ao especialista)
+    // Preserva o headline inteligente do Gemini/Consultor e só ajusta se a hora pedida estiver ocupada
     let finalHeadline = extraction.headline;
-    if (extraction.intentType === "room_search") {
-      const openRoomsOnDate = roomMatches.filter(
-        (m) => m.availableSlots.length > 0,
-      );
+    const reqHour = extraction.requestedHour;
+    if (extraction.intentType === "room_search" && reqHour !== null) {
       const exactShiftOrHourRooms = openRoomsOnDate.filter(
         (m) => m.exactSlotAvailable,
       );
+      const reqLabel = formatHourSlot(reqHour);
+      const dayLabel =
+        targetDateISO === tomorrowISO
+          ? "amanhã"
+          : targetDateISO === todayISO
+            ? "hoje"
+            : targetDateISO;
 
-      if (openRoomsOnDate.length === 0) {
-        finalHeadline = `Verifiquei a agenda em tempo real e nenhum consultório possui horários livres para ${targetDateISO}. Experimente consultar outro dia ou turno.`;
-      } else if (reqHour !== null) {
-        const reqLabel = formatHourSlot(reqHour);
-        if (exactShiftOrHourRooms.length > 0) {
-          finalHeadline = `Encontrei ${exactShiftOrHourRooms.length} consultório(s) com agenda verificada livre às ${reqLabel}:`;
-        } else {
-          finalHeadline = `Às ${reqLabel} os consultórios estão fechados ou já reservados, mas separei abaixo as salas que possuem outros horários realmente livres nesta data:`;
-        }
-      } else if (reqShift !== "") {
-        const sLabel = shiftLabelMap[reqShift] || reqShift;
-        if (exactShiftOrHourRooms.length > 0) {
-          finalHeadline = `Encontrei ${exactShiftOrHourRooms.length} consultório(s) com horários realmente abertos no turno da ${sLabel}:`;
-        } else {
-          finalHeadline = `No turno da ${sLabel} os consultórios estão fechados ou já locados nesta data. Veja abaixo as opções com horários livres em outros períodos do dia:`;
-        }
+      if (exactShiftOrHourRooms.length === 0 && openRoomsOnDate.length > 0) {
+        finalHeadline = `Para ${dayLabel} às ${reqLabel} os consultórios já estão ocupados, mas separei as opções abaixo com horários vizinhos livres:`;
       }
     }
 

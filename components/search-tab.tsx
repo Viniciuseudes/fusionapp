@@ -2,6 +2,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
@@ -72,10 +73,14 @@ export type RentalType = "hora" | "turno" | "fixo";
 export interface Room {
   id: string;
   name: string;
+  description?: string;
   category: string;
   tier: "start" | "vip" | "master";
   priceLabel: string;
   filterPrice: number;
+  hourlyPriceNumber: number;
+  shiftPriceNumber: number | null;
+  monthlyPriceNumber: number | null;
   image: string;
   rating: number;
   reviews_count: number;
@@ -107,6 +112,8 @@ interface RoomAvailabilityMatch {
   city?: string;
   hourlyPrice?: number;
   passHourlyPrice?: number;
+  shiftPrice?: number | null;
+  monthlyPrice?: number | null;
   score: number;
   exactSlotAvailable: boolean;
   consecutiveSlotsAvailable?: boolean;
@@ -123,6 +130,7 @@ interface AIConversationExchange {
     | "room_search"
     | "comparison_question"
     | "financial_simulation"
+    | "routine_diagnosis"
     | "profile_guidance";
   headline: string;
   comparisonBlocks: ComparisonBlock[];
@@ -207,10 +215,10 @@ export function SearchTab({
   const [supabase] = useState(() => createClient());
   const { toast } = useToast();
 
-  // IA liberada EXCLUSIVAMENTE para especialistas autenticados (!isPublic)
   const isPublic = pathname === "/" && !isDashboard;
   const canUseAIConcierge = !isPublic;
 
+  const [isPortalReady, setIsPortalReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [logoError, setLogoError] = useState(false);
   const [dbRooms, setDbRooms] = useState<Room[]>([]);
@@ -259,7 +267,7 @@ export function SearchTab({
     lng: number;
   } | null>(null);
 
-  // Estados do Concierge IA Consultivo
+  // Estados da Página Dedicada do Concierge IA
   const [isAISearchExpanded, setIsAISearchExpanded] = useState(false);
   const [aiQuery, setAiQuery] = useState("");
   const [isListeningVoice, setIsListeningVoice] = useState(false);
@@ -276,7 +284,6 @@ export function SearchTab({
   const aiInputRef = useRef<HTMLInputElement | null>(null);
   const aiThreadEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Estados da Carteira e Histórico
   const [isWalletOpen, setIsWalletOpen] = useState(false);
   const [isPassModalOpen, setIsPassModalOpen] = useState(false);
   const [passPreselect, setPassPreselect] = useState<{
@@ -297,10 +304,26 @@ export function SearchTab({
   const [bestHourlyRates, setBestHourlyRates] = useState<
     Record<string, number>
   >({
-    start: 26,
+    start: 27.95,
     vip: 34,
     master: 50,
   });
+
+  useEffect(() => {
+    setIsPortalReady(true);
+  }, []);
+
+  // Trava o scroll do fundo quando a página do Concierge IA está aberta
+  useEffect(() => {
+    if (isAISearchExpanded) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [isAISearchExpanded]);
 
   useMobileBack(
     isWalletOpen,
@@ -311,6 +334,11 @@ export function SearchTab({
     isMobileSearchOpen,
     () => setIsMobileSearchOpen(false),
     "mobile-search",
+  );
+  useMobileBack(
+    isAISearchExpanded,
+    () => setIsAISearchExpanded(false),
+    "concierge-ia-page",
   );
 
   const handleGoToCompleteProfile = useCallback(() => {
@@ -334,30 +362,30 @@ export function SearchTab({
     const specLabel = profile.specialty || "Psicologia";
     return [
       {
-        badge: profile.specialty
-          ? `Sua Área • ${profile.specialty}`
-          : "Agenda de Hoje",
-        title: `Sala para ${specLabel} hoje às 15h em Natal`,
-        desc: "Verifica disponibilidade exata e horários vizinhos na sua área",
-        icon: CalendarCheck,
-      },
-      {
-        badge: "Simulador de Lucro",
-        title: "Vale mais a pena Hora Avulsa ou Fusion Pass+?",
-        desc: "Compare o custo por consulta e descubra quando compensa",
+        badge: "Diagnóstico de Rotina",
+        title: "Atendo cerca de 2h a 4h por semana",
+        desc: "Calcula se compensa Hora Avulsa, Fusion Pass+ ou Turno Fixo",
         icon: TrendingUp,
       },
       {
-        badge: "Comparativo",
-        title: "Diferença entre Sala Basic, VIP e Premium?",
-        desc: "Entenda o que muda na estrutura e no uso dos créditos",
+        badge: "Turnos & Preços",
+        title: "Qual o valor em média do turno fixo?",
+        desc: "Veja a média por turno e quando migrar para o Pass+ 16h",
+        icon: Clock,
+      },
+      {
+        badge: "Alta Demanda • 80% Repasse",
+        title: "Como funciona a Sala Fixa com Coanfitrião (80%)?",
+        desc: "Alugue uma sala fixa e subloque horários vagos para abater seu aluguel",
         icon: Crown,
       },
       {
-        badge: "Múltiplas Horas",
-        title: "Preciso atender por 3 horas amanhã à tarde",
-        desc: "Busca salas com horas seguidas livres ou Turno Fixo",
-        icon: Clock,
+        badge: profile.specialty
+          ? `Estrutura • ${profile.specialty}`
+          : "Mobiliário & Agenda",
+        title: `Quais salas de ${specLabel} têm divã e poltrona?`,
+        desc: "Mostra a estrutura física de cada consultório e horários livres",
+        icon: Sofa,
       },
     ];
   }, [profile.specialty]);
@@ -504,7 +532,7 @@ export function SearchTab({
       const { data: roomsData } = await supabase
         .from("rooms")
         .select(
-          `id, name, image_url, modalities, is_partner, specialty, tier, address_details, host_id, reviews ( rating )`,
+          `id, name, description, image_url, modalities, is_partner, specialty, tier, address_details, host_id, reviews ( rating )`,
         )
         .eq("is_active", true)
         .eq("is_paused", false);
@@ -525,6 +553,18 @@ export function SearchTab({
                 ) / reviewsArray.length
               : 0;
 
+          const hourlyPriceNumber = Number(pricing.hourly || 45);
+          const turnos = [pricing.morning, pricing.afternoon, pricing.night]
+            .filter(Boolean)
+            .map(Number)
+            .filter((v) => !isNaN(v) && v > 0);
+          const shiftPriceNumber =
+            turnos.length > 0 ? Math.min(...turnos) : null;
+          const monthlyPriceNumber =
+            pricing.monthly && Number(pricing.monthly) > 0
+              ? Number(pricing.monthly)
+              : null;
+
           let label = "Sob consulta";
           let numPrice = 0;
 
@@ -539,12 +579,11 @@ export function SearchTab({
             appliedFilters.modality === "turno" &&
             finalModalities.includes("turno")
           ) {
-            const turnos = [pricing.morning, pricing.afternoon, pricing.night]
-              .filter(Boolean)
-              .map(Number);
-            const minTurno = turnos.length > 0 ? Math.min(...turnos) : 0;
-            label = minTurno > 0 ? `R$ ${minTurno}/turno` : "Sob consulta";
-            numPrice = minTurno;
+            label =
+              shiftPriceNumber && shiftPriceNumber > 0
+                ? `R$ ${shiftPriceNumber}/turno`
+                : "Sob consulta";
+            numPrice = shiftPriceNumber || 0;
           } else if (
             appliedFilters.modality === "fixo" &&
             pricing.monthly &&
@@ -556,13 +595,9 @@ export function SearchTab({
             if (finalModalities.includes("hora") && pricing.hourly) {
               label = `R$ ${pricing.hourly}/hora`;
               numPrice = Number(pricing.hourly);
-            } else if (
-              finalModalities.includes("turno") &&
-              (pricing.morning || pricing.afternoon)
-            ) {
-              const val = pricing.morning || pricing.afternoon;
-              label = `R$ ${val}/turno`;
-              numPrice = Number(val);
+            } else if (finalModalities.includes("turno") && shiftPriceNumber) {
+              label = `R$ ${shiftPriceNumber}/turno`;
+              numPrice = shiftPriceNumber;
             } else if (finalModalities.includes("fixo") && pricing.monthly) {
               label = `R$ ${pricing.monthly}/mês`;
               numPrice = Number(pricing.monthly);
@@ -572,10 +607,14 @@ export function SearchTab({
           return {
             id: r.id,
             name: r.name || "Sala sem nome",
+            description: r.description || "",
             category: r.specialty || "Multiuso",
             tier: r.tier || "start",
             priceLabel: label,
             filterPrice: numPrice,
+            hourlyPriceNumber,
+            shiftPriceNumber,
+            monthlyPriceNumber,
             image: r.image_url || "/placeholder.jpg",
             rating: rating,
             reviews_count: reviewsArray.length,
@@ -599,9 +638,6 @@ export function SearchTab({
     fetchData();
   }, [isPublic, supabase, appliedFilters.modality, fetchWalletData]);
 
-  // ====================================================================
-  // EXECUÇÃO DO CONCIERGE CONSULTIVO COM GEMINI (/api/ai-search)
-  // ====================================================================
   const executeAISearch = useCallback(
     async (customText?: string) => {
       if (!canUseAIConcierge) return;
@@ -611,7 +647,7 @@ export function SearchTab({
         toast({
           title: "Digite ou fale sua dúvida",
           description:
-            'Ex: "Sala disponível hoje às 15h" ou "Diferença entre Basic e VIP?"',
+            'Ex: "Atendo 2h a 4h por semana" ou "Qual o valor do turno fixo?"',
         });
         return;
       }
@@ -624,7 +660,7 @@ export function SearchTab({
       setTimeout(() => {
         aiThreadEndRef.current?.scrollIntoView({
           behavior: "smooth",
-          block: "nearest",
+          block: "end",
         });
       }, 60);
 
@@ -720,7 +756,6 @@ export function SearchTab({
             ? ext.followUpSuggestions
             : dynamicStarterCards.map((c) => c.title),
           suggestedCta: ext?.suggestedCta || "none",
-          // FILTRO ESTRITO: só exibe no chat salas que realmente têm horários livres verificados na data e score positivo
           recommendedRooms:
             ext?.shouldApplyFilters !== false
               ? matchesList
@@ -735,13 +770,13 @@ export function SearchTab({
           targetDateISO: ext?.dateISO || null,
         };
 
-        setAiExchanges((prev) => [...prev.slice(-3), newExchange]);
+        setAiExchanges((prev) => [...prev.slice(-8), newExchange]);
         setIsMobileSearchOpen(false);
 
         setTimeout(() => {
           aiThreadEndRef.current?.scrollIntoView({
             behavior: "smooth",
-            block: "nearest",
+            block: "end",
           });
         }, 120);
       } catch (err: any) {
@@ -767,9 +802,6 @@ export function SearchTab({
     ],
   );
 
-  // ====================================================================
-  // RECONHECIMENTO DE VOZ NATIVO (MICROFONE EXCLUSIVO PARA LOGADOS)
-  // ====================================================================
   const handleToggleVoiceSearch = useCallback(() => {
     if (!canUseAIConcierge) return;
 
@@ -868,7 +900,6 @@ export function SearchTab({
             lng: position.coords.longitude,
           });
           setUsingLocation(true);
-
           setPendingFilters((prev) => ({ ...prev, city: "Perto de mim" }));
 
           if (isMobileSearchOpen) {
@@ -1004,7 +1035,6 @@ export function SearchTab({
         })
         .sort((a, b) => (a.distanceKm || 999) - (b.distanceKm || 999));
     } else if (hasAIMatches) {
-      // Remove da vitrine salas que estão 100% fechadas ou sem vagas na data pesquisada pela IA
       const openInAI = exactMatches.filter(
         (r) => (aiMatchesMap[r.id]?.availableSlots?.length ?? 0) > 0,
       );
@@ -1158,11 +1188,705 @@ export function SearchTab({
   const firstName = profile.name ? profile.name.split(" ")[0] : "Especialista";
   const hasActiveWalletCredits = profile.balance > 0 || Boolean(activeSub);
 
+  // ==========================================================================
+  // PÁGINA FULL-SCREEN DO CONCIERGE IA (RENDERIZADA NO DOCUMENT.BODY VIA PORTAL)
+  // Garante 100% da tela dedicada ao chat, sem barra superior/inferior do app
+  // ==========================================================================
+  const fullScreenConciergeOverlay =
+    canUseAIConcierge &&
+    isAISearchExpanded &&
+    isPortalReady &&
+    typeof document !== "undefined"
+      ? createPortal(
+          <div className="fixed inset-0 z-[9999] bg-[#FAF7F4] flex flex-col h-[100dvh] w-screen overflow-hidden font-sans animate-in fade-in duration-200">
+            {/* 1. CABEÇALHO EXCLUSIVO DA PÁGINA DO CHAT */}
+            <div className="bg-[#141210] text-white px-4 sm:px-6 pt-[max(env(safe-area-inset-top,14px),14px)] pb-3.5 border-b border-white/10 shrink-0 shadow-md">
+              <div className="max-w-4xl mx-auto flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => setIsAISearchExpanded(false)}
+                    aria-label="Voltar para as salas"
+                    className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center shrink-0 transition-colors cursor-pointer"
+                  >
+                    <ArrowLeft className="w-5 h-5" />
+                  </button>
+
+                  <div className="relative w-9 h-9 rounded-xl bg-gradient-to-br from-[#DE5D2E] to-[#9A3C1D] text-white flex items-center justify-center shrink-0 shadow-xs ring-1 ring-white/20">
+                    <Sparkles className="w-4 h-4" />
+                    <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-[#141210]" />
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm sm:text-base font-extrabold text-white tracking-tight truncate">
+                        Concierge Fusion IA
+                      </span>
+                      {profile.specialty ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider bg-emerald-400/15 text-emerald-300 border border-emerald-400/30 px-2 py-0.5 rounded-full">
+                          <Stethoscope className="w-3 h-3" />
+                          {profile.specialty}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider bg-amber-400/15 text-[#FBBF24] border border-amber-400/30 px-2 py-0.5 rounded-full">
+                          Consultor VIP
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-stone-300 truncate">
+                      {profile.specialty
+                        ? `Consultoria de rentabilidade e salas para ${profile.specialty}`
+                        : "Simulador de horas, Turno Fixo, Coanfitrião (80%) e agenda"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {aiExchanges.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAiExchanges([]);
+                        setAiMatchesMap({});
+                        setAiTargetDateISO(null);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-[11px] font-bold text-stone-200 transition-colors cursor-pointer"
+                    >
+                      Limpar chat
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setIsAISearchExpanded(false)}
+                    className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold text-white flex items-center gap-1 cursor-pointer"
+                  >
+                    <span className="hidden sm:inline">Voltar às salas</span>
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. ÁREA DE MENSAGENS COM ROLAGEM 100% ISOLADA */}
+            <div className="flex-1 overflow-y-auto overscroll-contain px-4 sm:px-6 py-5">
+              <div className="max-w-4xl mx-auto space-y-6 pb-8">
+                {/* GUIA DE CONCLUSÃO DE PERFIL (SE INCOMPLETO) */}
+                {!profile.isComplete && (
+                  <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-amber-50/90 via-orange-50/60 to-white border border-[#BF4B24]/30 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="space-y-2 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider bg-[#BF4B24] text-white px-2.5 py-0.5 rounded-full">
+                          <AlertCircle className="w-3 h-3" />
+                          Cadastro {profile.completionPct}% concluído
+                        </span>
+                        <span className="text-xs font-bold text-stone-900">
+                          Personalize sua experiência e libere o check-in
+                          digital
+                        </span>
+                      </div>
+                      <p className="text-xs text-stone-600 leading-relaxed">
+                        Notamos que ainda falta preencher:{" "}
+                        <strong className="text-stone-900">
+                          {profile.missingFields.join(", ")}
+                        </strong>
+                        . Ao completar seu perfil, eu recomendo automaticamente
+                        os consultórios equipados para a sua área.
+                      </p>
+                      <div className="w-full max-w-xs h-1.5 bg-stone-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-[#BF4B24] rounded-full transition-all duration-500"
+                          style={{ width: `${profile.completionPct}%` }}
+                        />
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleGoToCompleteProfile}
+                      className="px-4 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 shadow-2xs transition-all active:scale-95 cursor-pointer"
+                    >
+                      <UserCheck className="w-4 h-4 text-[#FBBF24]" />
+                      <span>Completar meu perfil agora</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+
+                {/* TELA DE BOAS-VINDAS QUANDO O CHAT ESTÁ VAZIO */}
+                {aiExchanges.length === 0 && !isRunningAISearch && (
+                  <div className="space-y-5">
+                    <div className="bg-white rounded-3xl p-5 border border-stone-200/85 shadow-2xs flex items-start gap-3.5">
+                      <div className="w-10 h-10 rounded-2xl bg-[#FAF7F4] border border-[#BF4B24]/25 text-[#BF4B24] flex items-center justify-center shrink-0 mt-0.5">
+                        <MessageSquareText className="w-5 h-5" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <h3 className="text-base font-bold text-stone-900">
+                          Olá, Dr(a). {firstName}! Sou seu Consultor Inteligente
+                          na Fusion Clinic.
+                        </h3>
+                        <p className="text-xs sm:text-sm text-stone-600 leading-relaxed">
+                          Diga quantas horas por semana você pretende atender (e
+                          se são <strong>horários seguidos ou quebrados</strong>
+                          ) para eu calcular o plano mais lucrativo — desde{" "}
+                          <strong>Hora Avulsa</strong> e{" "}
+                          <strong>Fusion Pass+ (-41%)</strong> até{" "}
+                          <strong>Turno Fixo</strong> ou{" "}
+                          <strong>
+                            Sala Fixa como Coanfitrião (abatendo até 80% do
+                            aluguel)
+                          </strong>
+                          .
+                        </p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400 mb-3 pl-1">
+                        Escolha uma consultoria rápida ou faça sua pergunta:
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {dynamicStarterCards.map((card) => {
+                          const Icon = card.icon;
+                          return (
+                            <button
+                              key={card.title}
+                              type="button"
+                              onClick={() => executeAISearch(card.title)}
+                              className="group p-4 rounded-2xl bg-white hover:bg-orange-50/40 border border-stone-200/90 hover:border-[#BF4B24]/45 text-left transition-all flex items-start gap-3.5 shadow-2xs hover:shadow-sm cursor-pointer active:scale-[0.99]"
+                            >
+                              <div className="w-10 h-10 rounded-xl bg-[#FAF7F4] group-hover:bg-[#BF4B24] text-[#BF4B24] group-hover:text-white border border-[#BF4B24]/20 flex items-center justify-center shrink-0 transition-colors mt-0.5">
+                                <Icon className="w-4 h-4" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#BF4B24] block">
+                                  {card.badge}
+                                </span>
+                                <p className="text-xs sm:text-sm font-bold text-stone-900 group-hover:text-[#BF4B24] transition-colors mt-0.5 leading-snug">
+                                  “{card.title}”
+                                </p>
+                                <p className="text-[11px] text-stone-500 mt-1 line-clamp-2">
+                                  {card.desc}
+                                </p>
+                              </div>
+                              <ChevronRight className="w-4 h-4 text-stone-300 group-hover:text-[#BF4B24] shrink-0 self-center" />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* HISTÓRICO DE PERGUNTAS E RESPOSTAS */}
+                {aiExchanges.map((exchange) => (
+                  <div key={exchange.id} className="space-y-4">
+                    {/* Pergunta do Especialista */}
+                    <div className="flex flex-col items-end">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-1 pr-1">
+                        Dr(a). {firstName}{" "}
+                        {profile.specialty ? `• ${profile.specialty}` : ""}
+                      </span>
+                      <div className="bg-stone-900 text-white px-4 py-3 rounded-2xl rounded-tr-xs text-xs sm:text-sm font-semibold max-w-[88%] sm:max-w-[75%] shadow-xs">
+                        {exchange.userQuery}
+                      </div>
+                    </div>
+
+                    {/* Resposta do Concierge */}
+                    <div className="bg-white rounded-3xl p-4 sm:p-6 border border-stone-200/90 shadow-xs space-y-5">
+                      <div className="flex items-start gap-3">
+                        <div className="w-8 h-8 rounded-xl bg-[#FAF7F4] border border-[#BF4B24]/25 text-[#BF4B24] flex items-center justify-center shrink-0 mt-0.5">
+                          <Sparkles className="w-4 h-4" />
+                        </div>
+                        <div className="space-y-1 flex-1">
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#BF4B24] block">
+                            Análise do Concierge Fusion
+                          </span>
+                          <p className="text-xs sm:text-[15px] font-bold text-stone-900 leading-relaxed">
+                            {exchange.headline}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* VITRINE DE SALAS COM FOTO, DESCRIÇÃO DO MOBILIÁRIO E PREÇOS CLAROS */}
+                      {exchange.recommendedRooms.length > 0 && (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between px-1">
+                            <span className="text-[11px] font-extrabold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
+                              <CalendarCheck className="w-3.5 h-3.5 text-[#BF4B24]" />
+                              Consultórios recomendados (toque para ver fotos e
+                              reservar)
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                            {exchange.recommendedRooms.map((match) => {
+                              const fullRoom = dbRooms.find(
+                                (r) => r.id === match.roomId,
+                              );
+                              if (!fullRoom) return null;
+
+                              const isMaster = fullRoom.tier === "master";
+                              const isVip = fullRoom.tier === "vip";
+                              const passRate =
+                                bestHourlyRates[fullRoom.tier] ||
+                                (isMaster ? 50 : isVip ? 34 : 27.95);
+                              const neighborhood =
+                                fullRoom.rawAddress?.neighborhood ||
+                                match.neighborhood ||
+                                "Lagoa Nova";
+                              const hourlyRate =
+                                match.hourlyPrice ||
+                                fullRoom.hourlyPriceNumber ||
+                                45;
+                              const shiftPrice =
+                                match.shiftPrice ?? fullRoom.shiftPriceNumber;
+                              const monthlyPrice =
+                                match.monthlyPrice ??
+                                fullRoom.monthlyPriceNumber;
+
+                              const equipmentSummary =
+                                match.aiPitch ||
+                                fullRoom.description ||
+                                "Consultório climatizado com isolamento acústico, recepção e Wi-Fi.";
+
+                              return (
+                                <div
+                                  key={match.roomId}
+                                  onClick={() => {
+                                    setIsAISearchExpanded(false);
+                                    if (onOpenRoom) {
+                                      onOpenRoom({
+                                        ...fullRoom,
+                                        selectedModality:
+                                          appliedFilters.modality,
+                                        preselectedDate:
+                                          exchange.targetDateISO || undefined,
+                                        preselectedSlot:
+                                          match.exactSlotAvailable &&
+                                          match.requestedSlotLabel
+                                            ? match.requestedSlotLabel
+                                            : match.availableSlots[0] ||
+                                              undefined,
+                                      });
+                                    }
+                                  }}
+                                  className={`group rounded-2xl bg-white border overflow-hidden transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md cursor-pointer flex flex-col ${
+                                    match.exactSlotAvailable
+                                      ? "border-emerald-500/60 ring-1 ring-emerald-500/20"
+                                      : "border-stone-200/90 hover:border-[#BF4B24]/50"
+                                  }`}
+                                >
+                                  <div className="relative w-full h-36 bg-stone-100 overflow-hidden">
+                                    <Image
+                                      src={fullRoom.image}
+                                      alt={fullRoom.name}
+                                      fill
+                                      sizes="(max-width: 768px) 100vw, 320px"
+                                      className="object-cover group-hover:scale-105 transition-transform duration-500"
+                                      onError={(e: any) => {
+                                        e.target.src = "/placeholder.jpg";
+                                      }}
+                                    />
+                                    <div className="absolute inset-0 bg-gradient-to-t from-black/65 via-black/10 to-black/20 pointer-events-none" />
+
+                                    <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-1 z-10">
+                                      <span
+                                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 shadow-2xs ${
+                                          isMaster
+                                            ? "bg-stone-950/90 text-amber-300"
+                                            : isVip
+                                              ? "bg-[#BF4B24] text-white"
+                                              : "bg-white/95 text-stone-800"
+                                        }`}
+                                      >
+                                        {isMaster ? (
+                                          <>
+                                            <Crown className="w-2.5 h-2.5" />{" "}
+                                            Premium
+                                          </>
+                                        ) : isVip ? (
+                                          <>
+                                            <Star className="w-2.5 h-2.5" /> VIP
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Shield className="w-2.5 h-2.5" />{" "}
+                                            Basic
+                                          </>
+                                        )}
+                                      </span>
+
+                                      {fullRoom.reviews_count > 0 && (
+                                        <span className="bg-black/55 backdrop-blur-xs text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                                          <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
+                                          {Number(fullRoom.rating).toFixed(1)}
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    <div className="absolute bottom-2 left-2.5 right-2.5 flex items-center justify-between z-10">
+                                      <span
+                                        className={`inline-flex items-center gap-1 text-[10px] font-extrabold px-2 py-0.5 rounded-md shadow-2xs ${
+                                          match.exactSlotAvailable
+                                            ? "bg-emerald-600 text-white"
+                                            : "bg-amber-500 text-stone-950"
+                                        }`}
+                                      >
+                                        <Clock className="w-2.5 h-2.5" />
+                                        {match.matchReason}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  <div className="p-3.5 flex-1 flex flex-col justify-between bg-white space-y-2.5">
+                                    <div className="space-y-1.5">
+                                      <div className="flex items-center gap-1 text-[11px] text-stone-500 font-medium truncate">
+                                        <MapPin className="w-3 h-3 text-[#BF4B24] shrink-0" />
+                                        <span className="truncate">
+                                          {neighborhood} •{" "}
+                                          {fullRoom.specialty ||
+                                            fullRoom.category}
+                                        </span>
+                                      </div>
+
+                                      <h4 className="font-bold text-sm text-stone-900 group-hover:text-[#BF4B24] transition-colors line-clamp-1">
+                                        {fullRoom.name}
+                                      </h4>
+
+                                      {/* Descrição da Estrutura Física da Sala (Poltrona, Divã, Maca, etc.) */}
+                                      <p className="text-[11px] text-stone-600 leading-snug line-clamp-2 bg-[#FAF7F4] p-2 rounded-lg border border-stone-200/70">
+                                        {equipmentSummary}
+                                      </p>
+
+                                      {/* Preço por Hora + Pass+ */}
+                                      <div className="pt-1 flex items-baseline gap-1.5 flex-wrap">
+                                        <span className="text-xs font-extrabold text-stone-900">
+                                          R$ {hourlyRate}/h avulso
+                                        </span>
+                                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
+                                          ou R${" "}
+                                          {Number(passRate)
+                                            .toFixed(2)
+                                            .replace(".00", "")}
+                                          /h no Pass+
+                                        </span>
+                                      </div>
+
+                                      {/* Preços de Turno e Sala Fixa Mensal (se disponíveis) */}
+                                      {(shiftPrice || monthlyPrice) && (
+                                        <div className="flex items-center gap-1.5 flex-wrap text-[10px] font-semibold text-stone-500">
+                                          {shiftPrice && (
+                                            <span className="bg-stone-100 px-1.5 py-0.5 rounded">
+                                              Turno: R$ {shiftPrice}
+                                            </span>
+                                          )}
+                                          {monthlyPrice && (
+                                            <span className="bg-orange-50 text-[#BF4B24] px-1.5 py-0.5 rounded">
+                                              Fixo Mensal: R$ {monthlyPrice}
+                                            </span>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {match.availableSlots.length > 0 && (
+                                      <div className="space-y-1.5 pt-2 border-t border-stone-100">
+                                        <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block">
+                                          Toque no horário para reservar:
+                                        </span>
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          {match.availableSlots
+                                            .slice(0, 3)
+                                            .map((slot) => {
+                                              const isReq =
+                                                slot ===
+                                                match.requestedSlotLabel;
+                                              return (
+                                                <button
+                                                  key={slot}
+                                                  type="button"
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setIsAISearchExpanded(
+                                                      false,
+                                                    );
+                                                    if (onOpenRoom) {
+                                                      onOpenRoom({
+                                                        ...fullRoom,
+                                                        selectedModality:
+                                                          "hora",
+                                                        preselectedDate:
+                                                          exchange.targetDateISO ||
+                                                          undefined,
+                                                        preselectedSlot: slot,
+                                                      });
+                                                    }
+                                                  }}
+                                                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                                                    isReq
+                                                      ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs"
+                                                      : "bg-[#FAF7F4] hover:bg-[#BF4B24] text-stone-800 hover:text-white border border-stone-200/90"
+                                                  }`}
+                                                >
+                                                  {slot}
+                                                </button>
+                                              );
+                                            })}
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    <div className="pt-2 border-t border-stone-100 flex items-center justify-between text-xs font-bold text-[#BF4B24]">
+                                      <span>Ver fotos e detalhes</span>
+                                      <ArrowRight className="w-3.5 h-3.5" />
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* BLOCOS COMPARATIVOS */}
+                      {exchange.comparisonBlocks.length > 0 && (
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          {exchange.comparisonBlocks.map((block, bIdx) => (
+                            <div
+                              key={bIdx}
+                              className="p-4 rounded-2xl bg-[#FAF7F4] border border-stone-200/90 flex flex-col justify-between space-y-2.5"
+                            >
+                              <div className="space-y-2">
+                                <div className="pb-2 border-b border-stone-200/70">
+                                  <h4 className="text-xs sm:text-sm font-extrabold text-stone-900">
+                                    {block.title}
+                                  </h4>
+                                  {block.subtitle && (
+                                    <p className="text-[11px] font-bold text-[#BF4B24] mt-0.5">
+                                      {block.subtitle}
+                                    </p>
+                                  )}
+                                </div>
+                                <ul className="space-y-2 pt-0.5">
+                                  {block.bullets.map((bullet, i) => (
+                                    <li
+                                      key={i}
+                                      className="text-[11px] sm:text-xs text-stone-700 leading-snug flex items-start gap-2"
+                                    >
+                                      <CheckCircle2 className="w-3.5 h-3.5 text-[#BF4B24] shrink-0 mt-0.5" />
+                                      <span>{bullet}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* RECOMENDAÇÃO DE BOLSO */}
+                      {exchange.recommendationSummary && (
+                        <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-emerald-50/90 to-teal-50/50 border border-emerald-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="flex items-start gap-2.5">
+                            <BadgeCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                            <p className="text-xs text-emerald-950 font-medium leading-relaxed">
+                              <strong className="font-extrabold">
+                                Orientação do Concierge:
+                              </strong>{" "}
+                              {exchange.recommendationSummary}
+                            </p>
+                          </div>
+
+                          {exchange.suggestedCta === "complete_profile" && (
+                            <button
+                              type="button"
+                              onClick={handleGoToCompleteProfile}
+                              className="px-4 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                            >
+                              <UserCheck className="w-3.5 h-3.5 text-[#FBBF24]" />
+                              <span>Completar perfil em 1 min</span>
+                            </button>
+                          )}
+
+                          {exchange.suggestedCta === "open_pass_modal" && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsAISearchExpanded(false);
+                                handleOpenPassWithTier("vip");
+                              }}
+                              className="px-4 py-2.5 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                            >
+                              <Tag className="w-3.5 h-3.5" />
+                              <span>Simular Fusion Pass+ (-41%)</span>
+                            </button>
+                          )}
+
+                          {exchange.suggestedCta === "switch_to_turno" && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsAISearchExpanded(false);
+                                setPendingFilters((p) => ({
+                                  ...p,
+                                  modality: "turno",
+                                }));
+                                setAppliedFilters((p) => ({
+                                  ...p,
+                                  modality: "turno",
+                                }));
+                              }}
+                              className="px-4 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              <span>Ver Salas para Turno / Fixo</span>
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      {/* PRÓXIMAS PERGUNTAS SUGERIDAS */}
+                      <div className="pt-1 space-y-2.5">
+                        {exchange.closingQuestion && (
+                          <p className="text-xs font-bold text-stone-700">
+                            {exchange.closingQuestion}
+                          </p>
+                        )}
+                        <div className="flex flex-wrap gap-2">
+                          {exchange.followUpSuggestions.map(
+                            (followUp, fIdx) => (
+                              <button
+                                key={fIdx}
+                                type="button"
+                                onClick={() => executeAISearch(followUp)}
+                                className="text-[11px] sm:text-xs font-semibold text-[#BF4B24] bg-[#FAF7F4] hover:bg-[#BF4B24] hover:text-white border border-[#BF4B24]/30 px-3.5 py-2 rounded-full transition-all cursor-pointer text-left flex items-center gap-1.5 shadow-2xs"
+                              >
+                                <span>{followUp}</span>
+                                <ArrowRight className="w-3 h-3 opacity-70" />
+                              </button>
+                            ),
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {/* CARREGAMENTO ANIMADO */}
+                {isRunningAISearch && (
+                  <div className="space-y-3 animate-in fade-in duration-150">
+                    {pendingUserQuestion && (
+                      <div className="flex flex-col items-end">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-1 pr-1">
+                          Dr(a). {firstName}
+                        </span>
+                        <div className="bg-stone-900 text-white px-4 py-3 rounded-2xl rounded-tr-xs text-xs sm:text-sm font-semibold max-w-[85%]">
+                          {pendingUserQuestion}
+                        </div>
+                      </div>
+                    )}
+                    <div className="bg-white rounded-3xl p-5 border border-stone-200/90 shadow-2xs flex items-center gap-3.5">
+                      <div className="w-9 h-9 rounded-xl bg-[#FAF7F4] border border-[#BF4B24]/25 flex items-center justify-center shrink-0">
+                        <Loader2 className="w-4 h-4 text-[#BF4B24] animate-spin" />
+                      </div>
+                      <div>
+                        <p className="text-xs sm:text-sm font-bold text-stone-900">
+                          Analisando estrutura das salas, preços e calculando o
+                          melhor cenário...
+                        </p>
+                        <p className="text-[11px] text-stone-500">
+                          Cruzando Hora Avulsa, Fusion Pass+, Turno Fixo e
+                          Coanfitrião (80%)
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div ref={aiThreadEndRef} />
+              </div>
+            </div>
+
+            {/* 3. RODAPÉ FIXO DE DIGITAÇÃO E COMANDO DE VOZ */}
+            <div className="bg-white border-t border-stone-200/90 px-4 sm:px-6 pt-3 pb-[max(env(safe-area-inset-bottom,14px),14px)] shrink-0 shadow-[0_-8px_30px_rgba(0,0,0,0.06)]">
+              <div className="max-w-4xl mx-auto flex items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    ref={aiInputRef}
+                    type="text"
+                    value={aiQuery}
+                    onChange={(e) => setAiQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") executeAISearch();
+                    }}
+                    placeholder={
+                      profile.specialty
+                        ? `Pergunte sobre horas/semana, turno fixo, coanfitrião ou salas de ${profile.specialty}...`
+                        : 'Ex: "Atendo 2h a 4h por semana", "Valor do turno fixo?"...'
+                    }
+                    className="w-full h-12 pl-4 pr-10 rounded-2xl bg-[#FAF7F4] border border-stone-200/95 text-xs sm:text-sm text-stone-900 placeholder:text-stone-400 focus:outline-none focus:border-[#BF4B24] focus:bg-white transition-colors"
+                  />
+                  {aiQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setAiQuery("")}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-700"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleToggleVoiceSearch}
+                  title={
+                    isListeningVoice ? "Parar gravação" : "Falar no microfone"
+                  }
+                  className={`h-12 px-3.5 sm:px-4 rounded-2xl font-bold text-xs flex items-center gap-1.5 shrink-0 transition-all cursor-pointer ${
+                    isListeningVoice
+                      ? "bg-red-600 text-white animate-pulse shadow-md"
+                      : "bg-stone-100 hover:bg-stone-200 text-stone-800"
+                  }`}
+                >
+                  {isListeningVoice ? (
+                    <>
+                      <MicOff className="w-4 h-4" />
+                      <span className="hidden sm:inline">Ouvindo...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="w-4 h-4 text-[#BF4B24]" />
+                      <span className="hidden sm:inline">Voz</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isRunningAISearch}
+                  onClick={() => executeAISearch()}
+                  className="h-12 px-4 sm:px-5 rounded-2xl bg-gradient-to-r from-[#C24116] to-[#DE5D2E] hover:from-[#A83812] hover:to-[#C84B20] disabled:opacity-60 text-white font-bold text-xs flex items-center gap-1.5 shrink-0 shadow-sm transition-all cursor-pointer"
+                >
+                  {isRunningAISearch ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <span className="hidden sm:inline">Enviar</span>
+                      <SendHorizontal className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )
+      : null;
+
   return (
     <div className="flex flex-col pb-24 bg-[#FAF7F4] min-h-screen relative font-sans">
-      {/* ======================================================== */}
-      {/* MODAL DO FUSION PASS+                                    */}
-      {/* ======================================================== */}
+      {fullScreenConciergeOverlay}
+
       <FusionPassModal
         isOpen={isPassModalOpen}
         onOpenChange={setIsPassModalOpen}
@@ -1176,9 +1900,7 @@ export function SearchTab({
         }}
       />
 
-      {/* ==================================================================== */}
-      {/* GAVETA DE BUSCA MOBILE REFINADA (ESTILO AIRBNB / BOOKING)            */}
-      {/* ==================================================================== */}
+      {/* GAVETA DE BUSCA TRADICIONAL MOBILE */}
       {isMobileSearchOpen && (
         <div className="fixed inset-0 z-[200] bg-[#FAF7F4] flex flex-col md:hidden animate-in slide-in-from-bottom-6 duration-200">
           <div className="flex justify-between items-center px-5 pt-4 pb-3 bg-white border-b border-stone-200/80 shrink-0 z-10">
@@ -1201,63 +1923,30 @@ export function SearchTab({
           </div>
 
           <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-            {/* CONCIERGE IA DENTRO DA GAVETA MOBILE (APENAS PARA ESPECIALISTAS LOGADOS) */}
             {canUseAIConcierge && (
-              <div className="bg-white rounded-3xl p-4 shadow-2xs border border-[#BF4B24]/25">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-[#BF4B24] flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5" />
-                    Concierge IA{" "}
-                    {profile.specialty ? `• ${profile.specialty}` : ""}
-                  </span>
-                  {isListeningVoice && (
-                    <span className="text-[10px] font-bold text-red-600 animate-pulse">
-                      Ouvindo...
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMobileSearchOpen(false);
+                  setIsAISearchExpanded(true);
+                }}
+                className="w-full bg-stone-950 text-white rounded-2xl p-4 flex items-center justify-between gap-3 shadow-sm"
+              >
+                <div className="flex items-center gap-3 text-left">
+                  <div className="w-9 h-9 rounded-xl bg-[#BF4B24] flex items-center justify-center shrink-0">
+                    <Sparkles className="w-4 h-4 text-white" />
+                  </div>
+                  <div>
+                    <span className="text-xs font-extrabold text-[#FBBF24] block">
+                      Abrir Chat do Concierge IA
                     </span>
-                  )}
+                    <span className="text-[11px] text-stone-300">
+                      Simule horas/semana, Turno Fixo, Coanfitrião ou agenda
+                    </span>
+                  </div>
                 </div>
-
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={aiQuery}
-                    onChange={(e) => setAiQuery(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") executeAISearch();
-                    }}
-                    placeholder='Ex: "Sala livre hoje às 15h" ou "Basic vs VIP?"'
-                    className="flex-1 h-10 px-3.5 rounded-xl bg-[#FAF7F4] border border-stone-200 text-xs text-stone-900 placeholder:text-stone-400 focus:outline-none focus:border-[#BF4B24]"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleToggleVoiceSearch}
-                    aria-label="Buscar por comando de voz"
-                    className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-all ${
-                      isListeningVoice
-                        ? "bg-red-600 text-white animate-pulse"
-                        : "bg-stone-100 text-stone-700"
-                    }`}
-                  >
-                    {isListeningVoice ? (
-                      <MicOff className="w-4 h-4" />
-                    ) : (
-                      <Mic className="w-4 h-4" />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isRunningAISearch}
-                    onClick={() => executeAISearch()}
-                    className="h-10 px-3.5 rounded-xl bg-[#BF4B24] text-white font-bold text-xs flex items-center justify-center shrink-0"
-                  >
-                    {isRunningAISearch ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <SendHorizontal className="w-4 h-4" />
-                    )}
-                  </button>
-                </div>
-              </div>
+                <ChevronRight className="w-4 h-4 text-stone-400 shrink-0" />
+              </button>
             )}
 
             {/* 1. ONDE - MOBILE */}
@@ -1283,9 +1972,7 @@ export function SearchTab({
                       </span>
                     </div>
                   </button>
-
                   <div className="w-full h-px bg-stone-100 my-2.5" />
-
                   <button
                     onClick={() => {
                       setPendingFilters((p) => ({
@@ -1307,7 +1994,6 @@ export function SearchTab({
                       Todas as unidades (Qualquer lugar)
                     </span>
                   </button>
-
                   {availableCities.map((city: string) => (
                     <button
                       key={city}
@@ -1360,7 +2046,6 @@ export function SearchTab({
                     Pular data ›
                   </button>
                 </div>
-
                 <div className="flex-1 overflow-y-auto pb-4 scrollbar-hide">
                   <Calendar
                     mode="single"
@@ -1409,7 +2094,6 @@ export function SearchTab({
                 <h2 className="text-lg font-bold text-stone-900 mb-4">
                   Modalidade de locação
                 </h2>
-
                 <div className="flex bg-stone-100 p-1 rounded-xl mb-5">
                   <button
                     onClick={() =>
@@ -1521,11 +2205,10 @@ export function SearchTab({
                     </p>
                     <p className="text-xs text-stone-600 mt-1 leading-relaxed">
                       Exclusividade sobre o consultório com opção de sublocar
-                      horários vagos no modo Coanfitrião.
+                      horários vagos no modo Coanfitrião (recebendo 80%).
                     </p>
                   </div>
                 )}
-
                 <div className="mt-5 pt-3.5 border-t border-stone-100">
                   <Button
                     onClick={() => setActiveMobileTab("oque")}
@@ -1635,10 +2318,7 @@ export function SearchTab({
         </div>
       )}
 
-      {/* ==================================================================== */}
-      {/* HERO COMPACTO MOBILE COM A LOGO LARANJA OFICIAL NO TOPO              */}
-      {/* No Desktop (lg:) continua 100% transparente para não afetar o layout */}
-      {/* ==================================================================== */}
+      {/* HERO MOBILE */}
       <header className="relative overflow-hidden bg-[#B83B10] px-4 pt-3.5 pb-12 lg:bg-none lg:bg-transparent lg:shadow-none lg:pt-14 lg:pb-16 rounded-b-[28px] lg:rounded-none shadow-xs z-30 lg:pointer-events-none">
         <div className="lg:hidden absolute inset-y-0 right-0 w-[62%] z-0 pointer-events-none">
           <img
@@ -1966,13 +2646,9 @@ export function SearchTab({
         </div>
       ) : (
         <>
-          {/* ============================================================== */}
-          {/* BARRA DE BUSCA + CONCIERGE IA (CONCIERGE SÓ PARA LOGADOS)      */}
-          {/* ============================================================== */}
+          {/* BARRA DE BUSCA DESKTOP E CÁPSULA MOBILE */}
           <div className="mx-auto w-full max-w-[960px] px-4 -mt-6 lg:-mt-8 relative z-40 sticky top-3 lg:static animate-in fade-in duration-300">
-            {/* BUSCA DESKTOP */}
             <div className="hidden md:flex bg-white rounded-full shadow-[0_18px_45px_rgba(28,25,23,0.12)] items-center border border-stone-200/90 p-2 relative">
-              {/* 1. ONDE */}
               <Popover
                 open={activeSearchTab === "onde"}
                 onOpenChange={(o) => setActiveSearchTab(o ? "onde" : null)}
@@ -2062,7 +2738,6 @@ export function SearchTab({
 
               <div className="w-px h-9 bg-stone-200/80 mx-1"></div>
 
-              {/* 2. QUANDO E COMO */}
               <Popover
                 open={activeSearchTab === "quando"}
                 onOpenChange={(o) => setActiveSearchTab(o ? "quando" : null)}
@@ -2265,7 +2940,7 @@ export function SearchTab({
                           <p className="text-xs text-stone-600 mt-1 leading-relaxed">
                             Você terá exclusividade sobre o consultório, podendo
                             inclusive sublocar horários livres no modo
-                            Coanfitrião.
+                            Coanfitrião (recebendo 80%).
                           </p>
                         </div>
                       )}
@@ -2284,7 +2959,6 @@ export function SearchTab({
 
               <div className="w-px h-9 bg-stone-200/80 mx-1"></div>
 
-              {/* 3. O QUÊ? */}
               <Popover
                 open={activeSearchTab === "oque"}
                 onOpenChange={(o) => setActiveSearchTab(o ? "oque" : null)}
@@ -2364,7 +3038,6 @@ export function SearchTab({
                 </PopoverContent>
               </Popover>
 
-              {/* BOTÃO DO CONCIERGE IA (EXCLUSIVO PARA ESPECIALISTAS LOGADOS) + BUSCA PADRÃO */}
               <div className="pr-1.5 pl-2 flex gap-2 items-center">
                 {(hasSearched || aiExchanges.length > 0) && (
                   <button
@@ -2382,12 +3055,12 @@ export function SearchTab({
                   <button
                     type="button"
                     onClick={() => {
-                      setIsAISearchExpanded((prev) => !prev);
+                      setIsAISearchExpanded(true);
                       setTimeout(() => aiInputRef.current?.focus(), 80);
                     }}
-                    title="Abrir Concierge IA personalizado para a sua especialidade"
+                    title="Abrir página do Concierge IA"
                     className={`h-12 px-4 rounded-full border flex items-center gap-2 text-xs font-bold transition-all cursor-pointer ${
-                      isAISearchExpanded || aiExchanges.length > 0
+                      aiExchanges.length > 0
                         ? "bg-stone-950 text-[#FBBF24] border-stone-950 shadow-md"
                         : "bg-gradient-to-r from-[#FAF7F4] to-orange-50/70 hover:from-orange-50 hover:to-orange-100/60 text-stone-900 border-[#BF4B24]/35 shadow-2xs"
                     }`}
@@ -2411,7 +3084,7 @@ export function SearchTab({
               </div>
             </div>
 
-            {/* CÁPSULA DE BUSCA MOBILE ESTILO AIRBNB + CONCIERGE IA (SE LOGADO) */}
+            {/* CÁPSULA MOBILE */}
             <div className="md:hidden w-full bg-white rounded-full shadow-[0_12px_32px_rgba(28,25,23,0.12)] flex items-center justify-between p-2 pl-3.5 border border-stone-200/90">
               <div
                 onClick={() => {
@@ -2452,13 +3125,11 @@ export function SearchTab({
                   <button
                     type="button"
                     onClick={() => {
-                      setIsAISearchExpanded((prev) => !prev);
+                      setIsAISearchExpanded(true);
                       setTimeout(() => aiInputRef.current?.focus(), 80);
                     }}
-                    aria-label="Concierge IA"
+                    aria-label="Abrir Concierge IA"
                     className={`h-9 px-3 rounded-full border flex items-center gap-1.5 text-[11px] font-bold transition-all ${
-                      isAISearchExpanded ||
-                      isListeningVoice ||
                       aiExchanges.length > 0
                         ? "bg-stone-950 text-[#FBBF24] border-stone-950 shadow-2xs"
                         : "bg-[#FAF7F4] border-[#BF4B24]/35 text-[#BF4B24]"
@@ -2468,7 +3139,6 @@ export function SearchTab({
                     <span>IA</span>
                   </button>
                 )}
-
                 <button
                   type="button"
                   onClick={() => {
@@ -2482,643 +3152,9 @@ export function SearchTab({
                 </button>
               </div>
             </div>
-
-            {/* ==================================================================== */}
-            {/* PAINEL CONCIERGE IA COM ESPECIALIDADE + GUIA DE CADASTRO + FOTOS     */}
-            {/* ==================================================================== */}
-            {canUseAIConcierge && isAISearchExpanded && (
-              <div className="mt-3.5 bg-white rounded-[28px] shadow-[0_26px_70px_rgba(28,25,23,0.22)] border border-stone-200/95 overflow-hidden animate-in fade-in slide-in-from-top-3 duration-200">
-                {/* 1. CABEÇALHO DO CONCIERGE COM TAG DE ESPECIALIDADE */}
-                <div className="px-4 sm:px-6 py-4 bg-gradient-to-r from-[#141210] via-[#241E1A] to-[#141210] text-white flex items-center justify-between gap-3 border-b border-white/10">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="relative w-10 h-10 rounded-2xl bg-gradient-to-br from-[#DE5D2E] to-[#9A3C1D] text-white flex items-center justify-center shrink-0 shadow-md ring-1 ring-white/20">
-                      <Sparkles className="w-5 h-5" />
-                      <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 ring-2 ring-[#141210]" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm sm:text-[15px] font-extrabold text-white tracking-tight truncate">
-                          Concierge Fusion IA
-                        </span>
-                        {profile.specialty ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider bg-emerald-400/15 text-emerald-300 border border-emerald-400/30 px-2.5 py-0.5 rounded-full">
-                            <Stethoscope className="w-3 h-3" />
-                            {profile.specialty}
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider bg-amber-400/15 text-[#FBBF24] border border-amber-400/30 px-2 py-0.5 rounded-full">
-                            Especialista VIP
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-[11px] sm:text-xs text-stone-300 truncate mt-0.5">
-                        {profile.specialty
-                          ? `Curadoria personalizada para seus atendimentos de ${profile.specialty}`
-                          : "Assistente inteligente de agendamento, comparação de salas e economia"}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    {aiExchanges.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAiExchanges([]);
-                          setAiMatchesMap({});
-                          setAiTargetDateISO(null);
-                        }}
-                        className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-[11px] font-semibold text-stone-200 transition-colors cursor-pointer"
-                      >
-                        Nova conversa
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setIsAISearchExpanded(false)}
-                      aria-label="Fechar Concierge"
-                      className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* 2. CORPO DO CHAT */}
-                <div className="max-h-[68vh] overflow-y-auto px-4 sm:px-6 py-5 bg-[#FAF7F4]/70 space-y-6 scrollbar-hide">
-                  {/* GUIA INTELIGENTE DE CONCLUSÃO DE PERFIL (SE INCOMPLETO) */}
-                  {!profile.isComplete && (
-                    <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-amber-50/90 via-orange-50/60 to-white border border-[#BF4B24]/30 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div className="space-y-2 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider bg-[#BF4B24] text-white px-2.5 py-0.5 rounded-full">
-                            <AlertCircle className="w-3 h-3" />
-                            Cadastro {profile.completionPct}% concluído
-                          </span>
-                          <span className="text-xs font-bold text-stone-900">
-                            Personalize sua experiência e libere o check-in
-                            digital
-                          </span>
-                        </div>
-
-                        <p className="text-xs text-stone-600 leading-relaxed">
-                          Notamos que ainda falta preencher:{" "}
-                          <strong className="text-stone-900">
-                            {profile.missingFields.join(", ")}
-                          </strong>
-                          . Ao informar sua especialidade e dados profissionais,
-                          eu passo a recomendar automaticamente os consultórios
-                          equipados para a sua área e libero suas reservas em 1
-                          clique.
-                        </p>
-
-                        <div className="w-full max-w-xs h-1.5 bg-stone-200 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-[#BF4B24] rounded-full transition-all duration-500"
-                            style={{ width: `${profile.completionPct}%` }}
-                          />
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={handleGoToCompleteProfile}
-                        className="px-4 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 shadow-2xs transition-all active:scale-95 cursor-pointer"
-                      >
-                        <UserCheck className="w-4 h-4 text-[#FBBF24]" />
-                        <span>Completar meu perfil agora</span>
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  )}
-
-                  {/* TELA INICIAL DE BOAS-VINDAS (QUANDO AINDA NÃO HÁ MENSAGENS) */}
-                  {aiExchanges.length === 0 && !isRunningAISearch && (
-                    <div className="space-y-4">
-                      <div className="bg-white rounded-2xl p-4 sm:p-5 border border-stone-200/80 shadow-2xs flex items-start gap-3.5">
-                        <div className="w-9 h-9 rounded-xl bg-[#FAF7F4] border border-[#BF4B24]/25 text-[#BF4B24] flex items-center justify-center shrink-0 mt-0.5">
-                          <MessageSquareText className="w-4 h-4" />
-                        </div>
-                        <div className="space-y-1">
-                          <h3 className="text-sm sm:text-base font-bold text-stone-900">
-                            Olá, Dr(a). {firstName}!{" "}
-                            {profile.specialty
-                              ? `Já configurei minha busca para seus atendimentos de ${profile.specialty}.`
-                              : "Como posso ajudar nos seus atendimentos hoje?"}
-                          </h3>
-                          <p className="text-xs text-stone-600 leading-relaxed">
-                            Peça um dia e horário (ex: <em>“hoje às 15h”</em>)
-                            que eu verifico a agenda em tempo real, comparo os
-                            padrões <strong>Basic, VIP e Premium</strong> e
-                            calculo se compensa mais{" "}
-                            <strong>
-                              Hora Avulsa, Fusion Pass+ ou Turno Fixo
-                            </strong>
-                            .
-                          </p>
-                        </div>
-                      </div>
-
-                      <div>
-                        <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400 mb-2.5 pl-1">
-                          Sugestões personalizadas para você:
-                        </p>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                          {dynamicStarterCards.map((card) => {
-                            const Icon = card.icon;
-                            return (
-                              <button
-                                key={card.title}
-                                type="button"
-                                onClick={() => executeAISearch(card.title)}
-                                className="group p-3.5 rounded-2xl bg-white hover:bg-orange-50/40 border border-stone-200/85 hover:border-[#BF4B24]/45 text-left transition-all flex items-start gap-3 shadow-2xs hover:shadow-sm cursor-pointer"
-                              >
-                                <div className="w-9 h-9 rounded-xl bg-[#FAF7F4] group-hover:bg-[#BF4B24] text-[#BF4B24] group-hover:text-white border border-[#BF4B24]/20 flex items-center justify-center shrink-0 transition-colors mt-0.5">
-                                  <Icon className="w-4 h-4" />
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#BF4B24] block">
-                                    {card.badge}
-                                  </span>
-                                  <p className="text-xs font-bold text-stone-900 group-hover:text-[#BF4B24] transition-colors mt-0.5 leading-snug">
-                                    “{card.title}”
-                                  </p>
-                                  <p className="text-[11px] text-stone-500 mt-0.5 truncate">
-                                    {card.desc}
-                                  </p>
-                                </div>
-                                <ChevronRight className="w-4 h-4 text-stone-300 group-hover:text-[#BF4B24] shrink-0 self-center transition-transform group-hover:translate-x-0.5" />
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* LISTA DE TROCAS DE MENSAGENS DO CONCIERGE */}
-                  {aiExchanges.map((exchange) => (
-                    <div key={exchange.id} className="space-y-4">
-                      {/* Balão da Pergunta do Especialista */}
-                      <div className="flex flex-col items-end">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-1 pr-1">
-                          Dr(a). {firstName}{" "}
-                          {profile.specialty ? `• ${profile.specialty}` : ""}
-                        </span>
-                        <div className="bg-stone-900 text-white px-4 py-2.5 rounded-2xl rounded-tr-xs text-xs sm:text-sm font-semibold max-w-[88%] sm:max-w-[75%] shadow-xs">
-                          {exchange.userQuery}
-                        </div>
-                      </div>
-
-                      {/* Resposta Rica do Concierge Fusion */}
-                      <div className="bg-white rounded-3xl p-4 sm:p-6 border border-stone-200/90 shadow-xs space-y-5">
-                        <div className="flex items-start gap-3">
-                          <div className="w-8 h-8 rounded-xl bg-[#FAF7F4] border border-[#BF4B24]/25 text-[#BF4B24] flex items-center justify-center shrink-0 mt-0.5">
-                            <Sparkles className="w-4 h-4" />
-                          </div>
-                          <div className="space-y-1 flex-1">
-                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#BF4B24] block">
-                              Resposta do Concierge
-                            </span>
-                            <p className="text-xs sm:text-[15px] font-bold text-stone-900 leading-relaxed">
-                              {exchange.headline}
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* VITRINE DE SALAS COM FOTO DENTRO DO CHAT */}
-                        {exchange.recommendedRooms.length > 0 && (
-                          <div className="space-y-3">
-                            <div className="flex items-center justify-between px-1">
-                              <span className="text-[11px] font-extrabold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
-                                <CalendarCheck className="w-3.5 h-3.5 text-[#BF4B24]" />
-                                Salas disponíveis verificadas (toque para abrir)
-                              </span>
-                            </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
-                              {exchange.recommendedRooms.map((match) => {
-                                const fullRoom = dbRooms.find(
-                                  (r) => r.id === match.roomId,
-                                );
-                                if (!fullRoom) return null;
-
-                                const isMaster = fullRoom.tier === "master";
-                                const isVip = fullRoom.tier === "vip";
-                                const passRate =
-                                  bestHourlyRates[fullRoom.tier] ||
-                                  (isMaster ? 50 : isVip ? 34 : 26);
-                                const neighborhood =
-                                  fullRoom.rawAddress?.neighborhood || "Centro";
-
-                                return (
-                                  <div
-                                    key={match.roomId}
-                                    onClick={() =>
-                                      onOpenRoom &&
-                                      onOpenRoom({
-                                        ...fullRoom,
-                                        selectedModality:
-                                          appliedFilters.modality,
-                                        preselectedDate:
-                                          exchange.targetDateISO || undefined,
-                                        preselectedSlot:
-                                          match.exactSlotAvailable &&
-                                          match.requestedSlotLabel
-                                            ? match.requestedSlotLabel
-                                            : match.availableSlots[0] ||
-                                              undefined,
-                                      })
-                                    }
-                                    className={`group rounded-2xl bg-white border overflow-hidden transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md cursor-pointer flex flex-col ${
-                                      match.exactSlotAvailable
-                                        ? "border-emerald-500/60 ring-1 ring-emerald-500/20"
-                                        : "border-stone-200/90 hover:border-[#BF4B24]/50"
-                                    }`}
-                                  >
-                                    {/* FOTO DA SALA NO CHAT */}
-                                    <div className="relative w-full h-32 sm:h-36 bg-stone-100 overflow-hidden">
-                                      <Image
-                                        src={fullRoom.image}
-                                        alt={fullRoom.name}
-                                        fill
-                                        sizes="(max-width: 768px) 100vw, 320px"
-                                        className="object-cover group-hover:scale-105 transition-transform duration-500"
-                                        onError={(e: any) => {
-                                          e.target.src = "/placeholder.jpg";
-                                        }}
-                                      />
-                                      <div className="absolute inset-0 bg-gradient-to-t from-black/65 via-black/10 to-black/20 pointer-events-none" />
-
-                                      <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-1 z-10">
-                                        <span
-                                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 shadow-2xs ${
-                                            isMaster
-                                              ? "bg-stone-950/90 text-amber-300"
-                                              : isVip
-                                                ? "bg-[#BF4B24] text-white"
-                                                : "bg-white/95 text-stone-800"
-                                          }`}
-                                        >
-                                          {isMaster ? (
-                                            <>
-                                              <Crown className="w-2.5 h-2.5" />{" "}
-                                              Premium
-                                            </>
-                                          ) : isVip ? (
-                                            <>
-                                              <Star className="w-2.5 h-2.5" />{" "}
-                                              VIP
-                                            </>
-                                          ) : (
-                                            <>
-                                              <Shield className="w-2.5 h-2.5" />{" "}
-                                              Basic
-                                            </>
-                                          )}
-                                        </span>
-
-                                        {fullRoom.reviews_count > 0 && (
-                                          <span className="bg-black/55 backdrop-blur-xs text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
-                                            <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
-                                            {Number(fullRoom.rating).toFixed(1)}
-                                          </span>
-                                        )}
-                                      </div>
-
-                                      <div className="absolute bottom-2 left-2.5 right-2.5 flex items-center justify-between z-10">
-                                        <span
-                                          className={`inline-flex items-center gap-1 text-[10px] font-extrabold px-2 py-0.5 rounded-md shadow-2xs ${
-                                            match.exactSlotAvailable
-                                              ? "bg-emerald-600 text-white"
-                                              : "bg-amber-500 text-stone-950"
-                                          }`}
-                                        >
-                                          <Clock className="w-2.5 h-2.5" />
-                                          {match.matchReason}
-                                        </span>
-                                      </div>
-                                    </div>
-
-                                    {/* CONTEÚDO DO MINI-CARD DA SALA */}
-                                    <div className="p-3.5 flex-1 flex flex-col justify-between bg-white space-y-3">
-                                      <div>
-                                        <div className="flex items-center gap-1 text-[11px] text-stone-500 font-medium truncate">
-                                          <MapPin className="w-3 h-3 text-[#BF4B24] shrink-0" />
-                                          <span className="truncate">
-                                            {neighborhood} •{" "}
-                                            {fullRoom.specialty ||
-                                              fullRoom.category}
-                                          </span>
-                                        </div>
-
-                                        <h4 className="font-bold text-sm text-stone-900 group-hover:text-[#BF4B24] transition-colors line-clamp-1 mt-0.5">
-                                          {fullRoom.name}
-                                        </h4>
-
-                                        <div className="mt-1.5 flex items-baseline gap-1.5 flex-wrap">
-                                          <span className="text-xs font-extrabold text-stone-900">
-                                            {fullRoom.priceLabel}
-                                          </span>
-                                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
-                                            ou R$ {passRate}/h no Pass+
-                                          </span>
-                                        </div>
-                                      </div>
-
-                                      {match.availableSlots.length > 0 && (
-                                        <div className="space-y-1.5 pt-2 border-t border-stone-100">
-                                          <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block">
-                                            Horários verificados livres:
-                                          </span>
-                                          <div className="flex items-center gap-1.5 flex-wrap">
-                                            {match.availableSlots
-                                              .slice(0, 3)
-                                              .map((slot) => {
-                                                const isReq =
-                                                  slot ===
-                                                  match.requestedSlotLabel;
-                                                return (
-                                                  <button
-                                                    key={slot}
-                                                    type="button"
-                                                    onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      if (onOpenRoom) {
-                                                        onOpenRoom({
-                                                          ...fullRoom,
-                                                          selectedModality:
-                                                            appliedFilters.modality,
-                                                          preselectedDate:
-                                                            exchange.targetDateISO ||
-                                                            undefined,
-                                                          preselectedSlot: slot,
-                                                        });
-                                                      }
-                                                    }}
-                                                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                                                      isReq
-                                                        ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs"
-                                                        : "bg-[#FAF7F4] hover:bg-[#BF4B24] text-stone-800 hover:text-white border border-stone-200/90"
-                                                    }`}
-                                                  >
-                                                    {slot}
-                                                  </button>
-                                                );
-                                              })}
-                                          </div>
-                                        </div>
-                                      )}
-
-                                      <div className="pt-2 border-t border-stone-100 flex items-center justify-between text-xs font-bold text-[#BF4B24] group-hover:translate-x-0.5 transition-transform">
-                                        <span>Ver fotos e detalhes</span>
-                                        <ArrowRight className="w-3.5 h-3.5" />
-                                      </div>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* BLOCOS COMPARATIVOS EDITORIAIS */}
-                        {exchange.comparisonBlocks.length > 0 && (
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                            {exchange.comparisonBlocks.map((block, bIdx) => (
-                              <div
-                                key={bIdx}
-                                className="p-4 rounded-2xl bg-[#FAF7F4] border border-stone-200/90 flex flex-col justify-between space-y-2.5"
-                              >
-                                <div className="space-y-2">
-                                  <div className="pb-2 border-b border-stone-200/70">
-                                    <h4 className="text-xs sm:text-sm font-extrabold text-stone-900">
-                                      {block.title}
-                                    </h4>
-                                    {block.subtitle && (
-                                      <p className="text-[11px] font-bold text-[#BF4B24] mt-0.5">
-                                        {block.subtitle}
-                                      </p>
-                                    )}
-                                  </div>
-                                  <ul className="space-y-2 pt-0.5">
-                                    {block.bullets.map((bullet, i) => (
-                                      <li
-                                        key={i}
-                                        className="text-[11px] sm:text-xs text-stone-700 leading-snug flex items-start gap-2"
-                                      >
-                                        <CheckCircle2 className="w-3.5 h-3.5 text-[#BF4B24] shrink-0 mt-0.5" />
-                                        <span>{bullet}</span>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        {/* RECOMENDAÇÃO DE BOLSO + BOTÃO DE AÇÃO DIRETA */}
-                        {exchange.recommendationSummary && (
-                          <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-emerald-50/90 to-teal-50/50 border border-emerald-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                            <div className="flex items-start gap-2.5">
-                              <BadgeCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                              <p className="text-xs text-emerald-950 font-medium leading-relaxed">
-                                <strong className="font-extrabold">
-                                  Orientação do Concierge:
-                                </strong>{" "}
-                                {exchange.recommendationSummary}
-                              </p>
-                            </div>
-
-                            {exchange.suggestedCta === "complete_profile" && (
-                              <button
-                                type="button"
-                                onClick={handleGoToCompleteProfile}
-                                className="px-4 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
-                              >
-                                <UserCheck className="w-3.5 h-3.5 text-[#FBBF24]" />
-                                <span>Completar perfil em 1 min</span>
-                              </button>
-                            )}
-
-                            {exchange.suggestedCta === "open_pass_modal" && (
-                              <button
-                                type="button"
-                                onClick={() => handleOpenPassWithTier("vip")}
-                                className="px-4 py-2.5 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
-                              >
-                                <Tag className="w-3.5 h-3.5" />
-                                <span>Simular Fusion Pass+ (-41%)</span>
-                              </button>
-                            )}
-
-                            {exchange.suggestedCta === "switch_to_turno" && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setPendingFilters((p) => ({
-                                    ...p,
-                                    modality: "turno",
-                                  }));
-                                  setAppliedFilters((p) => ({
-                                    ...p,
-                                    modality: "turno",
-                                  }));
-                                }}
-                                className="px-4 py-2.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs shrink-0 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                              >
-                                <span>Ver Salas com Turno Fixo</span>
-                                <ChevronRight className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        )}
-
-                        {/* PRÓXIMAS PERGUNTAS SUGERIDAS */}
-                        <div className="pt-1 space-y-2.5">
-                          {exchange.closingQuestion && (
-                            <p className="text-xs font-bold text-stone-700">
-                              {exchange.closingQuestion}
-                            </p>
-                          )}
-
-                          <div className="flex flex-wrap gap-2">
-                            {exchange.followUpSuggestions.map(
-                              (followUp, fIdx) => (
-                                <button
-                                  key={fIdx}
-                                  type="button"
-                                  onClick={() => executeAISearch(followUp)}
-                                  className="text-[11px] sm:text-xs font-semibold text-[#BF4B24] bg-[#FAF7F4] hover:bg-[#BF4B24] hover:text-white border border-[#BF4B24]/30 px-3.5 py-1.5 rounded-full transition-all cursor-pointer text-left flex items-center gap-1.5 shadow-2xs"
-                                >
-                                  <span>{followUp}</span>
-                                  <ArrowRight className="w-3 h-3 opacity-70" />
-                                </button>
-                              ),
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-
-                  {/* ESTADO DE CARREGAMENTO ANIMADO */}
-                  {isRunningAISearch && (
-                    <div className="space-y-3 animate-in fade-in duration-150">
-                      {pendingUserQuestion && (
-                        <div className="flex flex-col items-end">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-1 pr-1">
-                            Dr(a). {firstName}
-                          </span>
-                          <div className="bg-stone-900 text-white px-4 py-2.5 rounded-2xl rounded-tr-xs text-xs sm:text-sm font-semibold max-w-[85%]">
-                            {pendingUserQuestion}
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="bg-white rounded-3xl p-5 border border-stone-200/90 shadow-2xs flex items-center gap-3.5">
-                        <div className="w-9 h-9 rounded-xl bg-[#FAF7F4] border border-[#BF4B24]/25 flex items-center justify-center shrink-0">
-                          <Loader2 className="w-4 h-4 text-[#BF4B24] animate-spin" />
-                        </div>
-                        <div>
-                          <p className="text-xs sm:text-sm font-bold text-stone-900">
-                            {profile.specialty
-                              ? `Verificando agenda real de salas compatíveis com ${profile.specialty}...`
-                              : "Verificando agendas em tempo real e calculando o melhor custo-benefício..."}
-                          </p>
-                          <p className="text-[11px] text-stone-500">
-                            Cruzando turnos abertos e reservas na Fusion Clinic
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div ref={aiThreadEndRef} />
-                </div>
-
-                {/* 3. BARRA INFERIOR DE ENTRADA DE TEXTO E VOZ */}
-                <div className="p-3.5 sm:p-4 bg-white border-t border-stone-200/80">
-                  <div className="flex items-center gap-2">
-                    <div className="relative flex-1">
-                      <input
-                        ref={aiInputRef}
-                        type="text"
-                        value={aiQuery}
-                        onChange={(e) => setAiQuery(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") executeAISearch();
-                        }}
-                        placeholder={
-                          profile.specialty
-                            ? `Pergunte sobre salas para ${profile.specialty}, horários ou pacotes...`
-                            : 'Pergunte ao Concierge: "Sala livre hoje às 15h", "Basic vs VIP?"...'
-                        }
-                        className="w-full h-11 sm:h-12 pl-4 pr-10 rounded-2xl bg-[#FAF7F4] border border-stone-200/95 text-xs sm:text-sm text-stone-900 placeholder:text-stone-400 focus:outline-none focus:border-[#BF4B24] focus:bg-white transition-colors"
-                      />
-                      {aiQuery && (
-                        <button
-                          type="button"
-                          onClick={() => setAiQuery("")}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-700"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={handleToggleVoiceSearch}
-                      title={
-                        isListeningVoice
-                          ? "Parar gravação"
-                          : "Falar no microfone"
-                      }
-                      className={`h-11 sm:h-12 px-3.5 sm:px-4 rounded-2xl font-bold text-xs flex items-center gap-1.5 shrink-0 transition-all cursor-pointer ${
-                        isListeningVoice
-                          ? "bg-red-600 text-white animate-pulse shadow-md"
-                          : "bg-stone-100 hover:bg-stone-200 text-stone-800"
-                      }`}
-                    >
-                      {isListeningVoice ? (
-                        <>
-                          <MicOff className="w-4 h-4" />
-                          <span className="hidden sm:inline">Ouvindo...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Mic className="w-4 h-4 text-[#BF4B24]" />
-                          <span className="hidden sm:inline">Voz</span>
-                        </>
-                      )}
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={isRunningAISearch}
-                      onClick={() => executeAISearch()}
-                      className="h-11 sm:h-12 px-4 sm:px-5 rounded-2xl bg-gradient-to-r from-[#C24116] to-[#DE5D2E] hover:from-[#A83812] hover:to-[#C84B20] disabled:opacity-60 text-white font-bold text-xs flex items-center gap-1.5 shrink-0 shadow-sm transition-all cursor-pointer"
-                    >
-                      {isRunningAISearch ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <>
-                          <span className="hidden sm:inline">Enviar</span>
-                          <SendHorizontal className="w-4 h-4" />
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
 
-          {/* ============================================================== */}
-          {/* FAIXA DE ESPECIALIDADES NO POLEGAR (EXCLUSIVO MOBILE)          */}
-          {/* ============================================================== */}
+          {/* FAIXA DE ESPECIALIDADES NO POLEGAR (MOBILE) */}
           <div className="lg:hidden px-4 mt-3.5">
             <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide py-1">
               {CATEGORIES.map((cat) => {
@@ -3147,9 +3183,7 @@ export function SearchTab({
             </div>
           </div>
 
-          {/* ============================================================== */}
-          {/* CARD COMPACTO FUSION PASS+ MOBILE (SEM QUEBRA DE LINHA)        */}
-          {/* ============================================================== */}
+          {/* CARD COMPACTO FUSION PASS+ MOBILE */}
           <div className="lg:hidden mx-auto w-full px-4 mt-3 relative z-30">
             {hasActiveWalletCredits ? (
               <div
@@ -3215,32 +3249,29 @@ export function SearchTab({
             )}
           </div>
 
-          {/* ============================================================== */}
-          {/* BARRA RESUMO DO CONCIERGE (QUANDO RECOLHIDO APÓS UMA BUSCA)    */}
-          {/* ============================================================== */}
+          {/* ATALHO PARA REABRIR A CONVERSA SALVA DO CONCIERGE IA */}
           {canUseAIConcierge &&
             !isAISearchExpanded &&
             aiExchanges.length > 0 && (
-              <div className="px-4 lg:px-10 mx-auto max-w-5xl lg:max-w-[1360px] w-full mt-4 animate-in fade-in duration-200">
+              <div className="px-4 lg:px-10 mx-auto max-w-5xl lg:max-w-[1360px] w-full mt-3.5">
                 <div
                   onClick={() => setIsAISearchExpanded(true)}
-                  className="p-3.5 sm:px-5 rounded-2xl bg-white border border-[#BF4B24]/30 shadow-2xs flex items-center justify-between gap-3 cursor-pointer hover:bg-orange-50/30 transition-colors"
+                  className="p-3.5 sm:px-5 rounded-2xl bg-stone-950 text-white border border-stone-800 shadow-sm flex items-center justify-between gap-3 cursor-pointer active:scale-[0.99] transition-transform"
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-8 h-8 rounded-xl bg-stone-900 text-[#FBBF24] flex items-center justify-center shrink-0">
+                    <div className="w-8 h-8 rounded-xl bg-[#BF4B24] text-white flex items-center justify-center shrink-0">
                       <Sparkles className="w-4 h-4" />
                     </div>
                     <div className="min-w-0">
-                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#BF4B24] block">
-                        Concierge IA Ativo • Toque para ver os cards e continuar
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#FBBF24] block">
+                        Conversa aberta no Concierge IA • Toque para retomar
                       </span>
-                      <p className="text-xs font-semibold text-stone-800 truncate">
+                      <p className="text-xs font-medium text-stone-200 truncate">
                         {aiExchanges[aiExchanges.length - 1].headline}
                       </p>
                     </div>
                   </div>
-
-                  <span className="text-xs font-bold text-[#BF4B24] shrink-0 flex items-center gap-1">
+                  <span className="text-xs font-bold text-[#FBBF24] shrink-0 flex items-center gap-1">
                     <span>Abrir chat</span>
                     <ChevronRight className="w-4 h-4" />
                   </span>
@@ -3248,9 +3279,7 @@ export function SearchTab({
               </div>
             )}
 
-          {/* ============================================================== */}
-          {/* BARRA DE CURADORIA E FILTROS DO MOSTRUÁRIO (PADRÃO + ÁREA)     */}
-          {/* ============================================================== */}
+          {/* BARRA DE CURADORIA E FILTROS DO MOSTRUÁRIO */}
           <div className="px-4 lg:px-10 mx-auto max-w-5xl lg:max-w-[1360px] w-full mt-4 lg:mt-8">
             <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 pb-4 lg:pb-5 border-b border-stone-200/80">
               <div>
@@ -3373,9 +3402,7 @@ export function SearchTab({
             </div>
           ) : (
             <div className="px-0 md:px-4 lg:px-10 max-w-5xl lg:max-w-[1360px] mx-auto w-full space-y-9 lg:space-y-12 pb-12 mt-6 lg:mt-8">
-              {/* ============================================================ */}
-              {/* SEÇÃO 1: SALAS PREMIUM                                       */}
-              {/* ============================================================ */}
+              {/* SEÇÃO 1: SALAS PREMIUM */}
               {(activeTier === "all" || activeTier === "master") &&
                 masterRooms.length > 0 && (
                   <section>
@@ -3398,7 +3425,6 @@ export function SearchTab({
                           </p>
                         </div>
                       </div>
-
                       <button
                         type="button"
                         onClick={() => handleOpenPassWithTier("master")}
@@ -3445,9 +3471,7 @@ export function SearchTab({
                   </section>
                 )}
 
-              {/* ============================================================ */}
-              {/* SEÇÃO 2: SALAS VIP                                           */}
-              {/* ============================================================ */}
+              {/* SEÇÃO 2: SALAS VIP */}
               {(activeTier === "all" || activeTier === "vip") &&
                 vipRooms.length > 0 && (
                   <section>
@@ -3470,7 +3494,6 @@ export function SearchTab({
                           </p>
                         </div>
                       </div>
-
                       <button
                         type="button"
                         onClick={() => handleOpenPassWithTier("vip")}
@@ -3517,9 +3540,7 @@ export function SearchTab({
                   </section>
                 )}
 
-              {/* ============================================================ */}
-              {/* SEÇÃO 3: SALAS BASIC                                         */}
-              {/* ============================================================ */}
+              {/* SEÇÃO 3: SALAS BASIC */}
               {(activeTier === "all" || activeTier === "start") &&
                 startRooms.length > 0 && (
                   <section>
@@ -3542,7 +3563,6 @@ export function SearchTab({
                           </p>
                         </div>
                       </div>
-
                       <button
                         type="button"
                         onClick={() => handleOpenPassWithTier("start")}
@@ -3640,7 +3660,6 @@ function RoomCard({
           : "w-full"
       }`}
     >
-      {/* FOTO DO CONSULTÓRIO */}
       <div
         className={`relative w-full bg-stone-100 overflow-hidden ${
           horizontal
@@ -3658,10 +3677,8 @@ function RoomCard({
             e.target.src = "/placeholder.jpg";
           }}
         />
-
         <div className="absolute inset-0 bg-gradient-to-t from-black/45 via-transparent to-black/15 pointer-events-none" />
 
-        {/* Selos Superiores */}
         <div className="absolute top-3 left-3 flex items-center gap-1.5 z-10">
           {room.isPartner && (
             <span className="bg-white/95 backdrop-blur-xs px-2.5 py-1 rounded-full text-[10px] font-bold text-stone-800 flex items-center gap-1 shadow-2xs">
@@ -3694,7 +3711,6 @@ function RoomCard({
           </span>
         </div>
 
-        {/* Botão Favoritar */}
         <button
           onClick={(e) => onToggleFavorite(e, room.id)}
           aria-label="Salvar nos favoritos"
@@ -3709,7 +3725,6 @@ function RoomCard({
           />
         </button>
 
-        {/* Especialidade sobre a base da foto */}
         <div className="absolute bottom-2.5 left-3 right-3 flex items-center justify-between z-10">
           <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-white bg-black/45 backdrop-blur-xs px-2.5 py-1 rounded-lg border border-white/15">
             <Stethoscope className="w-3 h-3 text-orange-200" />
@@ -3725,9 +3740,7 @@ function RoomCard({
         </div>
       </div>
 
-      {/* CORPO DO CARD EDITORIAL */}
       <div className="flex flex-col p-4 sm:p-5 flex-1 bg-white">
-        {/* Linha 1: Localização + Nota */}
         <div className="flex items-center justify-between gap-2 text-xs text-stone-500 mb-1">
           <span className="flex items-center gap-1 font-medium truncate">
             <MapPin className="w-3.5 h-3.5 text-[#BF4B24] shrink-0" />
@@ -3751,12 +3764,10 @@ function RoomCard({
           )}
         </div>
 
-        {/* Linha 2: Nome do Consultório */}
         <h3 className="font-bold text-base sm:text-[17px] text-stone-900 leading-snug line-clamp-1 group-hover:text-[#BF4B24] transition-colors">
           {room.name}
         </h3>
 
-        {/* Linha 3: Horários Disponíveis na Busca IA (Quando ativa) OU Diferenciais Inclusos */}
         {aiMatch && aiMatch.availableSlots.length > 0 ? (
           <div className="mt-2 mb-1 p-2.5 rounded-xl bg-[#FAF7F4] border border-stone-200/80">
             <div className="flex items-center justify-between gap-1 mb-1.5">
@@ -3802,11 +3813,12 @@ function RoomCard({
           </div>
         ) : (
           <p className="text-[11px] text-stone-400 font-medium mt-1 truncate">
-            Check-in digital • Recepção e Wi-Fi inclusos
+            {room.description
+              ? room.description
+              : "Check-in digital • Recepção e Wi-Fi inclusos"}
           </p>
         )}
 
-        {/* Rodapé de Preço + Âncora Fusion Pass+ */}
         <div className="mt-auto pt-3.5 border-t border-stone-100 flex items-end justify-between gap-2">
           <div>
             <div className="flex items-baseline gap-1.5">
