@@ -1421,12 +1421,6 @@ export function AdminBookingsTab({
         (a, b) => parseInt(a.split("h")[0], 10) - parseInt(b.split("h")[0], 10),
       );
 
-      const customBrl = Number(newBookingAgreedBrl);
-      const agreedUnitBrl =
-        !isNaN(customBrl) && customBrl > 0
-          ? Number((customBrl / sortedSlots.length).toFixed(2))
-          : null;
-
       const payloads = sortedSlots.map((slot) => {
         const startHour = parseInt(slot.split("h")[0], 10);
         const slotStart = setSeconds(
@@ -1438,6 +1432,8 @@ export function AdminBookingsTab({
           0,
         );
 
+        const customBrl = Number(newBookingAgreedBrl);
+
         return {
           user_id: newBookingSpecialistId,
           room_id: newBookingRoomId,
@@ -1446,11 +1442,13 @@ export function AdminBookingsTab({
           status: "confirmed",
           total_cost: 1,
           booking_origin: "admin_manual",
-          agreed_value_brl: agreedUnitBrl,
+          agreed_value_brl:
+            !isNaN(customBrl) && customBrl > 0
+              ? Number((customBrl / sortedSlots.length).toFixed(2))
+              : null,
         };
       });
 
-      // 1. Inserir a reserva
       const { data: inserted, error } = await supabase
         .from("bookings")
         .insert(payloads)
@@ -1458,16 +1456,19 @@ export function AdminBookingsTab({
 
       if (error) throw error;
 
-      // 2. Disparar a Server Action de Envio de E-mails
+      let emailStatusMsg = "Notificações por e-mail enviadas.";
       if (inserted && inserted[0]?.id) {
-        sendBookingNotificationEmails(inserted[0].id).catch((err) => {
-          console.error("Falha silenciosa ao disparar e-mail de Admin:", err);
-        });
+        const emailRes: any = await sendBookingNotificationEmails(
+          inserted[0].id,
+        );
+        if (!emailRes?.success) {
+          emailStatusMsg = `Reserva salva, mas atenção no e-mail: ${emailRes?.error || "Verifique o Resend"}`;
+        }
       }
 
       toast({
         title: "Reserva criada com sucesso!",
-        description: `${sortedSlots.length} horário(s) bloqueado(s) na agenda e notificações enviadas.`,
+        description: `${sortedSlots.length} horário(s) bloqueado(s) na agenda. ${emailStatusMsg}`,
       });
 
       setIsNewBookingOpen(false);
