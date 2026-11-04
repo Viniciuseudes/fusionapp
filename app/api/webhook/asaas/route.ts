@@ -1,4 +1,4 @@
-// app/api/webhook/asaas/route.ts
+// app/api/webhooks/asaas/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import {
@@ -305,18 +305,14 @@ export async function POST(request: Request) {
     ) {
       // Só cancela na tabela `bookings` se NÃO for uma assinatura
       if (!isSubscriptionPayment) {
-        const query = supabaseAdmin
+        // CANCELA TODAS AS RESERVAS ATRELADAS A ESTE PIX/CARTÃO SIMULTANEAMENTE
+        await supabaseAdmin
           .from("bookings")
-          .update({ status: "cancelled" });
-
-        if (externalRef) {
-          await query.eq("id", externalRef);
-        } else {
-          await query.eq("asaas_payment_id", paymentId);
-        }
+          .update({ status: "cancelled" })
+          .eq("asaas_payment_id", paymentId);
 
         console.log(
-          `[Asaas Webhook] Pagamento de reserva ${paymentId} cancelado/vencido. Reserva liberada.`,
+          `[Asaas Webhook] Pagamento de reserva ${paymentId} cancelado/vencido. Reservas liberadas.`,
         );
       }
     }

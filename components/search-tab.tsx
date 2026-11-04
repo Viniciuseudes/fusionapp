@@ -2260,7 +2260,7 @@ export function SearchTab({
       <header className="relative overflow-hidden bg-[#B83B10] px-4 pt-3.5 pb-12 lg:bg-none lg:bg-transparent lg:shadow-none lg:pt-14 lg:pb-16 rounded-b-[28px] lg:rounded-none shadow-xs z-30 lg:pointer-events-none">
         <div className="lg:hidden absolute inset-y-0 right-0 w-[62%] z-0 pointer-events-none">
           <img
-            src="/images/room-consultorio.jpg"
+            src="/hero.png"
             alt="Consultório Fusion Clinic"
             className="w-full h-full object-cover object-[center_65%] opacity-55"
           />

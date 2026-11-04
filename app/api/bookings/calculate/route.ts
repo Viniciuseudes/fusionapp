@@ -9,7 +9,6 @@ const supabaseAdmin = createAdminClient(
   { auth: { persistSession: false } }
 );
 
-// GET: Retorna todos os horários ocupados da sala (Bypass de RLS para o RoomDetail)
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -67,7 +66,6 @@ export async function POST(request: Request) {
       );
     }
 
-    // 1. Verifica conflito de horário para cada slot selecionado (usando Admin Client)
     const slotsToCheck: Array<{ startTime: string; endTime: string }> =
       Array.isArray(slots) && slots.length > 0
         ? slots
@@ -93,7 +91,9 @@ export async function POST(request: Request) {
         }
 
         if (b.status === "pending_payment" || b.status === "pending") {
+          // EXCEÇÃO: Se for o PRÓPRIO usuário tentando reservar novamente a sala que ele bloqueou mas não pagou, permitimos.
           if (b.user_id === user.id) return false;
+
           const lockTime = b.created_at ? new Date(b.created_at).getTime() : 0;
           const maxLockMs = b.asaas_payment_id ? 30 * 60 * 1000 : 6 * 60 * 1000;
           return nowMs - lockTime <= maxLockMs;
@@ -110,7 +110,6 @@ export async function POST(request: Request) {
       }
     }
 
-    // 2. Busca a sala e seu Tier
     const { data: room, error: roomError } = await supabaseAdmin
       .from("rooms")
       .select("id, name, tier")
@@ -123,27 +122,22 @@ export async function POST(request: Request) {
 
     const roomTier = room.tier || "start";
 
-    // 3. Consulta a carteira do usuário (apenas créditos válidos)
     const { data: transactions } = await supabaseAdmin
       .from("wallet_transactions")
       .select("amount, type, tier, expires_at")
       .eq("user_id", user.id);
 
-    let startBal = 0,
-      vipBal = 0,
-      masterBal = 0;
+    let startBal = 0, vipBal = 0, masterBal = 0;
     const now = new Date();
 
     transactions?.forEach((tx) => {
       if (tx.amount > 0 && tx.expires_at && new Date(tx.expires_at) < now) return;
-
       const amt = Number(tx.amount);
       if (tx.tier === "master") masterBal += amt;
       else if (tx.tier === "vip") vipBal += amt;
       else startBal += amt;
     });
 
-    // 4. Lógica de Cascata de Tiers
     let availableCredits = 0;
     if (roomTier === "master") {
       availableCredits = masterBal;
@@ -162,7 +156,7 @@ export async function POST(request: Request) {
       upgradeFeeBRL: 0,
       hasEnoughCredits,
       currentBalance: availableCredits,
-      canProceed: hasEnoughCredits,
+      canProceed: true, // DEVE SER SEMPRE TRUE PARA PERMITIR PAGAR COM PIX/CARTÃO!
       roomTier,
     });
   } catch (error) {

@@ -76,7 +76,6 @@ interface CheckoutModalProps {
   onSuccess?: () => void;
 }
 
-// ADICIONADO O ESTADO DE "ERROR"
 type CheckoutStep = "confirm" | "pix" | "success" | "error";
 
 const formatCardNumber = (val: string) => {
@@ -128,9 +127,8 @@ export function CheckoutModal({
   const { toast } = useToast();
   const supabase = createClient();
   const router = useRouter();
-
   const [step, setStep] = useState<CheckoutStep>("confirm");
-  const [errorMessage, setErrorMessage] = useState<string>(""); // Armazena o motivo do erro
+  const [errorMessage, setErrorMessage] = useState<string>("");
   const [paymentMethod, setPaymentMethod] = useState<"wallet" | "pix" | "card">(
     "wallet",
   );
@@ -164,28 +162,13 @@ export function CheckoutModal({
   } | null>(null);
   const [isMyCard, setIsMyCard] = useState(true);
 
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
-
   useEffect(() => {
     setCardData((prev) => ({ ...prev, isThirdParty: !isMyCard }));
   }, [isMyCard]);
 
+  // Recupera o cartão guardado ao abrir o modal
   useEffect(() => {
     if (isOpen) {
-      window.history.pushState(
-        { modal: "checkout" },
-        "",
-        window.location.hash + "/checkout",
-      );
-      const handlePop = () => {
-        if (step === "pix") {
-          setShowCloseConfirm(true);
-        } else {
-          onClose();
-        }
-      };
-      window.addEventListener("popstate", handlePop);
-
       const fetchSavedCard = async () => {
         const {
           data: { user },
@@ -203,16 +186,10 @@ export function CheckoutModal({
         }
       };
       fetchSavedCard();
-
-      return () => {
-        window.removeEventListener("popstate", handlePop);
-        if (window.history.state?.modal === "checkout") {
-          window.history.back();
-        }
-      };
     }
-  }, [isOpen, step, onClose, supabase]);
+  }, [isOpen, supabase]);
 
+  // Reseta os estados quando o modal abre
   useEffect(() => {
     if (isOpen) {
       setStep("confirm");
@@ -255,18 +232,16 @@ export function CheckoutModal({
     const checkPaymentStatus = async () => {
       if (isChecking) return;
       isChecking = true;
-
       try {
         const res = await fetch(`/api/checkout?bookingId=${activeBookingId}`);
         const data = await res.json();
-
         if (data.confirmed || data.status === "confirmed") {
           setStep("success");
           setShowCloseConfirm(false);
           if (onSuccess) onSuccess();
         } else if (data.status === "cancelled") {
           setErrorMessage(
-            "O tempo limite esgotou e sua reserva foi cancelada.",
+            "O tempo limite esgotou e a sua reserva foi cancelada.",
           );
           setStep("error");
           setShowCloseConfirm(false);
@@ -319,11 +294,10 @@ export function CheckoutModal({
       window.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("focus", checkPaymentStatus);
     };
-  }, [step, activeBookingId, supabase, onClose, onSuccess]);
+  }, [step, activeBookingId, supabase, onSuccess]);
 
   useEffect(() => {
     if (!isOpen || step === "success" || step === "error" || !expiresAt) return;
-
     const timer = setInterval(() => {
       const now = Date.now();
       const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
@@ -336,7 +310,6 @@ export function CheckoutModal({
         setStep("error");
       }
     }, 1000);
-
     return () => clearInterval(timer);
   }, [isOpen, step, expiresAt]);
 
@@ -356,7 +329,6 @@ export function CheckoutModal({
 
     try {
       const codeToApply = couponCode.toUpperCase().replace(/\s/g, "");
-
       const { data: coupon, error } = await supabase
         .from("coupons")
         .select("*")
@@ -365,17 +337,21 @@ export function CheckoutModal({
         .single();
 
       if (error || !coupon)
-        throw new Error("Cupom inválido ou não encontrado.");
+        throw new Error("Cupão inválido ou não encontrado.");
+
       if (coupon.valid_until && new Date(coupon.valid_until) < new Date())
-        throw new Error("Este cupom já expirou.");
+        throw new Error("Este cupão já expirou.");
+
       if (coupon.max_uses && coupon.current_uses >= coupon.max_uses)
-        throw new Error("Este cupom atingiu o limite de utilizações.");
+        throw new Error("Este cupão atingiu o limite de utilizações.");
+
       if (coupon.valid_room_ids && coupon.valid_room_ids.length > 0) {
         if (!coupon.valid_room_ids.includes(room.id))
-          throw new Error("Este cupom não é válido para esta sala.");
+          throw new Error("Este cupão não é válido para esta sala.");
       }
+
       if (coupon.type === "bogo" && selectedSlots.length < 2)
-        throw new Error("O cupom 'Leve 2' exige no mínimo 2 horas.");
+        throw new Error("O cupão 'Leve 2' exige no mínimo 2 horas.");
 
       setAppliedCoupon(coupon);
       setCouponFeedback({
@@ -388,7 +364,7 @@ export function CheckoutModal({
         toast({
           title: "Pagamento Alterado",
           description:
-            "Cupons são válidos apenas para dinheiro. Selecionamos o Pix.",
+            "Cupões são válidos apenas para dinheiro. Selecionámos o Pix.",
         });
       }
     } catch (err: any) {
@@ -408,14 +384,13 @@ export function CheckoutModal({
     if (method === "wallet" && appliedCoupon) {
       removeCoupon();
       toast({
-        title: "Cupom Removido",
-        description: "Não é possível aplicar cupons com Créditos.",
+        title: "Cupão Removido",
+        description: "Não é possível aplicar cupões com Créditos.",
       });
     }
     setPaymentMethod(method);
   };
 
-  // Wrapper robusto que intercepta falhas para jogar na tela de ERRO
   const handleSubmitWrapper = async () => {
     if (paymentMethod === "card" && !cardData.useSavedCard) {
       if (
@@ -440,13 +415,6 @@ export function CheckoutModal({
     }
 
     try {
-      // Chama a função onConfirm passada pela página pai (que faz o fetch real)
-      // Como a função é void/assíncrona no componente pai, precisamos tratar o erro lá ou interceptá-lo.
-      // Para manter a arquitetura atual sem quebrar a assinatura da função `onConfirm`,
-      // instruí o componente pai (room-detail.tsx) a não fechar o modal abruptamente em caso de erro,
-      // mas sim expor uma forma de alterar o state. Como o controle do estado do PIX/Sucesso vem por props,
-      // usaremos a intercepção nativa do erro do `onConfirm` caso possua await.
-
       await onConfirm(
         paymentMethod,
         appliedCoupon,
@@ -460,7 +428,6 @@ export function CheckoutModal({
 
   const handleRobustCopy = async (textToCopy: string | null | undefined) => {
     if (!textToCopy) return;
-
     try {
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(textToCopy);
@@ -474,7 +441,6 @@ export function CheckoutModal({
         document.body.appendChild(textArea);
         textArea.focus();
         textArea.select();
-
         try {
           document.execCommand("copy");
         } catch (err) {
@@ -483,7 +449,6 @@ export function CheckoutModal({
           document.body.removeChild(textArea);
         }
       }
-
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
       toast({
@@ -511,6 +476,7 @@ export function CheckoutModal({
   const roomTier = room.tier || "start";
   const usedTier = summary.usedTier || "start";
   const isCascading = getTierWeight(usedTier) > getTierWeight(roomTier);
+
   const finalCredits = summary.creditsRequired;
   const isMoneyMode = paymentMethod === "pix" || paymentMethod === "card";
 
@@ -534,6 +500,7 @@ export function CheckoutModal({
   const dateFormatted = format(selectedDate, "dd 'de' MMMM, yyyy", {
     locale: ptBR,
   });
+
   const minutes = Math.floor(timeLeft / 60);
   const seconds = timeLeft % 60;
   const timeFormatted = `${minutes}:${seconds.toString().padStart(2, "0")}`;
@@ -577,7 +544,6 @@ export function CheckoutModal({
                 <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-6">
                   Detalhes do Espaço
                 </h3>
-
                 <div className="flex gap-4 mb-8">
                   <div className="w-20 h-20 rounded-xl overflow-hidden bg-slate-200 shrink-0 border border-slate-200">
                     <img
@@ -614,7 +580,7 @@ export function CheckoutModal({
                     <h4 className="text-xs font-bold text-slate-900 flex items-center justify-between mb-3">
                       <span className="flex items-center gap-1.5">
                         <Ticket className="w-4 h-4 text-indigo-500" /> Possui um
-                        Cupom?
+                        Cupão?
                       </span>
                       {!isMoneyMode && (
                         <span className="text-[9px] uppercase tracking-widest text-slate-400 font-bold bg-slate-100 px-2 py-0.5 rounded">
@@ -665,7 +631,7 @@ export function CheckoutModal({
                               {appliedCoupon.code}
                             </p>
                             <p className="text-[10px] font-bold text-emerald-600">
-                              Cupom Aplicado!
+                              Cupão Aplicado!
                             </p>
                           </div>
                         </div>
@@ -817,7 +783,7 @@ export function CheckoutModal({
                       <div className="mt-1 bg-amber-100/50 border border-amber-200 p-2 rounded-lg flex items-start gap-2">
                         <ArrowDownRight className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
                         <p className="text-[10px] font-bold text-amber-700 leading-tight">
-                          Efeito Cascata: Utilizando seu saldo{" "}
+                          Efeito Cascata: Utilizando o seu saldo{" "}
                           <b className="uppercase">{usedTier}</b> para alugar
                           esta sala <b className="uppercase">{roomTier}</b>.
                         </p>
@@ -917,7 +883,6 @@ export function CheckoutModal({
                                 )}
                               </div>
                             </div>
-
                             <button
                               onClick={() => {
                                 setSavedCardInfo(null);
@@ -1162,6 +1127,7 @@ export function CheckoutModal({
                     Copie e cole o código abaixo para pagar com o aplicativo do
                     seu banco.
                   </p>
+
                   <div className="w-full relative mb-4">
                     <input
                       readOnly
@@ -1192,6 +1158,7 @@ export function CheckoutModal({
                   </Button>
                 </div>
               </div>
+
               <div className="hidden md:flex p-12 flex-col items-center text-center">
                 <button
                   onClick={handleAttemptClose}
@@ -1199,6 +1166,7 @@ export function CheckoutModal({
                 >
                   <X className="w-6 h-6" />
                 </button>
+
                 <h2 className="text-3xl font-black text-slate-900 mb-2">
                   Pague com PIX
                 </h2>
@@ -1206,6 +1174,7 @@ export function CheckoutModal({
                   Escaneie o QR Code abaixo com o aplicativo do seu banco para
                   liberar a sua reserva agora mesmo.
                 </p>
+
                 <div className="bg-white p-6 rounded-3xl shadow-lg border-2 border-slate-100 mb-8 relative overflow-hidden">
                   <div className="absolute top-0 left-0 w-full h-2 bg-[#BF4B24]"></div>
                   {pixQrCode && (
@@ -1216,6 +1185,7 @@ export function CheckoutModal({
                     />
                   )}
                 </div>
+
                 <div className="w-full max-w-md mb-8">
                   <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2 text-left ml-1">
                     PIX Copia e Cola
@@ -1258,14 +1228,12 @@ export function CheckoutModal({
               >
                 <X className="w-6 h-6" />
               </button>
-
               <div className="w-24 h-24 bg-red-100 rounded-full flex items-center justify-center mb-6 shadow-inner">
                 <XCircle className="w-12 h-12 text-red-600" />
               </div>
               <h2 className="text-3xl font-black text-slate-900 mb-3 text-center">
                 Pagamento não aprovado
               </h2>
-
               <div className="bg-red-50 border border-red-100 p-4 rounded-xl mb-8 w-full max-w-sm">
                 <div className="flex items-start gap-3">
                   <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
@@ -1275,7 +1243,6 @@ export function CheckoutModal({
                   </p>
                 </div>
               </div>
-
               <div className="flex flex-col w-full max-w-xs gap-3">
                 <Button
                   onClick={() => setStep("confirm")}
@@ -1303,11 +1270,9 @@ export function CheckoutModal({
               >
                 <X className="w-6 h-6" />
               </button>
-
               <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mb-6 shadow-inner shrink-0">
                 <CheckCircle2 className="w-10 h-10 text-emerald-600" />
               </div>
-
               <h2 className="text-2xl md:text-3xl font-black text-slate-900 mb-2 text-center">
                 Tudo Certo!
               </h2>
@@ -1321,7 +1286,6 @@ export function CheckoutModal({
                 <h3 className="text-xs font-black text-slate-400 uppercase tracking-wider mb-4">
                   Comprovante de Reserva
                 </h3>
-
                 <div className="space-y-4">
                   <div className="flex justify-between items-start pb-4 border-b border-slate-200/60">
                     <span className="text-sm font-bold text-slate-500">
@@ -1331,7 +1295,6 @@ export function CheckoutModal({
                       {room.name}
                     </span>
                   </div>
-
                   <div className="flex justify-between items-start pb-4 border-b border-slate-200/60">
                     <span className="text-sm font-bold text-slate-500">
                       Data
@@ -1345,7 +1308,6 @@ export function CheckoutModal({
                       </span>
                     </div>
                   </div>
-
                   <div className="flex justify-between items-center">
                     <span className="text-sm font-bold text-slate-500">
                       Valor Pago

@@ -63,14 +63,51 @@ function DashboardContent() {
   const [supabase] = useState(() => createClient());
   const searchParams = useSearchParams();
 
-  // FLAG DE VIA EXPRESSA: Verifica se o profissional está entrando via NFC/QR da porta
   const scanParam =
     searchParams.get("scan") ||
     searchParams.get("room") ||
     searchParams.get("door");
-  const isScanningDoor = !!scanParam;
 
-  const [activeTab, setActiveTab] = useState<TabType>("search");
+  // TRAVA PERMANENTE DE SESSÃO DE PORTA:
+  // Não volta para false quando a URL é limpa pelo BookingsTab, bloqueando 100% dos pop-ups!
+  const [isDoorScanSession, setIsDoorScanSession] = useState<boolean>(() => {
+    if (scanParam) return true;
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.get("scan") || sp.get("room") || sp.get("door")) {
+        sessionStorage.setItem("fusion_door_scan_session", "1");
+        return true;
+      }
+      return sessionStorage.getItem("fusion_door_scan_session") === "1";
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    if (scanParam && !isDoorScanSession) {
+      setIsDoorScanSession(true);
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("fusion_door_scan_session", "1");
+      }
+    }
+  }, [scanParam, isDoorScanSession]);
+
+  // Ativa atributo global no body para silenciar qualquer modal/banner de instalação PWA externo
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    if (isDoorScanSession) {
+      document.body.setAttribute("data-door-scan-lock", "true");
+    } else {
+      document.body.removeAttribute("data-door-scan-lock");
+    }
+    return () => {
+      document.body.removeAttribute("data-door-scan-lock");
+    };
+  }, [isDoorScanSession]);
+
+  const [activeTab, setActiveTab] = useState<TabType>(() =>
+    scanParam || isDoorScanSession ? "bookings" : "search",
+  );
   const [selectedRoom, setSelectedRoom] = useState<any | null>(null);
   const [pendingReviewBooking, setPendingReviewBooking] = useState<any | null>(
     null,
@@ -107,7 +144,7 @@ function DashboardContent() {
   useEffect(() => {
     const currentHash = window.location.hash.replace("#", "");
 
-    if (isScanningDoor && currentHash !== "bookings") {
+    if ((scanParam || isDoorScanSession) && currentHash !== "bookings") {
       window.history.replaceState(
         null,
         "",
@@ -115,12 +152,13 @@ function DashboardContent() {
       );
       setActiveTab("bookings");
     } else if (!window.location.hash || window.location.hash === "") {
+      const initialTab = isDoorScanSession ? "bookings" : "search";
       window.history.replaceState(
         null,
         "",
-        window.location.pathname + window.location.search + "#search",
+        window.location.pathname + window.location.search + "#" + initialTab,
       );
-      setActiveTab("search");
+      setActiveTab(initialTab);
     } else {
       if (VALID_TABS.includes(currentHash as TabType)) {
         setActiveTab(currentHash as TabType);
@@ -155,14 +193,28 @@ function DashboardContent() {
 
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [activeTab, searchParams, isScanningDoor]);
+  }, [activeTab, scanParam, isDoorScanSession]);
 
   const handleTabChange = (tab: TabType) => {
+    // Se o médico mudar manualmente para outra aba (ex: Buscar), encerramos o modo restrito da porta
+    if (tab !== "bookings" && isDoorScanSession) {
+      setIsDoorScanSession(false);
+      if (typeof window !== "undefined") {
+        sessionStorage.removeItem("fusion_door_scan_session");
+      }
+    }
+
     if (activeTab === tab && !selectedRoom) return;
 
     if (tab === "search") {
       if (activeTab !== "search") {
-        window.history.back();
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + window.location.search + "#search",
+        );
+        setActiveTab("search");
+        setSelectedRoom(null);
         return;
       }
     } else {
@@ -350,8 +402,14 @@ function DashboardContent() {
           masterCredits,
         });
 
-        // Só exibe popup de review pendente se o médico não estiver focado na porta
-        if (!isScanningDoor) {
+        // BLOQUEIO TOTAL DE POP-UP DE AVALIAÇÃO ANTIGA QUANDO ENTROU VIA TAG NFC / QR
+        const isScanActiveNow =
+          isDoorScanSession ||
+          (typeof window !== "undefined" &&
+            (new URLSearchParams(window.location.search).has("scan") ||
+              sessionStorage.getItem("fusion_door_scan_session") === "1"));
+
+        if (!isScanActiveNow) {
           const now = new Date().toISOString();
           const { data: bookings } = await supabase
             .from("bookings")
@@ -388,7 +446,7 @@ function DashboardContent() {
     }
 
     initializeDashboard();
-  }, [supabase, router, isScanningDoor]);
+  }, [supabase, router, isDoorScanSession]);
 
   const renderTab = () => {
     switch (activeTab) {
@@ -459,12 +517,19 @@ function DashboardContent() {
                 border-radius: 0 !important;
               }
             }
+            /* Bloqueia qualquer modal ou banner de instalação externo durante a sessão da porta NFC/QR */
+            body[data-door-scan-lock="true"] [role="dialog"]:not([data-door-allowed="true"]),
+            body[data-door-scan-lock="true"] [data-radix-portal]:not(:has([data-door-allowed="true"])) {
+              display: none !important;
+              opacity: 0 !important;
+              pointer-events: none !important;
+            }
           `,
         }}
       />
 
-      {/* BLOQUEIA POP-UPS PROMOCIONAIS SE ESTIVER LENDO A PORTA */}
-      {!isScanningDoor && (
+      {/* NUNCA RENDERIZA POP-UPS DE DESCONTO, PUSH/PWA OU REVIEW ANTIGO NO SCAN DE PORTA */}
+      {!isDoorScanSession && (
         <>
           <FusionPassPromoPopup {...promoPopupProps} />
           <PushRegistry />
@@ -472,7 +537,7 @@ function DashboardContent() {
       )}
 
       {/* 1. TOP BAR DINÂMICA */}
-      {!selectedRoom && (
+      {!selectedRoom && !isDoorScanSession && (
         <div className="bg-[#0C0A09] text-white px-3.5 lg:px-10 py-2 lg:py-2.5 z-50">
           <div className="max-w-[1360px] mx-auto flex items-center justify-between gap-2.5 lg:gap-4">
             {walletState.isSubscriber ? (
@@ -744,7 +809,7 @@ function DashboardContent() {
           !selectedRoom ? "pb-20 lg:pb-12" : ""
         }`}
       >
-        {!selectedRoom && (
+        {!selectedRoom && !isDoorScanSession && (
           <div className="lg:hidden absolute top-3.5 right-4 z-40">
             <NotificationBell />
           </div>
@@ -823,15 +888,17 @@ function DashboardContent() {
         />
       )}
 
-      <ReviewModal
-        isOpen={!!pendingReviewBooking}
-        onClose={() => setPendingReviewBooking(null)}
-        bookingId={pendingReviewBooking?.id || ""}
-        roomId={pendingReviewBooking?.room_id || ""}
-        roomName={pendingReviewBooking?.rooms?.name || ""}
-        bookingDate={pendingReviewBooking?.start_time}
-        onSuccess={() => setPendingReviewBooking(null)}
-      />
+      {!isDoorScanSession && (
+        <ReviewModal
+          isOpen={!!pendingReviewBooking}
+          onClose={() => setPendingReviewBooking(null)}
+          bookingId={pendingReviewBooking?.id || ""}
+          roomId={pendingReviewBooking?.room_id || ""}
+          roomName={pendingReviewBooking?.rooms?.name || ""}
+          bookingDate={pendingReviewBooking?.start_time}
+          onSuccess={() => setPendingReviewBooking(null)}
+        />
+      )}
     </div>
   );
 }

@@ -218,9 +218,91 @@ export function RoomDetail(props: RoomDetailProps) {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [currentTime, setCurrentTime] = useState<number>(() => Date.now());
 
+  // ====================================================================
+  // HOISTING DAS FUNÇÕES DE CHECKOUT PARA SEREM LIDAS PELO USEMOBILEBACK
+  // ====================================================================
+  const fetchRoomBookings = useCallback(async () => {
+    if (!roomData?.id) return;
+    try {
+      const res = await fetch(
+        `/api/bookings/calculate?roomId=${roomData.id}&_t=${Date.now()}`,
+        { cache: "no-store" },
+      );
+      if (res.ok) {
+        const json = await res.json();
+        if (Array.isArray(json.bookings)) {
+          setRoomBookings(json.bookings);
+          return;
+        }
+      }
+    } catch (e) {
+      console.error("Fallback para busca direta de reservas:", e);
+    }
+
+    const { data, error } = await supabase
+      .from("bookings")
+      .select(
+        "id, start_time, end_time, status, created_at, asaas_payment_id, user_id",
+      )
+      .eq("room_id", roomData.id)
+      .neq("status", "cancelled");
+
+    if (!error && data) {
+      setRoomBookings(data);
+    }
+  }, [roomData?.id, supabase]);
+
+  const handleCheckoutClose = useCallback(async () => {
+    setIsCheckoutOpen(false);
+
+    if (bookingConfirmedRef.current) {
+      setCheckoutSummary(null);
+      setSelectedSlots([]);
+      setPixQrCode(null);
+      setPixCopyPaste(null);
+      setActiveBookingId(null);
+      await fetchRoomBookings();
+      return;
+    }
+
+    const summary = checkoutSummaryRef.current;
+    if (summary && summary.lockIds) {
+      const lockIds = summary.lockIds;
+      const supabaseClient = createClient();
+
+      const { data: checkBookings } = await supabaseClient
+        .from("bookings")
+        .select("id, status, asaas_payment_id")
+        .in("id", lockIds);
+
+      // APENAS CANCELA SE NÃO TIVER GERADO PIX/CARTÃO (asaas_payment_id nulo)
+      const pendingIds =
+        checkBookings
+          ?.filter(
+            (b: any) => b.status === "pending_payment" && !b.asaas_payment_id,
+          )
+          .map((b: any) => b.id) || [];
+
+      if (pendingIds.length > 0) {
+        setRoomBookings((prevBookings: any[]) =>
+          prevBookings.filter((b: any) => !pendingIds.includes(b.id)),
+        );
+        await supabaseClient.from("bookings").delete().in("id", pendingIds);
+      }
+    }
+
+    // Se ele fechou o modal no meio do PIX (que tem asaas_payment_id),
+    // mantemos selectedSlots, pixQr e activeBookingId para caso ele reabra ou pague depois
+    setCheckoutSummary(null);
+    await fetchRoomBookings();
+  }, [fetchRoomBookings]);
+
+  // ====================================================================
+  // REGRAS DE VOLTAR DO MOBILE BEM DEFINIDAS AGORA
+  // ====================================================================
   useMobileBack(
     isCheckoutOpen,
-    () => setIsCheckoutOpen(false),
+    handleCheckoutClose, // <- Alterado com sucesso!
     "checkout-modal",
   );
   useMobileBack(
@@ -255,77 +337,6 @@ export function RoomDetail(props: RoomDetailProps) {
     }, 15000);
     return () => clearInterval(interval);
   }, []);
-
-  const fetchRoomBookings = useCallback(async () => {
-    if (!roomData?.id) return;
-    try {
-      const res = await fetch(
-        `/api/bookings/calculate?roomId=${roomData.id}&_t=${Date.now()}`,
-        { cache: "no-store" },
-      );
-      if (res.ok) {
-        const json = await res.json();
-        if (Array.isArray(json.bookings)) {
-          setRoomBookings(json.bookings);
-          return;
-        }
-      }
-    } catch (e) {
-      console.error("Fallback para busca direta de reservas:", e);
-    }
-
-    const { data, error } = await supabase
-      .from("bookings")
-      .select(
-        "id, start_time, end_time, status, created_at, asaas_payment_id, user_id",
-      )
-      .eq("room_id", roomData.id)
-      .neq("status", "cancelled");
-
-    if (!error && data) {
-      setRoomBookings(data);
-    }
-  }, [roomData?.id, supabase]);
-
-  const handleCheckoutClose = useCallback(async () => {
-    setIsCheckoutOpen(false);
-    setSelectedSlots([]);
-    setPixQrCode(null);
-    setPixCopyPaste(null);
-    setActiveBookingId(null);
-
-    if (bookingConfirmedRef.current) {
-      setCheckoutSummary(null);
-      await fetchRoomBookings();
-      return;
-    }
-
-    const summary = checkoutSummaryRef.current;
-    if (summary && summary.lockIds) {
-      const lockIds = summary.lockIds;
-      const supabaseClient = createClient();
-
-      const { data: checkBookings } = await supabaseClient
-        .from("bookings")
-        .select("id, status")
-        .in("id", lockIds);
-
-      const pendingIds =
-        checkBookings
-          ?.filter((b: any) => b.status === "pending_payment")
-          .map((b: any) => b.id) || [];
-
-      if (pendingIds.length > 0) {
-        setRoomBookings((prevBookings: any[]) =>
-          prevBookings.filter((b: any) => !pendingIds.includes(b.id)),
-        );
-        await supabaseClient.from("bookings").delete().in("id", pendingIds);
-      }
-    }
-
-    setCheckoutSummary(null);
-    await fetchRoomBookings();
-  }, [fetchRoomBookings]);
 
   const isSlotBooked = useCallback(
     (slotKey: string) => {

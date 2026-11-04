@@ -2,6 +2,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
@@ -132,19 +133,29 @@ export function BookingsTab({
   const searchParams = useSearchParams();
   const processedScanRef = useRef<string | null>(null);
 
+  const [isPortalReady, setIsPortalReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<"upcoming" | "past">("upcoming");
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [adjacentMap, setAdjacentMap] = useState<Record<string, boolean>>({});
 
-  // Flag visual: esconde a tab inteira durante o processamento NFC para ser instantâneo
-  const [isProcessingSmartDoor, setIsProcessingSmartDoor] = useState(
-    !!(
-      searchParams.get("scan") ||
-      searchParams.get("room") ||
-      searchParams.get("door")
-    ),
+  // Detecta se entrou pelo link da porta NFC/QR Code
+  const [isProcessingSmartDoor, setIsProcessingSmartDoor] = useState<boolean>(
+    () => {
+      if (
+        searchParams.get("scan") ||
+        searchParams.get("room") ||
+        searchParams.get("door")
+      ) {
+        return true;
+      }
+      if (typeof window !== "undefined") {
+        const sp = new URLSearchParams(window.location.search);
+        return Boolean(sp.get("scan") || sp.get("room") || sp.get("door"));
+      }
+      return false;
+    },
   );
 
   // Filtros
@@ -177,13 +188,12 @@ export function BookingsTab({
     booking: Booking | null;
   }>({ isOpen: false, booking: null });
 
-  // Modal de Extensão Automática (Overtime)
   const [extendModal, setExtendModal] = useState<{
     isOpen: boolean;
     booking: Booking | null;
   }>({ isOpen: false, booking: null });
 
-  // NOVO: Modal Inteligente de Porta (NFC / QR Code Direto)
+  // Estado da Tela Dedicada de Porta (NFC / QR Code Direto)
   const [doorSmartModal, setDoorSmartModal] = useState<DoorSmartFeedbackState>({
     isOpen: false,
     mode: "checkin_done",
@@ -201,6 +211,24 @@ export function BookingsTab({
     cameraFailed: boolean;
   }>({ isOpen: false, type: "checkin", booking: null, cameraFailed: false });
   const [manualCode, setManualCode] = useState("");
+
+  useEffect(() => {
+    setIsPortalReady(true);
+  }, []);
+
+  // Enquanto o terminal da porta estiver aberto ou processando, trava o body contra qualquer pop-up externo
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    if (isProcessingSmartDoor || doorSmartModal.isOpen) {
+      document.body.setAttribute("data-door-scan-lock", "true");
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [isProcessingSmartDoor, doorSmartModal.isOpen]);
 
   useMobileBack(
     !!activeSessionBooking,
@@ -227,11 +255,6 @@ export function BookingsTab({
     extendModal.isOpen,
     () => setExtendModal({ isOpen: false, booking: null }),
     "modal-extensao",
-  );
-  useMobileBack(
-    doorSmartModal.isOpen,
-    () => setDoorSmartModal((p) => ({ ...p, isOpen: false })),
-    "modal-porta-nfc",
   );
   useMobileBack(isSheetOpen, () => setIsSheetOpen(false), "sheet-detalhes");
   useMobileBack(
@@ -332,7 +355,13 @@ export function BookingsTab({
 
   // --- MOTOR DE NOTIFICAÇÕES E ESTEIRA DE OVERTIME ---
   useEffect(() => {
-    if ("Notification" in window && Notification.permission === "default") {
+    // Não pede permissão de notificação no meio do scan da porta para não abrir pop-up do navegador
+    if (
+      !isProcessingSmartDoor &&
+      !doorSmartModal.isOpen &&
+      "Notification" in window &&
+      Notification.permission === "default"
+    ) {
       Notification.requestPermission();
     }
 
@@ -385,7 +414,12 @@ export function BookingsTab({
     }, 60000);
 
     return () => clearInterval(interval);
-  }, [bookings, extendModal.isOpen]);
+  }, [
+    bookings,
+    extendModal.isOpen,
+    isProcessingSmartDoor,
+    doorSmartModal.isOpen,
+  ]);
 
   const triggerNotification = (title: string, body: string) => {
     if ("Notification" in window && Notification.permission === "granted") {
@@ -580,12 +614,12 @@ export function BookingsTab({
 
     const clearUrlScanParams = () => {
       if (typeof window !== "undefined") {
+        sessionStorage.setItem("fusion_door_scan_session", "1");
         window.history.replaceState(null, "", "/dashboard#bookings");
       }
     };
 
     const processScan = async () => {
-      // Caso 1: Formato antigo (?scan=checkin&bookingId=...)
       if (
         (rawScan === "checkin" || rawScan === "checkout") &&
         targetBookingId &&
@@ -602,11 +636,10 @@ export function BookingsTab({
           } else {
             await executeInstantCheckin(targetBooking, true);
           }
-          return; // as funções de checkin/out já fecham o isProcessing
+          return;
         }
       }
 
-      // Caso 2: Tag NFC ou QR Code da Porta (?scan=ID_DA_SALA ou código de 6 dígitos)
       const cleanScan = rawScan.trim().toLowerCase();
       const nowMs = Date.now();
 
@@ -622,11 +655,16 @@ export function BookingsTab({
       });
 
       const matchingRoomBookings = todayActiveBookings.filter((b) => {
-        const rId = String(b.room_id || "").toLowerCase();
+        const rId = String(b.room_id || "")
+          .replace(/[^a-zA-Z0-9]/g, "")
+          .toLowerCase();
+        const rawRoomId = String(b.room_id || "").toLowerCase();
+        const normalizedScan = cleanScan.replace(/[^a-zA-Z0-9]/g, "");
         return (
-          rId === cleanScan ||
-          rId.startsWith(cleanScan) ||
-          cleanScan.includes(rId)
+          rawRoomId === cleanScan ||
+          rawRoomId.startsWith(cleanScan) ||
+          rId.startsWith(normalizedScan) ||
+          cleanScan.includes(rawRoomId)
         );
       });
 
@@ -638,10 +676,10 @@ export function BookingsTab({
       );
       if (inProgressInRoom) {
         await executeInstantCheckout(inProgressInRoom, true);
-        return; // isProcessingSmartDoor é fechado no finally da função
+        return;
       }
 
-      // B) CHECK-IN imediato!
+      // B) CHECK-IN imediato! (15 min antes se livre, 0 min se houver reserva colada antes)
       const readyForCheckinInRoom = matchingRoomBookings.find((b) => {
         const startMs = new Date(b.start_time).getTime();
         const endMs = new Date(b.end_time).getTime();
@@ -652,7 +690,7 @@ export function BookingsTab({
 
       if (readyForCheckinInRoom) {
         await executeInstantCheckin(readyForCheckinInRoom, true);
-        return; // isProcessingSmartDoor é fechado no finally da função
+        return;
       }
 
       // C) Muito cedo
@@ -754,7 +792,26 @@ export function BookingsTab({
   const displayBookings =
     activeTab === "upcoming" ? upcomingBookings : pastBookings;
 
-  // --- MÉTODOS DE AÇÃO UI ---
+  const handleCheckinSuccess = async () => {
+    if (!scannerConfig.booking) return;
+    const currentBooking = scannerConfig.booking;
+    const actionType = scannerConfig.type;
+
+    setScannerConfig({
+      isOpen: false,
+      type: "checkin",
+      booking: null,
+      cameraFailed: false,
+    });
+    setManualCode("");
+
+    if (actionType === "checkout" || currentBooking.status === "in_progress") {
+      await executeInstantCheckout(currentBooking, true);
+    } else {
+      await executeInstantCheckin(currentBooking, true);
+    }
+  };
+
   const handleOpenChat = async (booking: Booking, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     setActionLoading(true);
@@ -878,7 +935,7 @@ export function BookingsTab({
       });
       setReviewModal({ isOpen: false, booking: null, rating: 0, comment: "" });
       fetchBookings();
-    } catch (err: any) {
+    } catch {
       toast({
         variant: "destructive",
         title: "Erro",
@@ -1011,7 +1068,7 @@ CNPJ: 49.351.127/0001-44
     setIsSheetOpen(true);
   };
 
-  // --- CARD: PRÓXIMAS (DETALHADO E COM EDUCAÇÃO DE HORÁRIO) ---
+  // --- CARD: PRÓXIMAS ---
   const UpcomingCard = ({ booking }: { booking: Booking }) => {
     const startObj = new Date(booking.start_time);
     const endObj = new Date(booking.end_time);
@@ -1023,7 +1080,7 @@ CNPJ: 49.351.127/0001-44
         typeof booking.rooms.address_details === "string"
           ? JSON.parse(booking.rooms.address_details)
           : booking.rooms.address_details;
-    } catch (e) {}
+    } catch {}
     const fullAddress = `${address.street || ""}, ${address.number || ""} ${address.complement ? `- ${address.complement}` : ""}`;
 
     const hasBackToBack = adjacentMap[booking.id] || false;
@@ -1095,7 +1152,6 @@ CNPJ: 49.351.127/0001-44
             </div>
           </div>
 
-          {/* AVISO EDUCATIVO DE SAÍDA PONTUAL QUANDO EM ANDAMENTO */}
           {isInProgress && (
             <div
               className={`mb-3 p-3 rounded-xl border text-xs font-medium flex items-start gap-2.5 ${
@@ -1174,7 +1230,7 @@ CNPJ: 49.351.127/0001-44
           {isInProgress ? (
             <>
               <Button
-                onClick={() => executeInstantCheckout(booking, false)}
+                onClick={() => executeInstantCheckout(booking, true)}
                 disabled={actionLoading}
                 className="w-full h-12 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl shadow-lg shadow-emerald-600/20"
               >
@@ -1191,7 +1247,7 @@ CNPJ: 49.351.127/0001-44
           ) : isReadyForCheckin ? (
             <>
               <Button
-                onClick={() => executeInstantCheckin(booking, false)}
+                onClick={() => executeInstantCheckin(booking, true)}
                 disabled={actionLoading}
                 className="w-full h-12 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
               >
@@ -1293,55 +1349,379 @@ CNPJ: 49.351.127/0001-44
     );
   };
 
-  // TELA DE CARREGAMENTO INTELIGENTE ("Conectando à porta...")
-  if (isProcessingSmartDoor) {
-    return (
-      <div className="fixed inset-0 z-[300] bg-stone-950 flex flex-col items-center justify-center p-6 text-center text-white animate-in fade-in duration-200">
-        <div className="relative mb-6">
-          <div className="absolute inset-0 bg-[#BF4B24] rounded-full blur-xl opacity-20 animate-pulse" />
-          <div className="w-20 h-20 bg-stone-900 border border-stone-800 rounded-full flex items-center justify-center relative z-10">
-            <SmartphoneNfc className="w-10 h-10 text-[#BF4B24] animate-pulse" />
-          </div>
-        </div>
-        <h2 className="text-2xl font-black mb-2">Conectando à porta...</h2>
-        <p className="text-sm text-stone-400 max-w-xs leading-relaxed">
-          Verificando sua reserva e autenticando o acesso de forma segura.
-        </p>
-      </div>
-    );
-  }
+  // ============================================================================
+  // TERMINAL DE PORTA EXCLUSIVO EM TELA CHEIA (VIA PORTAL NO DOCUMENT.BODY)
+  // NUNCA fecha ao tocar fora na tela — só fecha nos botões explícitos!
+  // ============================================================================
+  const smartDoorFullScreenPortal =
+    isPortalReady &&
+    typeof document !== "undefined" &&
+    (isProcessingSmartDoor || doorSmartModal.isOpen)
+      ? createPortal(
+          <div
+            data-door-allowed="true"
+            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-[999999] bg-stone-950/95 backdrop-blur-md flex flex-col items-center justify-center p-4 sm:p-6 overflow-y-auto font-sans animate-in fade-in duration-200"
+          >
+            {isProcessingSmartDoor ? (
+              <div className="text-center text-white max-w-xs mx-auto">
+                <div className="relative mb-6 flex justify-center">
+                  <div className="absolute w-24 h-24 bg-[#BF4B24] rounded-full blur-xl opacity-30 animate-pulse" />
+                  <div className="w-20 h-20 bg-stone-900 border border-stone-800 rounded-full flex items-center justify-center relative z-10">
+                    <SmartphoneNfc className="w-10 h-10 text-[#BF4B24] animate-pulse" />
+                  </div>
+                </div>
+                <h2 className="text-2xl font-black mb-2">
+                  Conectando à porta...
+                </h2>
+                <p className="text-sm text-stone-400 leading-relaxed">
+                  Validando sua reserva e registrando seu horário na sala.
+                </p>
+              </div>
+            ) : (
+              <div className="w-full max-w-md bg-white rounded-[2rem] overflow-hidden shadow-2xl border border-white/10 my-auto">
+                {/* 1. CHECK-IN REALIZADO COM EDUCAÇÃO DE HORÁRIO */}
+                {doorSmartModal.mode === "checkin_done" &&
+                  doorSmartModal.booking && (
+                    <div>
+                      <div className="bg-emerald-600 p-6 text-white text-center">
+                        <div className="w-16 h-16 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center mx-auto mb-3">
+                          <CheckCircle2 className="w-9 h-9 text-white" />
+                        </div>
+                        <span className="text-[10px] font-black uppercase tracking-widest bg-emerald-800/60 px-3 py-1 rounded-full">
+                          Check-in NFC / QR Registrado
+                        </span>
+                        <h2 className="text-2xl font-black mt-2">
+                          Bom atendimento, Doutor(a)!
+                        </h2>
+                        <p className="text-xs text-emerald-100 mt-1 font-medium">
+                          {doorSmartModal.booking.rooms.name} • Entrada às{" "}
+                          {format(
+                            parseISO(
+                              doorSmartModal.booking.checkin_time ||
+                                new Date().toISOString(),
+                            ),
+                            "HH:mm",
+                          )}
+                        </p>
+                      </div>
+
+                      <div className="p-6 space-y-4">
+                        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200/90 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-black uppercase tracking-wider text-amber-800 flex items-center gap-1.5">
+                              <Clock className="w-4 h-4 text-[#BF4B24]" />
+                              Horário Limite de Saída
+                            </span>
+                            <span className="text-lg font-black text-stone-900">
+                              {format(
+                                parseISO(doorSmartModal.booking.end_time),
+                                "HH:mm",
+                              )}
+                            </span>
+                          </div>
+                          <p className="text-xs text-stone-700 leading-relaxed">
+                            Para garantir a organização da clínica e a entrada
+                            pontual do próximo profissional, encerre sua
+                            consulta até as{" "}
+                            <strong>
+                              {format(
+                                parseISO(doorSmartModal.booking.end_time),
+                                "HH:mm",
+                              )}
+                            </strong>
+                            .
+                          </p>
+                        </div>
+
+                        <div className="p-4 rounded-2xl bg-stone-100 border border-stone-200/80 flex items-start gap-3">
+                          <SmartphoneNfc className="w-5 h-5 text-[#BF4B24] shrink-0 mt-0.5" />
+                          <p className="text-xs text-stone-700 leading-relaxed">
+                            <strong className="text-stone-900 block mb-0.5">
+                              Como registrar sua saída (Check-out):
+                            </strong>
+                            Ao sair do consultório, basta{" "}
+                            <strong>
+                              encostar novamente o celular na Tag NFC da porta
+                            </strong>{" "}
+                            (ou tocar em <em>Registrar Saída</em> no app). Isso
+                            evita a cobrança automática de hora adicional.
+                          </p>
+                        </div>
+
+                        <Button
+                          onClick={() => {
+                            const b = doorSmartModal.booking;
+                            setDoorSmartModal((p) => ({ ...p, isOpen: false }));
+                            if (b) setActiveSessionBooking(b);
+                          }}
+                          className="w-full h-13 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-black text-sm cursor-pointer"
+                        >
+                          Entendi, abrir cronômetro da sessão
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                {/* 2. CHECK-OUT REALIZADO COM RESUMO DE PONTUALIDADE + AVALIAÇÃO */}
+                {doorSmartModal.mode === "checkout_done" &&
+                  doorSmartModal.booking && (
+                    <div>
+                      <div className="bg-stone-900 p-6 text-white text-center">
+                        <div className="w-16 h-16 rounded-2xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center mx-auto mb-3">
+                          <CheckCircle2 className="w-9 h-9 text-emerald-400" />
+                        </div>
+                        <span className="text-[10px] font-black uppercase tracking-widest bg-emerald-500/20 text-emerald-300 px-3 py-1 rounded-full">
+                          Saída Registrada com Sucesso
+                        </span>
+                        <h2 className="text-2xl font-black mt-2">
+                          Sessão Encerrada! 👏
+                        </h2>
+                        <p className="text-xs text-stone-300 mt-1">
+                          Obrigado por liberar a{" "}
+                          <strong>{doorSmartModal.booking.rooms.name}</strong> e
+                          contribuir com a pontualidade da Fusion Clinic.
+                        </p>
+                      </div>
+
+                      <div className="p-6 space-y-5">
+                        <div className="grid grid-cols-2 gap-3 p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 text-center">
+                          <div>
+                            <span className="text-[10px] font-bold uppercase text-stone-400 block">
+                              Horário de Entrada
+                            </span>
+                            <span className="text-base font-black text-stone-900">
+                              {doorSmartModal.booking.checkin_time
+                                ? format(
+                                    parseISO(
+                                      doorSmartModal.booking.checkin_time,
+                                    ),
+                                    "HH:mm",
+                                  )
+                                : "--:--"}
+                            </span>
+                          </div>
+                          <div className="border-l border-stone-200">
+                            <span className="text-[10px] font-bold uppercase text-stone-400 block">
+                              Horário de Saída
+                            </span>
+                            <span className="text-base font-black text-emerald-700">
+                              {doorSmartModal.booking.checkout_time
+                                ? format(
+                                    parseISO(
+                                      doorSmartModal.booking.checkout_time,
+                                    ),
+                                    "HH:mm",
+                                  )
+                                : format(new Date(), "HH:mm")}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex gap-3">
+                          <Button
+                            variant="outline"
+                            onClick={() =>
+                              setDoorSmartModal((p) => ({
+                                ...p,
+                                isOpen: false,
+                              }))
+                            }
+                            className="flex-1 h-12 rounded-xl font-bold border-stone-200 cursor-pointer"
+                          >
+                            Concluir
+                          </Button>
+                          <Button
+                            onClick={() => {
+                              const b = doorSmartModal.booking;
+                              setDoorSmartModal((p) => ({
+                                ...p,
+                                isOpen: false,
+                              }));
+                              if (b) {
+                                setReviewModal({
+                                  isOpen: true,
+                                  booking: b,
+                                  rating: 0,
+                                  comment: "",
+                                });
+                              }
+                            }}
+                            className="flex-1 h-12 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black cursor-pointer"
+                          >
+                            <Star className="w-4 h-4 mr-1.5 fill-white" />{" "}
+                            Avaliar Sala
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                {/* 3. ALERTA DE SALA INCORRETA */}
+                {doorSmartModal.mode === "wrong_room" &&
+                  doorSmartModal.booking && (
+                    <div>
+                      <div className="bg-red-600 p-6 text-white text-center">
+                        <div className="w-16 h-16 rounded-2xl bg-white/20 flex items-center justify-center mx-auto mb-3">
+                          <ShieldAlert className="w-9 h-9 text-white" />
+                        </div>
+                        <h2 className="text-xl font-black">
+                          Atenção: Consultório Diferente!
+                        </h2>
+                        <p className="text-xs text-red-100 mt-1">
+                          Você aproximou o celular de outra porta.
+                        </p>
+                      </div>
+
+                      <div className="p-6 space-y-4 text-center">
+                        <p className="text-xs text-stone-600 leading-relaxed">
+                          Sua reserva agendada para hoje é no consultório
+                          abaixo:
+                        </p>
+
+                        <div className="p-4 rounded-2xl bg-orange-50 border border-[#BF4B24]/30">
+                          <p className="text-base font-black text-stone-900">
+                            {doorSmartModal.booking.rooms.name}
+                          </p>
+                          <p className="text-xs font-bold text-[#BF4B24] mt-1">
+                            Horário:{" "}
+                            {format(
+                              parseISO(doorSmartModal.booking.start_time),
+                              "HH:mm",
+                            )}{" "}
+                            às{" "}
+                            {format(
+                              parseISO(doorSmartModal.booking.end_time),
+                              "HH:mm",
+                            )}
+                          </p>
+                        </div>
+
+                        <Button
+                          onClick={() =>
+                            setDoorSmartModal((p) => ({ ...p, isOpen: false }))
+                          }
+                          className="w-full h-12 rounded-xl bg-stone-900 text-white font-black cursor-pointer"
+                        >
+                          Entendi, vou para a sala correta
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                {/* 4. AINDA MUITO CEDO PARA CHECK-IN */}
+                {doorSmartModal.mode === "too_early" &&
+                  doorSmartModal.booking && (
+                    <div className="p-6 text-center space-y-4">
+                      <div className="w-14 h-14 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
+                        <Clock className="w-7 h-7" />
+                      </div>
+                      <h3 className="text-lg font-black text-stone-900">
+                        Sua reserva começa às{" "}
+                        {format(
+                          parseISO(doorSmartModal.booking.start_time),
+                          "HH:mm",
+                        )}
+                      </h3>
+                      <p className="text-xs text-stone-600 leading-relaxed">
+                        O check-in na{" "}
+                        <strong>{doorSmartModal.booking.rooms.name}</strong>{" "}
+                        libera automaticamente 15 minutos antes do início (ou no
+                        horário exato caso haja outro profissional atendendo no
+                        horário anterior).
+                      </p>
+                      <Button
+                        onClick={() =>
+                          setDoorSmartModal((p) => ({ ...p, isOpen: false }))
+                        }
+                        className="w-full h-12 rounded-xl bg-stone-900 text-white font-bold cursor-pointer"
+                      >
+                        Entendi, aguardar na recepção
+                      </Button>
+                    </div>
+                  )}
+
+                {/* 5. SEM RESERVA ATIVA HOJE */}
+                {doorSmartModal.mode === "no_booking" && (
+                  <div className="p-6 text-center space-y-4">
+                    <div className="w-14 h-14 rounded-2xl bg-stone-100 text-stone-700 flex items-center justify-center mx-auto">
+                      <CalendarDays className="w-7 h-7" />
+                    </div>
+                    <h3 className="text-lg font-black text-stone-900">
+                      Nenhuma reserva ativa encontrada para agora
+                    </h3>
+                    <p className="text-xs text-stone-600 leading-relaxed">
+                      Não localizamos um agendamento confirmado na sua conta
+                      para este horário. Deseja verificar a disponibilidade?
+                    </p>
+                    <div className="flex gap-2.5">
+                      <Button
+                        variant="outline"
+                        onClick={() =>
+                          setDoorSmartModal((p) => ({ ...p, isOpen: false }))
+                        }
+                        className="flex-1 h-12 rounded-xl font-bold cursor-pointer"
+                      >
+                        Ver Minhas Reservas
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          setDoorSmartModal((p) => ({ ...p, isOpen: false }));
+                          if (onNavigateToSearch) onNavigateToSearch();
+                        }}
+                        className="flex-1 h-12 rounded-xl bg-[#BF4B24] text-white font-bold cursor-pointer"
+                      >
+                        Reservar Sala
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>,
+          document.body,
+        )
+      : null;
 
   if (activeSessionBooking) {
     return (
-      <div className="pt-6 px-4 md:pt-10 md:px-8 max-w-2xl mx-auto pb-32 animate-in fade-in">
-        <Button
-          variant="ghost"
-          onClick={() => setActiveSessionBooking(null)}
-          className="mb-4 text-slate-500 hover:text-slate-900 font-bold"
-        >
-          <ArrowLeft className="w-4 h-4 mr-2" /> Voltar para as Reservas
-        </Button>
-        <ActiveSession
-          booking={activeSessionBooking}
-          onSessionEnd={() => {
-            setActiveSessionBooking(null);
-            fetchBookings();
-          }}
-        />
-      </div>
+      <>
+        {smartDoorFullScreenPortal}
+        <div className="pt-6 px-4 md:pt-10 md:px-8 max-w-2xl mx-auto pb-32 animate-in fade-in">
+          <Button
+            variant="ghost"
+            onClick={() => setActiveSessionBooking(null)}
+            className="mb-4 text-slate-500 hover:text-slate-900 font-bold"
+          >
+            <ArrowLeft className="w-4 h-4 mr-2" /> Voltar para as Reservas
+          </Button>
+          <ActiveSession
+            booking={activeSessionBooking}
+            onSessionEnd={() => {
+              setActiveSessionBooking(null);
+              fetchBookings();
+            }}
+          />
+        </div>
+      </>
     );
   }
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center py-32">
-        <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
-      </div>
+      <>
+        {smartDoorFullScreenPortal}
+        <div className="flex justify-center items-center py-32">
+          <Loader2 className="w-10 h-10 animate-spin text-[#BF4B24]" />
+        </div>
+      </>
     );
   }
 
   return (
     <>
+      {smartDoorFullScreenPortal}
+
       <div className="space-y-6 max-w-3xl mx-auto animate-in fade-in pb-24 pt-6 px-4">
         {/* HEADER & TABS */}
         <div className="sticky top-0 bg-slate-50 z-20 pb-4">
@@ -1476,297 +1856,6 @@ CNPJ: 49.351.127/0001-44
         </div>
       </div>
 
-      {/* ==================================================================== */}
-      {/* MODAL INTELIGENTE DE PORTA (NFC / QR CODE AUTOMÁTICO + EDUCAÇÃO)     */}
-      {/* ==================================================================== */}
-      <Dialog
-        open={doorSmartModal.isOpen}
-        onOpenChange={(open) =>
-          !open && setDoorSmartModal((p) => ({ ...p, isOpen: false }))
-        }
-      >
-        <DialogContent className="sm:max-w-md rounded-[2rem] p-0 overflow-hidden bg-white border-0 shadow-2xl">
-          <DialogTitle className="sr-only">
-            Controle de Acesso da Sala
-          </DialogTitle>
-
-          {/* 1. CHECK-IN REALIZADO COM EDUCAÇÃO DE HORÁRIO */}
-          {doorSmartModal.mode === "checkin_done" && doorSmartModal.booking && (
-            <div>
-              <div className="bg-emerald-600 p-6 text-white text-center">
-                <div className="w-16 h-16 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center mx-auto mb-3">
-                  <CheckCircle2 className="w-9 h-9 text-white" />
-                </div>
-                <span className="text-[10px] font-black uppercase tracking-widest bg-emerald-800/60 px-3 py-1 rounded-full">
-                  Check-in NFC / QR Registrado
-                </span>
-                <h2 className="text-2xl font-black mt-2">
-                  Bom atendimento, Doutor(a)!
-                </h2>
-                <p className="text-xs text-emerald-100 mt-1 font-medium">
-                  {doorSmartModal.booking.rooms.name} • Entrada às{" "}
-                  {format(
-                    parseISO(
-                      doorSmartModal.booking.checkin_time ||
-                        new Date().toISOString(),
-                    ),
-                    "HH:mm",
-                  )}
-                </p>
-              </div>
-
-              <div className="p-6 space-y-4">
-                <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200/90 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-black uppercase tracking-wider text-amber-800 flex items-center gap-1.5">
-                      <Clock className="w-4 h-4 text-[#BF4B24]" />
-                      Horário Limite de Saída
-                    </span>
-                    <span className="text-lg font-black text-stone-900">
-                      {format(
-                        parseISO(doorSmartModal.booking.end_time),
-                        "HH:mm",
-                      )}
-                    </span>
-                  </div>
-                  <p className="text-xs text-stone-700 leading-relaxed">
-                    Para garantir a organização da clínica e a entrada pontual
-                    do próximo profissional, encerre sua consulta até as{" "}
-                    <strong>
-                      {format(
-                        parseISO(doorSmartModal.booking.end_time),
-                        "HH:mm",
-                      )}
-                    </strong>
-                    .
-                  </p>
-                </div>
-
-                <div className="p-4 rounded-2xl bg-stone-100 border border-stone-200/80 flex items-start gap-3">
-                  <SmartphoneNfc className="w-5 h-5 text-[#BF4B24] shrink-0 mt-0.5" />
-                  <p className="text-xs text-stone-700 leading-relaxed">
-                    <strong className="text-stone-900 block mb-0.5">
-                      Como registrar sua saída (Check-out):
-                    </strong>
-                    Ao sair do consultório, basta{" "}
-                    <strong>
-                      encostar novamente o celular na Tag NFC da porta
-                    </strong>{" "}
-                    (ou tocar em <em>Registrar Saída</em> no app). Isso evita a
-                    cobrança automática de hora adicional.
-                  </p>
-                </div>
-
-                <Button
-                  onClick={() => {
-                    const b = doorSmartModal.booking;
-                    setDoorSmartModal((p) => ({ ...p, isOpen: false }));
-                    if (b) setActiveSessionBooking(b);
-                  }}
-                  className="w-full h-12 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-black"
-                >
-                  Entendi, abrir cronômetro da sessão
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {/* 2. CHECK-OUT REALIZADO COM RESUMO DE PONTUALIDADE + AVALIAÇÃO */}
-          {doorSmartModal.mode === "checkout_done" &&
-            doorSmartModal.booking && (
-              <div>
-                <div className="bg-stone-900 p-6 text-white text-center">
-                  <div className="w-16 h-16 rounded-2xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center mx-auto mb-3">
-                    <CheckCircle2 className="w-9 h-9 text-emerald-400" />
-                  </div>
-                  <span className="text-[10px] font-black uppercase tracking-widest bg-emerald-500/20 text-emerald-300 px-3 py-1 rounded-full">
-                    Saída Registrada com Sucesso
-                  </span>
-                  <h2 className="text-2xl font-black mt-2">
-                    Sessão Encerrada! 👏
-                  </h2>
-                  <p className="text-xs text-stone-300 mt-1">
-                    Obrigado por liberar a{" "}
-                    <strong>{doorSmartModal.booking.rooms.name}</strong> e
-                    contribuir com a pontualidade da Fusion Clinic.
-                  </p>
-                </div>
-
-                <div className="p-6 space-y-5">
-                  <div className="grid grid-cols-2 gap-3 p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 text-center">
-                    <div>
-                      <span className="text-[10px] font-bold uppercase text-stone-400 block">
-                        Horário de Entrada
-                      </span>
-                      <span className="text-base font-black text-stone-900">
-                        {doorSmartModal.booking.checkin_time
-                          ? format(
-                              parseISO(doorSmartModal.booking.checkin_time),
-                              "HH:mm",
-                            )
-                          : "--:--"}
-                      </span>
-                    </div>
-                    <div className="border-l border-stone-200">
-                      <span className="text-[10px] font-bold uppercase text-stone-400 block">
-                        Horário de Saída
-                      </span>
-                      <span className="text-base font-black text-emerald-700">
-                        {doorSmartModal.booking.checkout_time
-                          ? format(
-                              parseISO(doorSmartModal.booking.checkout_time),
-                              "HH:mm",
-                            )
-                          : format(new Date(), "HH:mm")}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="flex gap-3">
-                    <Button
-                      variant="outline"
-                      onClick={() =>
-                        setDoorSmartModal((p) => ({ ...p, isOpen: false }))
-                      }
-                      className="flex-1 h-12 rounded-xl font-bold border-stone-200"
-                    >
-                      Fechar
-                    </Button>
-                    <Button
-                      onClick={() => {
-                        const b = doorSmartModal.booking;
-                        setDoorSmartModal((p) => ({ ...p, isOpen: false }));
-                        if (b) {
-                          setReviewModal({
-                            isOpen: true,
-                            booking: b,
-                            rating: 0,
-                            comment: "",
-                          });
-                        }
-                      }}
-                      className="flex-1 h-12 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black"
-                    >
-                      <Star className="w-4 h-4 mr-1.5 fill-white" /> Avaliar
-                      Sala
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-          {/* 3. ALERTA DE SALA INCORRETA (PROTEÇÃO PARA PORTAS SEM TRANCA) */}
-          {doorSmartModal.mode === "wrong_room" && doorSmartModal.booking && (
-            <div>
-              <div className="bg-red-600 p-6 text-white text-center">
-                <div className="w-16 h-16 rounded-2xl bg-white/20 flex items-center justify-center mx-auto mb-3">
-                  <ShieldAlert className="w-9 h-9 text-white" />
-                </div>
-                <h2 className="text-xl font-black">
-                  Atenção: Consultório Diferente!
-                </h2>
-                <p className="text-xs text-red-100 mt-1">
-                  Você aproximou o celular de outra porta.
-                </p>
-              </div>
-
-              <div className="p-6 space-y-4 text-center">
-                <p className="text-xs text-stone-600 leading-relaxed">
-                  Sua reserva agendada para hoje é no consultório abaixo:
-                </p>
-
-                <div className="p-4 rounded-2xl bg-orange-50 border border-[#BF4B24]/30">
-                  <p className="text-base font-black text-stone-900">
-                    {doorSmartModal.booking.rooms.name}
-                  </p>
-                  <p className="text-xs font-bold text-[#BF4B24] mt-1">
-                    Horário:{" "}
-                    {format(
-                      parseISO(doorSmartModal.booking.start_time),
-                      "HH:mm",
-                    )}{" "}
-                    às{" "}
-                    {format(parseISO(doorSmartModal.booking.end_time), "HH:mm")}
-                  </p>
-                </div>
-
-                <Button
-                  onClick={() =>
-                    setDoorSmartModal((p) => ({ ...p, isOpen: false }))
-                  }
-                  className="w-full h-12 rounded-xl bg-stone-900 text-white font-black"
-                >
-                  Entendi, vou para a sala correta
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {/* 4. AINDA MUITO CEDO PARA CHECK-IN */}
-          {doorSmartModal.mode === "too_early" && doorSmartModal.booking && (
-            <div className="p-6 text-center space-y-4">
-              <div className="w-14 h-14 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
-                <Clock className="w-7 h-7" />
-              </div>
-              <h3 className="text-lg font-black text-stone-900">
-                Sua reserva começa às{" "}
-                {format(parseISO(doorSmartModal.booking.start_time), "HH:mm")}
-              </h3>
-              <p className="text-xs text-stone-600 leading-relaxed">
-                O check-in na{" "}
-                <strong>{doorSmartModal.booking.rooms.name}</strong> libera
-                automaticamente 15 minutos antes do início (ou assim que o
-                profissional anterior encerrar o atendimento).
-              </p>
-              <Button
-                onClick={() =>
-                  setDoorSmartModal((p) => ({ ...p, isOpen: false }))
-                }
-                className="w-full h-11 rounded-xl bg-stone-900 text-white font-bold"
-              >
-                Aguardar na recepção
-              </Button>
-            </div>
-          )}
-
-          {/* 5. SEM RESERVA ATIVA HOJE */}
-          {doorSmartModal.mode === "no_booking" && (
-            <div className="p-6 text-center space-y-4">
-              <div className="w-14 h-14 rounded-2xl bg-stone-100 text-stone-700 flex items-center justify-center mx-auto">
-                <CalendarDays className="w-7 h-7" />
-              </div>
-              <h3 className="text-lg font-black text-stone-900">
-                Nenhuma reserva ativa encontrada para agora
-              </h3>
-              <p className="text-xs text-stone-600 leading-relaxed">
-                Não localizamos um agendamento confirmado na sua conta para este
-                horário. Deseja verificar a disponibilidade e reservar agora?
-              </p>
-              <div className="flex gap-2.5">
-                <Button
-                  variant="outline"
-                  onClick={() =>
-                    setDoorSmartModal((p) => ({ ...p, isOpen: false }))
-                  }
-                  className="flex-1 h-11 rounded-xl font-bold"
-                >
-                  Fechar
-                </Button>
-                <Button
-                  onClick={() => {
-                    setDoorSmartModal((p) => ({ ...p, isOpen: false }));
-                    if (onNavigateToSearch) onNavigateToSearch();
-                  }}
-                  className="flex-1 h-11 rounded-xl bg-[#BF4B24] text-white font-bold"
-                >
-                  Reservar Sala
-                </Button>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
       {/* GAVETA DE DETALHES (Sheet) */}
       <Sheet open={isSheetOpen} onOpenChange={setIsSheetOpen}>
         <SheetContent
@@ -1787,7 +1876,7 @@ CNPJ: 49.351.127/0001-44
                   typeof selectedBooking.rooms.address_details === "string"
                     ? JSON.parse(selectedBooking.rooms.address_details)
                     : selectedBooking.rooms.address_details;
-              } catch (e) {}
+              } catch {}
               const fullAddress = `${address.street || ""}, ${address.number || ""} ${address.complement ? `- ${address.complement}` : ""}`;
 
               const hasBackToBack = adjacentMap[selectedBooking.id] || false;
@@ -1954,7 +2043,7 @@ CNPJ: 49.351.127/0001-44
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <Button
                               onClick={() =>
-                                executeInstantCheckout(selectedBooking, false)
+                                executeInstantCheckout(selectedBooking, true)
                               }
                               disabled={actionLoading}
                               className="w-full h-14 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl shadow-lg"
@@ -1977,7 +2066,7 @@ CNPJ: 49.351.127/0001-44
                           <Button
                             onClick={() => {
                               setIsSheetOpen(false);
-                              executeInstantCheckin(selectedBooking, false);
+                              executeInstantCheckin(selectedBooking, true);
                             }}
                             disabled={actionLoading}
                             className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl shadow-lg"
@@ -2074,7 +2163,10 @@ CNPJ: 49.351.127/0001-44
           !open && setExtendModal({ isOpen: false, booking: null })
         }
       >
-        <DialogContent className="sm:max-w-md rounded-[2rem] p-6 bg-white border-0">
+        <DialogContent
+          data-door-allowed="true"
+          className="sm:max-w-md rounded-[2rem] p-6 bg-white border-0"
+        >
           <DialogTitle className="text-xl font-black text-slate-900 flex items-center gap-2">
             <Timer className="w-6 h-6 text-[#BF4B24]" /> Estender Sessão?
           </DialogTitle>
@@ -2095,7 +2187,7 @@ CNPJ: 49.351.127/0001-44
               onClick={() => {
                 const b = extendModal.booking;
                 setExtendModal({ isOpen: false, booking: null });
-                if (b) executeInstantCheckout(b, false);
+                if (b) executeInstantCheckout(b, true);
               }}
               variant="outline"
               className="flex-1 h-12 rounded-xl font-bold border-emerald-200 bg-emerald-50 text-emerald-800"
@@ -2139,7 +2231,7 @@ CNPJ: 49.351.127/0001-44
                   typeof b.rooms.address_details === "string"
                     ? JSON.parse(b.rooms.address_details)
                     : b.rooms.address_details;
-              } catch (e) {}
+              } catch {}
               const fullAddress = `${address.street || ""}, ${address.number || ""}`;
 
               return (
@@ -2275,7 +2367,7 @@ CNPJ: 49.351.127/0001-44
         </DialogContent>
       </Dialog>
 
-      {/* MODAL DE AVALIAÇÃO */}
+      {/* MODAL DE AVALIAÇÃO (COM PERMISSÃO EXPLÍCITA APÓS CHECK-OUT) */}
       <Dialog
         open={reviewModal.isOpen}
         onOpenChange={(open) =>
@@ -2288,7 +2380,10 @@ CNPJ: 49.351.127/0001-44
           })
         }
       >
-        <DialogContent className="sm:max-w-md rounded-[2rem] border-0 p-6 bg-white">
+        <DialogContent
+          data-door-allowed="true"
+          className="sm:max-w-md rounded-[2rem] border-0 p-6 bg-white"
+        >
           <DialogTitle className="sr-only">Avaliar Experiência</DialogTitle>
           <DialogHeader className="mb-4">
             <h2 className="text-xl font-black text-slate-900">
@@ -2339,7 +2434,7 @@ CNPJ: 49.351.127/0001-44
         </DialogContent>
       </Dialog>
 
-      {/* MODAL DE CANCELAMENTO CLARO E TRANSPARENTE */}
+      {/* MODAL DE CANCELAMENTO */}
       <Dialog
         open={cancelModal.isOpen}
         onOpenChange={(open) =>
@@ -2417,6 +2512,87 @@ CNPJ: 49.351.127/0001-44
             })()}
         </DialogContent>
       </Dialog>
+
+      {/* SCANNER QR CODE COM FALLBACK MANUAL */}
+      {scannerConfig.isOpen &&
+        scannerConfig.booking &&
+        (scannerConfig.cameraFailed ? (
+          <Dialog
+            open={true}
+            onOpenChange={() =>
+              setScannerConfig({
+                isOpen: false,
+                type: "checkin",
+                booking: null,
+                cameraFailed: false,
+              })
+            }
+          >
+            <DialogContent
+              data-door-allowed="true"
+              className="sm:max-w-md rounded-[2rem] p-6 bg-white border-0"
+            >
+              <DialogTitle className="text-xl font-black text-slate-900">
+                Check-in Manual
+              </DialogTitle>
+              <DialogDescription className="text-sm font-medium text-slate-500 mb-4">
+                O acesso à câmera foi bloqueado. Por favor, digite o código de 6
+                dígitos que está colado na porta da sala para liberar seu
+                acesso.
+              </DialogDescription>
+              <div className="space-y-4">
+                <div className="relative">
+                  <Keyboard className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                  <Input
+                    value={manualCode}
+                    onChange={(e) =>
+                      setManualCode(e.target.value.toUpperCase())
+                    }
+                    placeholder="Ex: AB1234"
+                    className="h-14 pl-12 rounded-xl border-slate-200 bg-slate-50 font-black tracking-widest uppercase"
+                    maxLength={6}
+                  />
+                </div>
+                <Button
+                  onClick={() => {
+                    if (manualCode.length < 4) {
+                      toast({
+                        variant: "destructive",
+                        title: "Código inválido",
+                        description:
+                          "O código precisa ter pelo menos 4 caracteres.",
+                      });
+                      return;
+                    }
+                    handleCheckinSuccess();
+                  }}
+                  className="w-full h-14 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black rounded-xl shadow-lg shadow-orange-500/20"
+                >
+                  Confirmar Check-in
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        ) : (
+          <RoomQRScanner
+            key="checkin-scanner"
+            expectedRoomId={scannerConfig.booking.room_id}
+            type={scannerConfig.type}
+            onSuccess={handleCheckinSuccess}
+            onCancel={() =>
+              setScannerConfig({
+                isOpen: false,
+                type: "checkin",
+                booking: null,
+                cameraFailed: false,
+              })
+            }
+            onError={(err) => {
+              console.error("Câmera bloqueada/falhou:", err);
+              setScannerConfig((prev) => ({ ...prev, cameraFailed: true }));
+            }}
+          />
+        ))}
     </>
   );
 }
