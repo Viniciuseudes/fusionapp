@@ -342,7 +342,6 @@ export function AdminBookingsTab({
   const fetchBookings = async () => {
     setLoading(true);
     try {
-      // Sincroniza automaticamente no banco o valor exato pago no Asaas em assinaturas anteriores
       await fetch("/api/subscriptions/sync-prices", { method: "POST" }).catch(
         () => {},
       );
@@ -559,7 +558,6 @@ export function AdminBookingsTab({
           (b.booking_origin && String(b.booking_origin).startsWith("contract")),
         );
 
-        // SUBGRUPO 3: CONTRATOS FIXOS
         if (isContractBooking) {
           const contractSessionVal =
             Number(b.agreed_value_brl) > 0
@@ -672,7 +670,6 @@ export function AdminBookingsTab({
           isExplicitWalletOrigin || isLegacyWalletOrigin,
         );
 
-        // SUBGRUPO 2: PACOTES FUSION PASS+
         if (isPackageBooking) {
           const userTxs = userWalletMap.get(b.user_id) || [];
           const userSubs = userSubsMap.get(b.user_id) || [];
@@ -701,7 +698,6 @@ export function AdminBookingsTab({
             }
           }
 
-          // Puxa o valor exato pago na assinatura/renovação ([Paid:XX.XX] / [Rate:XX.XXXX])
           const { hourlyRateBrl: exactUserCreditRate, matchedHours } =
             resolveCreditHourlyValueBRL({
               usedTier: creditTierUsed,
@@ -789,7 +785,6 @@ export function AdminBookingsTab({
           };
         }
 
-        // SUBGRUPO 1: HORAS AVULSAS
         const computeAvulsoSplit = (grossVal: number) => {
           if (roomCohostContract) {
             const cohostShare = grossVal * (cohostSplitPct / 100);
@@ -882,12 +877,8 @@ export function AdminBookingsTab({
     }
   };
 
-  // ==========================================================================
-  // MÉTRICAS DOS 3 SUBGRUPOS FINANCEIROS
-  // ==========================================================================
   const threePillarsAnalytics = useMemo(() => {
     const validBookings = bookings.filter((b) => b.status !== "cancelled");
-
     const avulsoList = validBookings.filter((b) => b.subgroup === "avulso");
     const packageList = validBookings.filter((b) => b.subgroup === "package");
     const contractList = validBookings.filter((b) => b.subgroup === "contract");
@@ -1430,6 +1421,12 @@ export function AdminBookingsTab({
         (a, b) => parseInt(a.split("h")[0], 10) - parseInt(b.split("h")[0], 10),
       );
 
+      const customBrl = Number(newBookingAgreedBrl);
+      const agreedUnitBrl =
+        !isNaN(customBrl) && customBrl > 0
+          ? Number((customBrl / sortedSlots.length).toFixed(2))
+          : null;
+
       const payloads = sortedSlots.map((slot) => {
         const startHour = parseInt(slot.split("h")[0], 10);
         const slotStart = setSeconds(
@@ -1441,8 +1438,6 @@ export function AdminBookingsTab({
           0,
         );
 
-        const customBrl = Number(newBookingAgreedBrl);
-
         return {
           user_id: newBookingSpecialistId,
           room_id: newBookingRoomId,
@@ -1451,13 +1446,11 @@ export function AdminBookingsTab({
           status: "confirmed",
           total_cost: 1,
           booking_origin: "admin_manual",
-          agreed_value_brl:
-            !isNaN(customBrl) && customBrl > 0
-              ? Number((customBrl / sortedSlots.length).toFixed(2))
-              : null,
+          agreed_value_brl: agreedUnitBrl,
         };
       });
 
+      // 1. Inserir a reserva
       const { data: inserted, error } = await supabase
         .from("bookings")
         .insert(payloads)
@@ -1465,8 +1458,11 @@ export function AdminBookingsTab({
 
       if (error) throw error;
 
+      // 2. Disparar a Server Action de Envio de E-mails
       if (inserted && inserted[0]?.id) {
-        sendBookingNotificationEmails(inserted[0].id).catch(console.error);
+        sendBookingNotificationEmails(inserted[0].id).catch((err) => {
+          console.error("Falha silenciosa ao disparar e-mail de Admin:", err);
+        });
       }
 
       toast({
