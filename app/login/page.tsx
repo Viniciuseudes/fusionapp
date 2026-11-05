@@ -1,7 +1,9 @@
+// app/login/page.tsx
 "use client";
 
 import { useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { sendWelcomeEmail } from "@/app/actions/send-email";
@@ -91,7 +93,6 @@ export default function LoginPage() {
     router.refresh();
   };
 
-  // Inicia o fluxo de autenticação OAuth com o Google
   const handleGoogleLogin = async () => {
     setLoadingGoogle(true);
     setError(null);
@@ -112,7 +113,6 @@ export default function LoginPage() {
     }
   };
 
-  // 1. LOGIN DIRETO COM E-MAIL E SENHA (SEM PEDIR 2FA NO LOGIN)
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -126,7 +126,6 @@ export default function LoginPage() {
         });
 
       if (authError) {
-        // Caso o usuário tenha se cadastrado antes mas não tenha digitado o código do e-mail
         if (
           authError.message.toLowerCase().includes("email not confirmed") ||
           authError.message.toLowerCase().includes("not confirmed")
@@ -160,7 +159,6 @@ export default function LoginPage() {
     }
   };
 
-  // 2. CADASTRO DE PROFISSIONAL -> DISPARA CÓDIGO DE 6 DÍGITOS PARA O E-MAIL
   const handleRegisterProfessional = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -182,7 +180,6 @@ export default function LoginPage() {
 
       if (signUpError) throw signUpError;
 
-      // Se a confirmação de e-mail estiver ativa no Supabase, pede o código de 6 dígitos na tela
       if (signUpData.user && !signUpData.session) {
         toast({
           title: "Código enviado para seu e-mail!",
@@ -191,7 +188,6 @@ export default function LoginPage() {
         setOtpCode("");
         setStep("verify_signup_otp");
       } else {
-        // Caso a confirmação esteja desativada no painel do Supabase, envia boas-vindas e vai para login/dashboard
         await sendWelcomeEmail(email.trim(), fullName.trim()).catch(() => {});
         toast({
           title: "Conta criada com sucesso!",
@@ -210,7 +206,6 @@ export default function LoginPage() {
     }
   };
 
-  // 3. VALIDAR O CÓDIGO DE 2 FATORES (6 DÍGITOS) DO CADASTRO
   const handleVerifySignupOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -276,7 +271,6 @@ export default function LoginPage() {
     }
   };
 
-  // 4. ESQUECI MINHA SENHA -> SOLICITAR CÓDIGO NO E-MAIL
   const handleForgotRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -306,7 +300,6 @@ export default function LoginPage() {
     }
   };
 
-  // 5. ESQUECI MINHA SENHA -> VALIDAR CÓDIGO E SALVAR NOVA SENHA
   const handleForgotVerifyReset = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -733,6 +726,34 @@ export default function LoginPage() {
               </Button>
             </form>
           )}
+
+          {/* Aviso Legal de Consentimento para o Google OAuth e Cadastro */}
+          <div className="mt-6 pt-5 border-t border-slate-100">
+            <p className="text-[11px] text-center text-slate-500 leading-relaxed max-w-sm mx-auto">
+              Ao continuar, você declara ter lido e concorda com os{" "}
+              <Link
+                href="/termos"
+                className="font-bold text-slate-700 underline hover:text-[#BF4B24] transition-colors"
+              >
+                Termos de Uso
+              </Link>
+              , a{" "}
+              <Link
+                href="/privacidade"
+                className="font-bold text-slate-700 underline hover:text-[#BF4B24] transition-colors"
+              >
+                Política de Privacidade
+              </Link>{" "}
+              e a{" "}
+              <Link
+                href="/cookies"
+                className="font-bold text-slate-700 underline hover:text-[#BF4B24] transition-colors"
+              >
+                Política de Cookies
+              </Link>{" "}
+              da Fusion Clinic.
+            </p>
+          </div>
         </CardContent>
       </Card>
     </div>

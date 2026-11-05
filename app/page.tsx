@@ -2,6 +2,7 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { cn } from "@/lib/utils";
@@ -442,7 +443,7 @@ export default function AppPage() {
       {/* 4. CONTEÚDO PRINCIPAL                                                */}
       {/* ==================================================================== */}
       <main
-        className={cn("flex-1 w-full", selectedRoom ? "" : "pb-20 lg:pb-16")}
+        className={cn("flex-1 w-full", selectedRoom ? "" : "pb-6 lg:pb-16")}
       >
         {selectedRoom ? (
           <RoomDetail
@@ -464,12 +465,13 @@ export default function AppPage() {
       </main>
 
       {/* ==================================================================== */}
-      {/* 5. RODAPÉ DESKTOP (100% INTACTO)                                     */}
+      {/* 5. RODAPÉ INSTITUCIONAL E JURÍDICO (RESPONSIVO + GOOGLE OAUTH READY) */}
       {/* ==================================================================== */}
       {!selectedRoom && (
-        <footer className="hidden lg:block bg-white border-t border-stone-200/80">
-          <div className="max-w-[1360px] mx-auto px-10 py-10">
-            <div className="grid grid-cols-4 gap-8 pb-8 border-b border-stone-100">
+        <footer className="bg-white border-t border-stone-200/80 pb-24 lg:pb-0">
+          <div className="max-w-[1360px] mx-auto px-5 lg:px-10 py-8 lg:py-10">
+            {/* Destaques operacionais (exibidos no Desktop) */}
+            <div className="hidden lg:grid grid-cols-4 gap-8 pb-8 border-b border-stone-100">
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2 text-stone-900 font-bold text-sm">
                   <Clock className="w-4 h-4 text-[#BF4B24]" />
@@ -515,12 +517,37 @@ export default function AppPage() {
               </div>
             </div>
 
-            <div className="pt-6 flex items-center justify-between text-xs text-stone-400">
-              <p>
-                © {new Date().getFullYear()} Fusion Clinic. Todos os direitos
-                reservados.
-              </p>
-              <div className="flex items-center gap-6 font-medium text-stone-500">
+            {/* Barra inferior com Copyright, CNPJ e Links Legais */}
+            <div className="lg:pt-6 flex flex-col lg:flex-row items-center justify-between gap-4 text-xs text-stone-400">
+              <div className="text-center lg:text-left space-y-0.5">
+                <p>
+                  © {new Date().getFullYear()} Fusion Clinic Soluções em Saúde
+                  Ltda • CNPJ: 49.351.127/0001-44. Todos os direitos reservados.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 font-medium text-stone-500">
+                <Link
+                  href="/termos"
+                  className="hover:text-[#BF4B24] transition-colors"
+                >
+                  Termos de Uso
+                </Link>
+                <Link
+                  href="/privacidade"
+                  className="hover:text-[#BF4B24] transition-colors"
+                >
+                  Política de Privacidade
+                </Link>
+                <Link
+                  href="/cookies"
+                  className="hover:text-[#BF4B24] transition-colors"
+                >
+                  Política de Cookies
+                </Link>
+
+                <span className="hidden sm:inline text-stone-300">•</span>
+
                 <button
                   type="button"
                   onClick={handleOpenFusionPassShowcase}
@@ -595,9 +622,7 @@ export default function AppPage() {
                           ? "font-bold text-[#BF4B24]"
                           : "font-medium text-stone-500",
                     )}
-                  >
-                    {item.label}
-                  </span>
+                  />
                 </button>
               );
             })}
