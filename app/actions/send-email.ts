@@ -878,10 +878,11 @@ export async function sendBookingCancellationEmails(
     const room = roomRes.data;
     const specialist = specialistRes.data;
 
-    const formattedDate = formatBrazilDate(firstBooking.start_time);
-    const startHourFormatted = formatBrazilTime(firstBooking.start_time);
-    const endHourFormatted = formatBrazilTime(lastBooking.end_time);
-    const periodLabel = `${startHourFormatted} às ${endHourFormatted}`;
+    // Fuso Horário de Natal/Fortaleza (UTC-3)
+    const entryDateFormatted = formatBrazilDate(firstBooking.start_time);
+    const entryTimeFormatted = formatBrazilTime(firstBooking.start_time);
+    const exitDateFormatted = formatBrazilDate(lastBooking.end_time);
+    const exitTimeFormatted = formatBrazilTime(lastBooking.end_time);
 
     let specialistEmail = specialist?.email || null;
     if (!specialistEmail && firstBooking.user_id) {
@@ -903,15 +904,6 @@ export async function sendBookingCancellationEmails(
         .maybeSingle();
       hostEmail = hData?.email || null;
       clinicName = hData?.full_name || clinicName;
-
-      if (!hostEmail) {
-        try {
-          const { data: authHost } = await (
-            supabase as any
-          ).auth.admin.getUserById(room.host_id);
-          hostEmail = authHost?.user?.email || null;
-        } catch {}
-      }
     }
 
     const adminEmails = Array.from(
@@ -922,46 +914,188 @@ export async function sendBookingCancellationEmails(
     );
 
     const roomName = room?.name || "Consultório Fusion";
-    const specialistName = specialist?.full_name || "Profissional";
+    const specialistName = specialist?.full_name || "Doutor(a)";
     const codeShort = `#${String(firstBooking.id).slice(0, 8).toUpperCase()}`;
 
+    const roomPhotoUrl =
+      room?.image_url && String(room.image_url).startsWith("http")
+        ? room.image_url
+        : `${APP_URL}${room?.image_url || "/images/room-consultorio.jpg"}`;
+
+    // Lógica visual do Cartão de Estorno (Refund)
     const refundNoteHtml =
       options?.wasRefunded === true
-        ? `<div style="background:#ECFDF5;border:1px solid #A7F3D0;border-radius:12px;padding:14px;margin:16px 0;color:#065F46;font-size:13px;">
-             <strong>✓ Estorno Realizado:</strong> Como o cancelamento ocorreu com mais de 24 horas de antecedência, seus créditos/valores foram integralmente devolvidos à sua Carteira Digital (válidos por 30 dias).
+        ? `<div style="background-color: #ECFDF5; border: 1px solid #A7F3D0; border-radius: 16px; padding: 16px; margin-bottom: 18px;">
+             <p style="font-size: 13px; font-weight: 800; color: #065F46; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;">
+               ✓ Estorno Realizado na Carteira
+             </p>
+             <p style="font-size: 13px; color: #064E3B; line-height: 1.55;">
+               Como o cancelamento ocorreu com <strong>mais de 24 horas de antecedência</strong>, seus créditos/valores foram integralmente devolvidos à sua Carteira Digital (válidos por 30 dias).
+             </p>
            </div>`
         : options?.wasRefunded === false
-          ? `<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:12px;padding:14px;margin:16px 0;color:#991B1B;font-size:13px;">
-               <strong>Política de Cancelamento (< 24h):</strong> Como o cancelamento foi realizado com menos de 24 horas para o início do atendimento, esta reserva não é elegível para estorno.
+          ? `<div style="background-color: #FEF2F2; border: 1px solid #FECACA; border-radius: 16px; padding: 16px; margin-bottom: 18px;">
+               <p style="font-size: 13px; font-weight: 800; color: #991B1B; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;">
+                 ⚠ Política de Cancelamento (< 24h)
+               </p>
+               <p style="font-size: 13px; color: #7F1D1D; line-height: 1.55;">
+                 Como o cancelamento foi realizado com <strong>menos de 24 horas</strong> para o início do atendimento, esta reserva não é elegível para estorno.
+               </p>
              </div>`
-          : `<p style="font-size:13px;color:#64748B;">Seus créditos/valores foram processados conforme a política de cancelamento da plataforma.</p>`;
+          : `<div style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 16px; padding: 16px; margin-bottom: 18px;">
+               <p style="font-size: 13px; color: #475569; line-height: 1.55;">
+                 Os seus créditos/valores foram processados conforme a política de cancelamento da plataforma.
+               </p>
+             </div>`;
 
     const emailPayloads: any[] = [];
 
-    // 1. E-MAIL PARA O ESPECIALISTA
+    // 1. E-MAIL PARA O ESPECIALISTA (NOVO DESIGN COM FOTO PRETO E BRANCO)
     if (specialistEmail) {
       emailPayloads.push({
         from: FROM_EMAIL,
         to: [specialistEmail],
-        subject: `❌ Reserva Cancelada: ${roomName} (${formattedDate} às ${startHourFormatted})`,
-        html: buildFusionEmailLayout(
-          "Confirmação de Cancelamento",
-          `Cancelada • ${codeShort}`,
-          `
-          <p>Olá, <strong>${specialistName}</strong>.</p>
-          <p>Confirmamos que a sua reserva abaixo foi cancelada com sucesso:</p>
-          <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:14px;padding:16px;margin:18px 0;">
-            <p style="margin:4px 0;"><strong>🚪 Consultório:</strong> ${roomName} (${clinicName})</p>
-            <p style="margin:4px 0;"><strong>📅 Data:</strong> ${formattedDate}</p>
-            <p style="margin:4px 0;"><strong>⏰ Horário:</strong> ${periodLabel} (${totalSlotsCount}h)</p>
-            <p style="margin:4px 0;"><strong>🔑 Código:</strong> ${codeShort}</p>
-          </div>
-          ${refundNoteHtml}
-          <div style="text-align: center; margin-top: 22px;">
-            <a href="${APP_URL}/dashboard#search" style="display: inline-block; background-color: #BF4B24; color: #FFFFFF; font-weight: 800; font-size: 13px; text-decoration: none; padding: 12px 24px; border-radius: 12px;">Agendar Novo Horário</a>
-          </div>
-          `,
-        ),
+        subject: `❌ Reserva Cancelada: ${roomName} (${entryDateFormatted} às ${entryTimeFormatted})`,
+        html: `
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reserva Cancelada - ${roomName}</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body {
+        background-color: #FAF7F4;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        color: #464E5F;
+        padding: 24px 12px;
+      }
+      .section {
+        width: 100%;
+        max-width: 780px;
+        margin: 0 auto;
+      }
+      .card {
+        background-color: #FFFFFF;
+        padding: 28px 24px;
+        border-radius: 24px;
+        border: 1px solid #EAEAEA;
+        box-shadow: 0 8px 28px rgba(0, 0, 0, 0.04);
+      }
+      .room-image {
+        width: 100%;
+        height: 242px;
+        object-fit: cover;
+        border-radius: 24px;
+        margin: 14px 0 20px 0;
+        display: block;
+        filter: grayscale(80%) opacity(0.85); /* Traz o efeito visual de cancelado */
+      }
+      .info-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 8px;
+        margin-bottom: 20px;
+      }
+      .info-table td {
+        vertical-align: top;
+        padding: 8px 10px 8px 0;
+      }
+      .label-th {
+        color: #B5B5C3;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 4px;
+      }
+      .value-td {
+        color: #94A3B8; /* Cor mais apagada para horário cancelado */
+        font-size: 15px;
+        font-weight: 700;
+        text-decoration: line-through; /* Riscado */
+      }
+      @media only screen and (max-width: 580px) {
+        .info-table, .info-table tbody, .info-table tr, .info-table td {
+          display: block !important;
+          width: 100% !important;
+        }
+        .info-table td {
+          padding: 8px 0 !important;
+          border-bottom: 1px solid #F3F4F6;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div style="text-align: center; margin-bottom: 18px;">
+      <img
+        alt="Fusion Clinic"
+        src="${APP_URL}/logo-fusion-orange.png"
+        width="175"
+        style="max-width: 175px; height: auto;"
+      />
+    </div>
+
+    <section class="section card">
+      <div>
+        <span style="display: inline-block; background-color: #FEF2F2; color: #991B1B; font-size: 11px; font-weight: 800; padding: 4px 10px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px;">
+          ✕ Reserva Cancelada • ${codeShort}
+        </span>
+        <h1 style="font-weight: 800; color: #464E5F; font-size: 24px; letter-spacing: -0.02em;">
+          RESERVA CANCELADA
+        </h1>
+        <p style="font-size: 14px; color: #7E8299; margin-top: 4px;">
+          Olá, <strong>${specialistName}</strong>. O agendamento abaixo foi cancelado e a sala foi liberada.
+        </p>
+      </div>
+
+      <div>
+        <img
+          class="room-image"
+          src="${roomPhotoUrl}"
+          alt="${roomName}"
+          width="100%"
+          height="242"
+        />
+      </div>
+
+      <table class="info-table" role="presentation">
+        <tr>
+          <td width="34%">
+            <p class="label-th">SALA</p>
+            <p class="value-td" style="text-decoration: none; color: #464E5F;">${roomName}</p>
+            <p style="font-size: 12px; color: #7E8299; margin-top: 2px;">${clinicName}</p>
+          </td>
+          <td width="33%">
+            <p class="label-th">DATA DE ENTRADA</p>
+            <p class="value-td">
+              ${entryDateFormatted} às ${entryTimeFormatted}
+            </p>
+          </td>
+          <td width="33%">
+            <p class="label-th">DATA DE SAÍDA</p>
+            <p class="value-td">
+              ${exitDateFormatted} às ${exitTimeFormatted}
+            </p>
+          </td>
+        </tr>
+      </table>
+
+      ${refundNoteHtml}
+
+      <div style="margin-top: 24px; text-align: center;">
+        <a
+          href="${APP_URL}/dashboard#search"
+          style="display: inline-block; background-color: #BF4B24; color: #FFFFFF; font-weight: 800; font-size: 14px; text-decoration: none; padding: 14px 28px; border-radius: 14px;"
+        >
+          Agendar Novo Horário
+        </a>
+      </div>
+    </section>
+  </body>
+</html>`.trim(),
       });
     }
 
@@ -970,7 +1104,7 @@ export async function sendBookingCancellationEmails(
       emailPayloads.push({
         from: FROM_EMAIL,
         to: [hostEmail],
-        subject: `❌ Reserva Cancelada na ${roomName} — ${specialistName} (${formattedDate})`,
+        subject: `❌ Reserva Cancelada na ${roomName} — ${specialistName} (${entryDateFormatted})`,
         html: buildFusionEmailLayout(
           "Aviso de Cancelamento de Reserva",
           "Agenda Liberada",
@@ -980,8 +1114,8 @@ export async function sendBookingCancellationEmails(
           <div style="background:#FAF7F5;border:1px solid #FED7AA;border-radius:14px;padding:16px;margin:18px 0;">
             <p style="margin:4px 0;"><strong>👨‍⚕️ Profissional:</strong> ${specialistName}</p>
             <p style="margin:4px 0;"><strong>🚪 Sala:</strong> ${roomName}</p>
-            <p style="margin:4px 0;"><strong>📅 Data:</strong> ${formattedDate}</p>
-            <p style="margin:4px 0;"><strong>⏰ Horário Liberado:</strong> ${periodLabel} (${totalSlotsCount}h)</p>
+            <p style="margin:4px 0;"><strong>📅 Data:</strong> ${entryDateFormatted}</p>
+            <p style="margin:4px 0;"><strong>⏰ Horário Liberado:</strong> ${entryTimeFormatted} às ${exitTimeFormatted} (${totalSlotsCount}h)</p>
           </div>
           <p style="font-size:13px;color:#475569;">Este horário já foi liberado automaticamente na agenda para novas locações.</p>
           `,
@@ -994,7 +1128,7 @@ export async function sendBookingCancellationEmails(
       emailPayloads.push({
         from: FROM_EMAIL,
         to: adminEmails,
-        subject: `❌ [Admin Cancelamento] ${specialistName} cancelou ${roomName} (${formattedDate} ${startHourFormatted})`,
+        subject: `❌ [Admin Cancelamento] ${specialistName} cancelou ${roomName} (${entryDateFormatted} ${entryTimeFormatted})`,
         html: buildFusionEmailLayout(
           "Reserva Cancelada pelo Usuário",
           "Torre de Controle Admin",
@@ -1003,7 +1137,7 @@ export async function sendBookingCancellationEmails(
           <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:14px;padding:16px;margin:18px 0;">
             <p style="margin:4px 0;"><strong>Profissional:</strong> ${specialistName} (${specialistEmail || "Sem e-mail"})</p>
             <p style="margin:4px 0;"><strong>Sala / Clínica:</strong> ${roomName} • ${clinicName}</p>
-            <p style="margin:4px 0;"><strong>Data e Horário:</strong> ${formattedDate}, das ${periodLabel} (${totalSlotsCount}h)</p>
+            <p style="margin:4px 0;"><strong>Data e Horário:</strong> ${entryDateFormatted}, das ${entryTimeFormatted} às ${exitTimeFormatted} (${totalSlotsCount}h)</p>
             <p style="margin:4px 0;"><strong>Estorno de Créditos:</strong> ${options?.wasRefunded ? "SIM (Cancelado >= 24h antes)" : "NÃO (< 24h ou pagamento externo)"}</p>
             <p style="margin:4px 0;"><strong>Código:</strong> ${codeShort}</p>
           </div>
