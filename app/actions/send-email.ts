@@ -20,7 +20,6 @@ const FROM_EMAIL =
 const FALLBACK_ADMIN_EMAIL =
   process.env.ADMIN_NOTIFICATION_EMAIL || "tecnologia@fusionapp.com.br";
 
-// Usa Service Role Key se disponível; caso contrário, usa a sessão autenticada do servidor (evita bloqueio de RLS na Vercel)
 async function getDbClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -34,7 +33,6 @@ async function getDbClient() {
   return await createServerSupabase();
 }
 
-// Dispara lista de e-mails de forma segura (usa Batch API do Resend para não cair no limite de 2 req/s)
 async function dispatchEmailsSafely(emailPayloads: any[]) {
   if (!emailPayloads || emailPayloads.length === 0) {
     return { success: false, error: "Nenhum destinatário encontrado." };
@@ -53,7 +51,6 @@ async function dispatchEmailsSafely(emailPayloads: any[]) {
     const { data, error } = await resend.batch.send(emailPayloads);
     if (error) {
       console.error("[Resend Error Batch]:", error);
-      // Fallback sequencial caso batch falhe
       const errors: string[] = [];
       for (const payload of emailPayloads) {
         const res = await resend.emails.send(payload);
@@ -77,7 +74,6 @@ async function dispatchEmailsSafely(emailPayloads: any[]) {
 
 // ============================================================================
 // FORMATADORES COM TRAVA DE FUSO HORÁRIO (AMERICA/FORTALEZA - UTC-3)
-// Garante que 16:00 nunca vire 19:00 ou 08:00 no servidor da Vercel
 // ============================================================================
 function formatBrazilDate(isoString: string): string {
   const date = new Date(isoString);
@@ -100,6 +96,30 @@ function formatBrazilDateLong(isoString: string): string {
   }).format(date);
 }
 
+function formatBrazilUberTimestamp(isoString: string): string {
+  const date = new Date(isoString);
+  const day = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Fortaleza",
+    day: "2-digit",
+  }).format(date);
+  const monthShort = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Fortaleza",
+    month: "short",
+  }).format(date);
+  const year = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Fortaleza",
+    year: "numeric",
+  }).format(date);
+  const time = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Fortaleza",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+
+  return `${day} de ${monthShort} de ${year} , ${time}`;
+}
+
 function formatBrazilTime(isoString: string): string {
   const date = new Date(isoString);
   return new Intl.DateTimeFormat("pt-BR", {
@@ -108,6 +128,19 @@ function formatBrazilTime(isoString: string): string {
     minute: "2-digit",
     hour12: false,
   }).format(date);
+}
+
+function getBrazilPeriodGreeting(isoString: string): string {
+  const date = new Date(isoString);
+  const hourStr = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Fortaleza",
+    hour: "2-digit",
+    hour12: false,
+  }).format(date);
+  const hour = parseInt(hourStr, 10);
+  if (hour >= 5 && hour < 12) return "desta manhã";
+  if (hour >= 12 && hour < 18) return "desta tarde";
+  return "desta noite";
 }
 
 function formatBRL(value: number): string {
@@ -222,7 +255,6 @@ export async function sendBookingNotificationEmails(bookingId: string) {
       return { success: false, error: "Reserva não localizada no banco." };
     }
 
-    // Agrupa múltiplos horários reservados juntos (via PIX/Cartão, Carteira ou Manual Admin)
     let batchBookings: any[] = [mainBooking];
 
     if (mainBooking.asaas_payment_id) {
@@ -319,7 +351,6 @@ export async function sendBookingNotificationEmails(bookingId: string) {
       ]),
     );
 
-    // Datas e Horários no Fuso Horário de Natal/Fortaleza (UTC-3)
     const entryDateFormatted = formatBrazilDate(firstSlot.start_time);
     const entryTimeFormatted = formatBrazilTime(firstSlot.start_time);
     const exitDateFormatted = formatBrazilDate(lastSlot.end_time);
@@ -383,9 +414,6 @@ export async function sendBookingNotificationEmails(bookingId: string) {
 
     const emailPayloads: any[] = [];
 
-    // ------------------------------------------------------------------------
-    // E-MAIL 1: PARA O PROFISSIONAL (NO SEU LAYOUT DE RESERVA DE SALA)
-    // ------------------------------------------------------------------------
     if (specialistEmail) {
       emailPayloads.push({
         from: FROM_EMAIL,
@@ -528,7 +556,6 @@ export async function sendBookingNotificationEmails(bookingId: string) {
           : ""
       }
 
-      <!-- EXPLICAÇÃO DOS 50 MINUTOS -->
       <div style="background-color: #FFFBEB; border: 1px solid #FDE68A; border-radius: 16px; padding: 16px; margin-bottom: 18px;">
         <p style="font-size: 13px; font-weight: 800; color: #92400E; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;">
           ⏱ Importante: Por que a reserva tem 50 minutos por hora? (${entryTimeFormatted} às ${exitTimeFormatted})
@@ -538,7 +565,6 @@ export async function sendBookingNotificationEmails(bookingId: string) {
         </p>
       </div>
 
-      <!-- CHECK-IN, CHECK-OUT E DESLIGAR AR/LUZES -->
       <div style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 16px; padding: 18px; margin-bottom: 22px;">
         <h3 style="font-size: 14px; font-weight: 800; color: #1E293B; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 12px;">
           📲 Check-in, Check-out e Cuidados ao Sair da Sala
@@ -562,7 +588,6 @@ export async function sendBookingNotificationEmails(bookingId: string) {
         </p>
       </div>
 
-      <!-- DETALHES DO AGENDAMENTO -->
       <div style="border-top: 1px solid #F1F1F4; padding-top: 18px; margin-bottom: 18px;">
         <h2 style="font-size: 15px; font-weight: 800; color: #464E5F; margin-bottom: 12px;">
           DETALHES DO AGENDAMENTO
@@ -581,7 +606,6 @@ export async function sendBookingNotificationEmails(bookingId: string) {
         </div>
       </div>
 
-      <!-- VALOR TOTAL -->
       <div style="border-top: 1px solid #F1F1F4; padding-top: 16px;">
         <h3 style="font-size: 12px; font-weight: 800; color: #B5B5C3; text-transform: uppercase;">VALOR TOTAL</h3>
         <h2 style="font-size: 26px; font-weight: 900; color: #464E5F; margin-top: 2px;">
@@ -606,9 +630,6 @@ export async function sendBookingNotificationEmails(bookingId: string) {
       });
     }
 
-    // ------------------------------------------------------------------------
-    // E-MAIL 2: PARA O ANFITRIÃO / CLÍNICA
-    // ------------------------------------------------------------------------
     if (hostEmail) {
       emailPayloads.push({
         from: FROM_EMAIL,
@@ -633,9 +654,6 @@ export async function sendBookingNotificationEmails(bookingId: string) {
       });
     }
 
-    // ------------------------------------------------------------------------
-    // E-MAIL 3: PARA OS ADMINISTRADORES
-    // ------------------------------------------------------------------------
     if (adminEmails.length > 0) {
       emailPayloads.push({
         from: FROM_EMAIL,
@@ -1004,6 +1022,432 @@ export async function sendSubscriptionCancellationEmail(
       },
     ]);
   } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+// ============================================================================
+// 7. RECIBO PÓS-CHECK-OUT ESTILO UBER (COM IDENTIDADE FUSION CLINIC)
+// Disparado automaticamente quando o profissional faz Check-out na sala
+// ============================================================================
+export async function sendCheckoutReceiptEmail(
+  bookingIds: string | string[],
+) {
+  try {
+    if (!process.env.RESEND_API_KEY || !bookingIds) {
+      return { success: false, error: "Dados de reserva ausentes." };
+    }
+
+    const idsArray = Array.isArray(bookingIds)
+      ? bookingIds.filter(Boolean)
+      : [bookingIds].filter(Boolean);
+
+    if (idsArray.length === 0) return { success: false };
+
+    const supabase = await getDbClient();
+
+    const { data: bookingsList, error: bErr } = await supabase
+      .from("bookings")
+      .select("*")
+      .in("id", idsArray)
+      .order("start_time", { ascending: true });
+
+    if (bErr || !bookingsList || bookingsList.length === 0) {
+      console.error("[Email Checkout Receipt] Reserva não encontrada:", bErr);
+      return { success: false, error: "Reserva não localizada." };
+    }
+
+    const firstBooking = bookingsList[0];
+    const lastBooking = bookingsList[bookingsList.length - 1];
+    const totalHoursCount = bookingsList.length;
+
+    const [roomRes, specialistRes] = await Promise.all([
+      supabase
+        .from("rooms")
+        .select("*")
+        .eq("id", firstBooking.room_id)
+        .maybeSingle(),
+      supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", firstBooking.user_id)
+        .maybeSingle(),
+    ]);
+
+    const room = roomRes.data;
+    const specialist = specialistRes.data;
+
+    let specialistEmail = specialist?.email || null;
+    if (!specialistEmail && firstBooking.user_id) {
+      try {
+        const { data: authUser } = await (
+          supabase as any
+        ).auth.admin.getUserById(firstBooking.user_id);
+        specialistEmail = authUser?.user?.email || null;
+      } catch {}
+    }
+
+    if (!specialistEmail) {
+      return { success: false, error: "Profissional sem e-mail cadastrado." };
+    }
+
+    const fullName = specialist?.full_name || "Doutor(a)";
+    const firstName = fullName.trim().split(" ")[0] || "Doutor(a)";
+    const roomName = room?.name || "Consultório Fusion";
+    const roomTier = String(room?.tier || "start").toUpperCase();
+    const roomTierLabel =
+      roomTier === "MASTER"
+        ? "Premium"
+        : roomTier === "VIP"
+          ? "VIP"
+          : "Basic";
+
+    let address: any = room?.address_details || {};
+    if (typeof address === "string") {
+      try {
+        address = JSON.parse(address);
+      } catch {
+        address = {};
+      }
+    }
+
+    const streetAddress = [
+      address.street || "Unidade Fusion Clinic",
+      address.number ? `nº ${address.number}` : "",
+      address.neighborhood ? `- ${address.neighborhood}` : "",
+      address.city ? `, ${address.city}/${address.state || "RN"}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    const hourlyRateFallback = Number(address?.pricing?.hourly || 45);
+
+    const isCreditPayment =
+      !firstBooking.asaas_payment_id &&
+      (String(firstBooking.booking_origin || "").startsWith("wallet_") ||
+        Number(firstBooking.total_cost || 0) < 10);
+
+    const totalCreditsUsed = bookingsList.reduce(
+      (acc, b) => acc + Math.max(1, Number(b.total_cost || 1)),
+      0,
+    );
+
+    const totalBrlAmount = bookingsList.reduce((acc, b) => {
+      if (b.agreed_value_brl && Number(b.agreed_value_brl) > 0) {
+        return acc + Number(b.agreed_value_brl);
+      }
+      const c = Number(b.total_cost || 1);
+      return acc + (c < 10 ? c * hourlyRateFallback : c);
+    }, 0);
+
+    const penaltyAmountBrl = bookingsList.reduce(
+      (acc, b) => acc + Number(b.penalty_amount || 0),
+      0,
+    );
+
+    const displayTotalPrimary = isCreditPayment
+      ? `${totalCreditsUsed} CR`
+      : `R$ ${formatBRL(totalBrlAmount + penaltyAmountBrl)}`;
+
+    const paymentMethodBadge = isCreditPayment
+      ? `Créditos Fusion Pass+ (${roomTierLabel})`
+      : "PIX / Cartão (Asaas)";
+
+    const paymentMethodIconText = isCreditPayment ? "PASS+" : "PIX";
+
+    const checkoutIso =
+      lastBooking.checkout_time || new Date().toISOString();
+    const checkinIso =
+      firstBooking.checkin_time || firstBooking.start_time;
+
+    const headerTimestamp = formatBrazilUberTimestamp(checkoutIso);
+    const periodGreeting = getBrazilPeriodGreeting(checkoutIso);
+
+    const scheduledStartFormatted = formatBrazilTime(firstBooking.start_time);
+    const scheduledEndFormatted = formatBrazilTime(lastBooking.end_time);
+    const scheduledDateFormatted = formatBrazilDate(firstBooking.start_time);
+
+    const effectiveCheckinFormatted = formatBrazilTime(checkinIso);
+    const effectiveCheckoutFormatted = formatBrazilTime(checkoutIso);
+
+    const receiptCode = `#${String(firstBooking.id).slice(0, 8).toUpperCase()}`;
+
+    const html = `
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Recibo do seu atendimento - Fusion Clinic</title>
+  </head>
+  <body style="margin: 0; padding: 0; background-color: #F3F2EF; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #141210; -webkit-font-smoothing: antialiased;">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #F3F2EF; padding: 20px 10px;">
+      <tr>
+        <td align="center">
+          <!-- CONTAINER PRINCIPAL ESTILO UBER COM IDENTIDADE FUSION -->
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 560px; background-color: #FFFFFF; border-radius: 24px; overflow: hidden; box-shadow: 0 10px 35px rgba(20, 18, 16, 0.06); border: 1px solid #E7E5E4;">
+            
+            <!-- BARRA DE DESTAQUE LARANJA FUSION -->
+            <tr>
+              <td style="height: 6px; background: linear-gradient(90deg, #B83B10 0%, #DE5D2E 100%); font-size: 0; line-height: 0;"> </td>
+            </tr>
+
+            <!-- 1. HERO HEADER (ESTILO UBER: LOGO + DATA + FRASE GRANDE) -->
+            <tr>
+              <td style="background-color: #FAF7F4; padding: 36px 32px 32px 32px; border-bottom: 1px solid #EFECE6;">
+                <div style="margin-bottom: 26px;">
+                  <img
+                    src="${APP_URL}/logo-fusion-orange.png"
+                    alt="Fusion Clinic"
+                    width="150"
+                    style="display: block; max-width: 150px; height: auto;"
+                  />
+                </div>
+
+                <p style="margin: 0 0 12px 0; font-size: 13px; font-weight: 600; color: #78716C;">
+                  ${headerTimestamp}
+                </p>
+
+                <h1 style="margin: 0 0 16px 0; font-size: 32px; line-height: 1.15; font-weight: 900; color: #141210; letter-spacing: -0.03em;">
+                  ${firstName}, este é o <span style="background-color: #FDE68A; padding: 0 6px; border-radius: 6px;">recibo</span> do seu atendimento
+                </h1>
+
+                <p style="margin: 0; font-size: 15px; line-height: 1.5; color: #57534E; font-weight: 500;">
+                  Esperamos que você e seu paciente tenham tido uma excelente experiência ${periodGreeting}.
+                </p>
+              </td>
+            </tr>
+
+            <!-- 2. BLOCO TOTAL + BREAKDOWN -->
+            <tr>
+              <td style="padding: 32px 32px 20px 32px;">
+                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="padding-bottom: 18px; border-bottom: 2px solid #F5F5F4;">
+                  <tr>
+                    <td align="left" style="font-size: 26px; font-weight: 900; color: #141210; letter-spacing: -0.02em;">
+                      Total
+                    </td>
+                    <td align="right" style="font-size: 28px; font-weight: 900; color: #141210; letter-spacing: -0.02em;">
+                      ${displayTotalPrimary}
+                    </td>
+                  </tr>
+                </table>
+
+                <!-- LINHAS DO RESUMO FINANCEIRO -->
+                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 16px;">
+                  <tr>
+                    <td align="left" style="padding: 8px 0; font-size: 14px; color: #57534E; font-weight: 500;">
+                      Locação • ${roomName} (${totalHoursCount}h clínica)
+                    </td>
+                    <td align="right" style="padding: 8px 0; font-size: 14px; color: #141210; font-weight: 700;">
+                      ${displayTotalPrimary}
+                    </td>
+                  </tr>
+
+                  ${
+                    isCreditPayment
+                      ? `
+                  <tr>
+                    <td align="left" style="padding: 6px 0; font-size: 13px; color: #78716C;">
+                      Valor equivalente da locação em R$
+                    </td>
+                    <td align="right" style="padding: 6px 0; font-size: 13px; color: #78716C; font-weight: 600;">
+                      R$ ${formatBRL(totalBrlAmount)}
+                    </td>
+                  </tr>
+                  `
+                      : ""
+                  }
+
+                  ${
+                    penaltyAmountBrl > 0
+                      ? `
+                  <tr>
+                    <td align="left" style="padding: 6px 0; font-size: 13px; color: #DC2626; font-weight: 600;">
+                      Hora extra / Tolerância excedida
+                    </td>
+                    <td align="right" style="padding: 6px 0; font-size: 13px; color: #DC2626; font-weight: 700;">
+                      R$ ${formatBRL(penaltyAmountBrl)}
+                    </td>
+                  </tr>
+                  `
+                      : ""
+                  }
+
+                  <tr>
+                    <td align="left" style="padding: 8px 0; font-size: 14px; color: #57534E; font-weight: 500;">
+                      Taxa de serviço e recepção Fusion
+                    </td>
+                    <td align="right" style="padding: 8px 0; font-size: 14px; color: #059669; font-weight: 700;">
+                      Inclusa (R$ 0,00)
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- 3. SEÇÃO PAGAMENTOS -->
+            <tr>
+              <td style="padding: 12px 32px 24px 32px;">
+                <div style="border-top: 1px solid #F5F5F4; padding-top: 22px;">
+                  <h2 style="margin: 0 0 16px 0; font-size: 20px; font-weight: 900; color: #141210; letter-spacing: -0.02em;">
+                    Pagamentos
+                  </h2>
+
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td width="46" valign="middle">
+                        <div style="width: 38px; height: 28px; border-radius: 6px; background-color: #FAF7F4; border: 1px solid #E7E5E4; text-align: center; line-height: 28px; font-size: 10px; font-weight: 900; color: #BF4B24;">
+                          ${paymentMethodIconText}
+                        </div>
+                      </td>
+                      <td valign="middle" style="font-size: 15px; font-weight: 700; color: #141210;">
+                        ${paymentMethodBadge}
+                        <span style="display: block; font-size: 12px; font-weight: 500; color: #78716C; margin-top: 2px;">
+                          Comprovante ${receiptCode} • ${scheduledDateFormatted}
+                        </span>
+                      </td>
+                      <td align="right" valign="middle" style="font-size: 16px; font-weight: 900; color: #141210;">
+                        ${displayTotalPrimary}
+                      </td>
+                    </tr>
+                  </table>
+                </div>
+              </td>
+            </tr>
+
+            <!-- 4. LINHA DO TEMPO DO ATENDIMENTO (CHECK-IN E CHECK-OUT NA PORTA) -->
+            <tr>
+              <td style="padding: 0 32px 28px 32px;">
+                <div style="background-color: #FAF7F4; border: 1px solid #EFECE6; border-radius: 18px; padding: 20px;">
+                  <p style="margin: 0 0 14px 0; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: #BF4B24;">
+                    Resumo de Uso da Sala (${scheduledStartFormatted} às ${scheduledEndFormatted})
+                  </p>
+
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td width="24" valign="top" style="padding-top: 3px;">
+                        <div style="width: 10px; height: 10px; border-radius: 50%; background-color: #141210;"></div>
+                        <div style="width: 2px; height: 34px; background-color: #D6D3D1; margin-left: 4px;"></div>
+                        <div style="width: 10px; height: 10px; border-radius: 50%; background-color: #BF4B24;"></div>
+                      </td>
+                      <td valign="top">
+                        <div style="margin-bottom: 16px;">
+                          <p style="margin: 0; font-size: 14px; font-weight: 800; color: #141210;">
+                            Check-in registrado às ${effectiveCheckinFormatted}
+                          </p>
+                          <p style="margin: 2px 0 0 0; font-size: 12px; color: #78716C;">
+                            ${roomName} • Sala liberada via NFC/QR Code
+                          </p>
+                        </div>
+
+                        <div>
+                          <p style="margin: 0; font-size: 14px; font-weight: 800; color: #047857;">
+                            Check-out finalizado às ${effectiveCheckoutFormatted}
+                          </p>
+                          <p style="margin: 2px 0 0 0; font-size: 12px; color: #78716C;">
+                            ${streetAddress}
+                          </p>
+                        </div>
+                      </td>
+                    </tr>
+                  </table>
+                </div>
+              </td>
+            </tr>
+
+            <!-- 5. CARD DE AVALIAÇÃO (ESTILO UBER) -->
+            <tr>
+              <td style="padding: 0 24px 16px 24px;">
+                <div style="border: 1px solid #E7E5E4; border-radius: 20px; padding: 20px; text-align: center;">
+                  <p style="margin: 0 0 12px 0; font-size: 14px; font-weight: 700; color: #141210;">
+                    Como foi seu atendimento no ${roomName}?
+                  </p>
+                  <a
+                    href="${APP_URL}/dashboard#bookings"
+                    style="display: block; width: 100%; box-sizing: border-box; background-color: #F5F5F4; color: #141210; font-size: 14px; font-weight: 800; text-decoration: none; padding: 14px 18px; border-radius: 12px;"
+                  >
+                    ⭐ Avaliar consultório ou reservar novamente
+                  </a>
+                </div>
+              </td>
+            </tr>
+
+            <!-- 6. CARD "PRECISA DE AJUDA?" (IDÊNTICO AO CONCEITO DO UBER) -->
+            <tr>
+              <td style="padding: 0 24px 28px 24px;">
+                <div style="border: 1px solid #E7E5E4; border-radius: 20px; padding: 24px;">
+                  <h3 style="margin: 0 0 8px 0; font-size: 18px; font-weight: 900; color: #141210;">
+                    Precisa de ajuda?
+                  </h3>
+                  <p style="margin: 0 0 18px 0; font-size: 14px; line-height: 1.5; color: #57534E;">
+                    Nossa equipe de suporte está à disposição para ajudar com qualquer dúvida sobre sua locação ou créditos.
+                  </p>
+                  <a
+                    href="${APP_URL}/dashboard#chat"
+                    style="display: block; width: 100%; box-sizing: border-box; background-color: #F5F5F4; color: #141210; font-size: 14px; font-weight: 800; text-decoration: none; padding: 14px 18px; border-radius: 12px; text-align: center;"
+                  >
+                    🎧 Fale com a equipe de suporte
+                  </a>
+                </div>
+              </td>
+            </tr>
+
+            <!-- 7. RODAPÉ ESCURO INSTITUCIONAL FUSION (ESTILO UBER BLACK) -->
+            <tr>
+              <td style="background-color: #0C0A09; padding: 32px; color: #FFFFFF;">
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td style="padding: 14px 0; border-bottom: 1px solid #292524;">
+                      <a href="${APP_URL}/dashboard#profile" style="color: #FFFFFF; text-decoration: none; font-size: 15px; font-weight: 600;">
+                        Minha conta
+                      </a>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 14px 0; border-bottom: 1px solid #292524;">
+                      <a href="${APP_URL}/dashboard#bookings" style="color: #FFFFFF; text-decoration: none; font-size: 15px; font-weight: 600;">
+                        Histórico de Reservas e Recibos
+                      </a>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 14px 0; border-bottom: 1px solid #292524;">
+                      <a href="${APP_URL}/termos" style="color: #FFFFFF; text-decoration: none; font-size: 15px; font-weight: 600;">
+                        Termos e Condições de Uso
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+
+                <div style="margin-top: 26px; font-size: 12px; line-height: 1.6; color: #A8A29E;">
+                  <strong style="color: #F5F5F4;">Fusion Clinic Soluções em Saúde Ltda</strong><br />
+                  Natal, Rio Grande do Norte - Brasil<br />
+                  CNPJ: 49.351.127/0001-44
+                </div>
+
+                <div style="margin-top: 22px; font-size: 24px; font-weight: 900; letter-spacing: -0.03em; color: #FFFFFF;">
+                  Fusion<span style="color: #BF4B24;">.</span>
+                </div>
+              </td>
+            </tr>
+
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`.trim();
+
+    return await dispatchEmailsSafely([
+      {
+        from: FROM_EMAIL,
+        to: [specialistEmail],
+        subject: `Recibo do seu atendimento na ${roomName} — Fusion Clinic`,
+        html,
+      },
+    ]);
+  } catch (err: any) {
+    console.error("[Email Checkout Receipt] Erro:", err);
     return { success: false, error: err.message };
   }
 }

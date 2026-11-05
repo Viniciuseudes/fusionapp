@@ -1,8 +1,8 @@
+// components/active-session.tsx
 "use client";
 
 import { useState, useEffect } from "react";
 import { format, differenceInSeconds, parseISO } from "date-fns";
-import { ptBR } from "date-fns/locale";
 import {
   QrCode,
   AlertTriangle,
@@ -15,8 +15,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { createClient } from "@/utils/supabase/client";
-
 import { RoomQRScanner } from "@/components/qr-scanner";
+import { sendCheckoutReceiptEmail } from "@/app/actions/send-email";
 
 interface ActiveSessionProps {
   booking: any;
@@ -61,12 +61,11 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
     return () => clearInterval(interval);
   }, [booking, showScanner]);
 
-  // Checa disponibilidade para venda de hora extra quando entra em Overtime
   useEffect(() => {
     if (sessionPhase === "overtime") {
       const checkAvailability = async () => {
         const eTime = parseISO(booking.end_time);
-        const limit = new Date(eTime.getTime() + 60 * 60 * 1000); // 1 hora de janela
+        const limit = new Date(eTime.getTime() + 60 * 60 * 1000);
 
         const { data } = await supabase
           .from("bookings")
@@ -87,9 +86,7 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
       parseISO(booking.end_time),
       parseISO(booking.start_time),
     ) / 60;
-
   const warningThreshold = totalSessionMinutes - 10;
-  const fineThreshold = totalSessionMinutes;
 
   const minutesElapsed = Math.floor(secondsElapsed / 60);
   const secondsReminder = secondsElapsed % 60;
@@ -131,11 +128,11 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
       const newEndTime = new Date(
         currentEndTime.getTime() + 60 * 60 * 1000,
       ).toISOString();
+
       const idsToUpdate = booking.original_ids || [booking.id];
       const baseCost =
         booking.total_cost > 0 ? booking.total_cost / idsToUpdate.length : 45;
 
-      // Cobra a carteira
       const { error: walletError } = await supabase
         .from("wallet_transactions")
         .insert({
@@ -145,25 +142,22 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
           tier: booking.rooms?.tier || "start",
           description: `Extensão Rápida (+1h): ${booking.rooms?.name}`,
         });
-
       if (walletError) throw walletError;
 
-      // Adiciona o tempo no banco para a ÚLTIMA reserva mesclada
       const { error: updateError } = await supabase
         .from("bookings")
         .update({
           end_time: newEndTime,
           total_cost: booking.total_cost + baseCost,
         })
-        .eq("id", idsToUpdate[idsToUpdate.length - 1]); // Estende só a última perna
+        .eq("id", idsToUpdate[idsToUpdate.length - 1]);
 
       if (updateError) throw updateError;
 
       toast({
-        title: "Sessão Estendida! ⏰",
+        title: "Sessão Estendida! ⏳",
         description: "Você comprou mais 1 hora de uso com sucesso.",
       });
-
       onSessionEnd();
     } catch (error: any) {
       toast({
@@ -179,6 +173,7 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
   const processCheckout = async () => {
     setLoading(true);
     setShowScanner(false);
+
     try {
       let penalty = "none";
       let amount = 0;
@@ -207,23 +202,29 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
 
       if (error) throw error;
 
+      // DISPARA O RECIBO ESTILO UBER POR E-MAIL AUTOMATICAMENTE
+      sendCheckoutReceiptEmail(idsToUpdate).catch((e) =>
+        console.error("Erro ao enviar recibo de check-out:", e),
+      );
+
       if (penalty === "fined") {
         toast({
           variant: "destructive",
           title: "Check-out com Multa",
           description:
-            "Você ultrapassou o horário da sua reserva. O valor de 1 hora foi debitado.",
+            "Você ultrapassou o horário da sua reserva. O recibo foi enviado para seu e-mail.",
         });
       } else if (penalty === "warning") {
         toast({
           title: "Atenção ao horário",
-          description: "Você saiu no limite da tolerância de limpeza.",
+          description:
+            "Você saiu no limite da tolerância. Enviamos o recibo para seu e-mail.",
         });
       } else {
         toast({
-          title: "Check-out concluído! 🎉",
+          title: "Check-out concluído! 👏",
           description:
-            "Obrigado por deixar a sala limpa para o próximo colega.",
+            "Obrigado por deixar a sala organizada. Enviamos o recibo para seu e-mail!",
         });
       }
 
@@ -250,11 +251,9 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
             <div className="inline-flex items-center justify-center p-3 bg-white rounded-2xl shadow-sm mb-6">
               <QrCode className="w-8 h-8 text-slate-800" />
             </div>
-
             <h2 className="text-xl font-bold text-slate-800 mb-1">
               {booking.rooms?.name || "Sua Sala"}
             </h2>
-
             <div className="flex items-center justify-center gap-2 mb-8 bg-white/50 w-fit mx-auto px-4 py-2 rounded-full border border-slate-200/50 backdrop-blur-sm">
               {statusIcon}
               <span className="text-sm font-black uppercase tracking-wider text-slate-700">
@@ -295,6 +294,7 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
                     </>
                   )}
                 </Button>
+
                 <Button
                   onClick={() => setShowScanner(true)}
                   disabled={loading}
@@ -317,11 +317,11 @@ export function ActiveSession({ booking, onSessionEnd }: ActiveSessionProps) {
                         Saia até os últimos 10 min: Limpeza ideal.
                       </li>
                       <li className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                        <span className="w-2 h-2 rounded-full bg-amber-500"></span>{" "}
                         Últimos 10 min: Tolerância (Advertência).
                       </li>
                       <li className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                        <span className="w-2 h-2 rounded-full bg-red-500"></span>{" "}
                         Estouro do relógio: Multa no sistema.
                       </li>
                     </ul>
