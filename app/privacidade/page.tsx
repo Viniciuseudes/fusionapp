@@ -76,7 +76,7 @@ export default function PoliticaDePrivacidadePage() {
           <div className="space-y-8 text-sm leading-relaxed text-slate-700">
             <section className="space-y-3">
               <p>
-                A <strong>FUSION CLINIC SOLUÇÕES EM SAÚDE LTDA</strong>, pessoa
+                A <strong>FUSION TECNOLOGIA INOVA SIMPLES (I.S)</strong>, pessoa
                 jurídica de direito privado, inscrita no CNPJ sob o nº{" "}
                 <strong>49.351.127/0001-44</strong>, com sede em Natal/RN
                 (“Fusion Clinic”, “Controladora” ou “Nós”), leva a sério a sua
@@ -426,10 +426,10 @@ export default function PoliticaDePrivacidadePage() {
                 <p>
                   <strong>E-mail Oficial de Privacidade e LGPD:</strong>{" "}
                   <a
-                    href="mailto:tecnologia@fusionapp.com.br"
+                    href="mailto:equipe@fusionclinic.com.br"
                     className="font-bold text-[#BF4B24] hover:underline"
                   >
-                    tecnologia@fusionapp.com.br
+                    equipe@fusionclinic.com.br
                   </a>{" "}
                   /{" "}
                   <a
@@ -443,6 +443,7 @@ export default function PoliticaDePrivacidadePage() {
                   <strong>Endereço Sede:</strong> Natal, Estado do Rio Grande do
                   Norte — Brasil
                 </p>
+                .com
               </div>
             </section>
           </div>

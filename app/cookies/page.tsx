@@ -76,7 +76,7 @@ export default function PoliticaDeCookiesPage() {
                 <code className="text-xs bg-stone-100 px-1.5 py-0.5 rounded font-mono">
                   sessionStorage
                 </code>
-                ), como a <strong>FUSION CLINIC SOLUÇÕES EM SAÚDE LTDA</strong>{" "}
+                ), como a <strong>FUSION TECNOLOGIA INOVA SIMPLES (I.S)</strong>{" "}
                 os utiliza na plataforma{" "}
                 <code className="text-xs bg-stone-100 px-1.5 py-0.5 rounded font-mono">
                   https://fusionapp.com.br
@@ -265,7 +265,7 @@ export default function PoliticaDeCookiesPage() {
               <Building2 className="w-4 h-4 text-[#BF4B24] shrink-0" />
               <div>
                 <strong className="text-slate-800 block">
-                  FUSION CLINIC SOLUÇÕES EM SAÚDE LTDA
+                  FUSION TECNOLOGIA INOVA SIMPLES (I.S)
                 </strong>
                 <span>CNPJ: 49.351.127/0001-44 • Natal/RN</span>
               </div>
@@ -273,10 +273,10 @@ export default function PoliticaDeCookiesPage() {
             <div>
               Contato:{" "}
               <a
-                href="mailto:tecnologia@fusionapp.com.br"
+                href="mailto:equipe@fusionclinic.com.br"
                 className="font-bold text-[#BF4B24] hover:underline"
               >
-                tecnologia@fusionapp.com.br
+                equipe@fusionclinic.com.br
               </a>
             </div>
           </div>

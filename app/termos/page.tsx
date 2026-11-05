@@ -120,7 +120,7 @@ export default function TermosDeUsoPage() {
                   https://fusionapp.com.br
                 </code>{" "}
                 e subdomínios), de titularidade e operação de{" "}
-                <strong>FUSION CLINIC SOLUÇÕES EM SAÚDE LTDA</strong>, pessoa
+                <strong>FUSION TECNOLOGIA INOVA SIMPLES (I.S)</strong>, pessoa
                 jurídica de direito privado, inscrita no CNPJ sob o nº{" "}
                 <strong>49.351.127/0001-44</strong>, com sede em Natal, Estado
                 do Rio Grande do Norte (“Fusion Clinic” ou “Plataforma”).
@@ -665,7 +665,7 @@ export default function TermosDeUsoPage() {
               <Building2 className="w-4 h-4 text-[#BF4B24] shrink-0" />
               <div>
                 <strong className="text-slate-800 block">
-                  FUSION CLINIC SOLUÇÕES EM SAÚDE LTDA
+                  FUSION TECNOLOGIA INOVA SIMPLES (I.S)
                 </strong>
                 <span>CNPJ: 49.351.127/0001-44 • Natal/RN</span>
               </div>
@@ -673,10 +673,10 @@ export default function TermosDeUsoPage() {
             <div>
               Dúvidas jurídicas:{" "}
               <a
-                href="mailto:tecnologia@fusionapp.com.br"
+                href="mailto:equipe@fusionclinic.com.br"
                 className="font-bold text-[#BF4B24] hover:underline"
               >
-                tecnologia@fusionapp.com.br
+                equipe@fusionclinic.com.br
               </a>
             </div>
           </div>
