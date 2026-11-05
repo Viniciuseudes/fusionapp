@@ -825,44 +825,71 @@ export async function sendPaymentNotificationEmails(params: {
 // ============================================================================
 // 4. CANCELAMENTO DE RESERVA (PROFISSIONAL + ANFITRIÃO + ADMIN)
 // ============================================================================
-export async function sendBookingCancellationEmails(bookingId: string) {
+export async function sendBookingCancellationEmails(
+  bookingIds: string | string[],
+  options?: {
+    wasRefunded?: boolean;
+    refundedCredits?: number;
+    cancelledBy?: "specialist" | "admin" | "host";
+  },
+) {
   try {
-    if (!process.env.RESEND_API_KEY || !bookingId) return { success: false };
+    if (!process.env.RESEND_API_KEY || !bookingIds) {
+      return { success: false, error: "Credenciais ou ID da reserva ausentes." };
+    }
+
+    const idsArray = Array.isArray(bookingIds)
+      ? bookingIds.filter(Boolean)
+      : [bookingIds].filter(Boolean);
+
+    if (idsArray.length === 0) return { success: false };
+
     const supabase = await getDbClient();
 
-    const { data: booking } = await supabase
+    const { data: bookingsList, error: bErr } = await supabase
       .from("bookings")
       .select("*")
-      .eq("id", bookingId)
-      .maybeSingle();
-    if (!booking) return { success: false };
+      .in("id", idsArray)
+      .order("start_time", { ascending: true });
+
+    if (bErr || !bookingsList || bookingsList.length === 0) {
+      console.error("[Email Cancelamento] Reserva não localizada:", bErr);
+      return { success: false, error: "Reserva não localizada." };
+    }
+
+    const firstBooking = bookingsList[0];
+    const lastBooking = bookingsList[bookingsList.length - 1];
+    const totalSlotsCount = bookingsList.length;
 
     const [roomRes, specialistRes, adminsRes] = await Promise.all([
       supabase
         .from("rooms")
         .select("*")
-        .eq("id", booking.room_id)
+        .eq("id", firstBooking.room_id)
         .maybeSingle(),
       supabase
         .from("profiles")
         .select("*")
-        .eq("id", booking.user_id)
+        .eq("id", firstBooking.user_id)
         .maybeSingle(),
       supabase.from("profiles").select("email, full_name").eq("role", "admin"),
     ]);
 
     const room = roomRes.data;
     const specialist = specialistRes.data;
-    const formattedDate = formatBrazilDate(booking.start_time);
-    const formattedHour = formatBrazilTime(booking.start_time);
 
-    let specialistEmail = specialist?.email;
-    if (!specialistEmail && booking.user_id) {
+    const formattedDate = formatBrazilDate(firstBooking.start_time);
+    const startHourFormatted = formatBrazilTime(firstBooking.start_time);
+    const endHourFormatted = formatBrazilTime(lastBooking.end_time);
+    const periodLabel = `${startHourFormatted} às ${endHourFormatted}`;
+
+    let specialistEmail = specialist?.email || null;
+    if (!specialistEmail && firstBooking.user_id) {
       try {
         const { data: authUser } = await (
           supabase as any
-        ).auth.admin.getUserById(booking.user_id);
-        specialistEmail = authUser?.user?.email;
+        ).auth.admin.getUserById(firstBooking.user_id);
+        specialistEmail = authUser?.user?.email || null;
       } catch {}
     }
 
@@ -896,55 +923,90 @@ export async function sendBookingCancellationEmails(bookingId: string) {
 
     const roomName = room?.name || "Consultório Fusion";
     const specialistName = specialist?.full_name || "Profissional";
+    const codeShort = `#${String(firstBooking.id).slice(0, 8).toUpperCase()}`;
+
+    const refundNoteHtml =
+      options?.wasRefunded === true
+        ? `<div style="background:#ECFDF5;border:1px solid #A7F3D0;border-radius:12px;padding:14px;margin:16px 0;color:#065F46;font-size:13px;">
+             <strong>✓ Estorno Realizado:</strong> Como o cancelamento ocorreu com mais de 24 horas de antecedência, seus créditos/valores foram integralmente devolvidos à sua Carteira Digital (válidos por 30 dias).
+           </div>`
+        : options?.wasRefunded === false
+          ? `<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:12px;padding:14px;margin:16px 0;color:#991B1B;font-size:13px;">
+               <strong>Política de Cancelamento (< 24h):</strong> Como o cancelamento foi realizado com menos de 24 horas para o início do atendimento, esta reserva não é elegível para estorno.
+             </div>`
+          : `<p style="font-size:13px;color:#64748B;">Seus créditos/valores foram processados conforme a política de cancelamento da plataforma.</p>`;
+
     const emailPayloads: any[] = [];
 
+    // 1. E-MAIL PARA O ESPECIALISTA
     if (specialistEmail) {
       emailPayloads.push({
         from: FROM_EMAIL,
         to: [specialistEmail],
-        subject: `❌ Reserva Cancelada: ${roomName} (${formattedDate})`,
+        subject: `❌ Reserva Cancelada: ${roomName} (${formattedDate} às ${startHourFormatted})`,
         html: buildFusionEmailLayout(
-          "Reserva Cancelada",
-          "Aviso de Cancelamento",
+          "Confirmação de Cancelamento",
+          `Cancelada • ${codeShort}`,
           `
           <p>Olá, <strong>${specialistName}</strong>.</p>
-          <p>Sua reserva para a <strong>${roomName}</strong> no dia <strong>${formattedDate} às ${formattedHour}</strong> foi cancelada.</p>
-          <p>Seus créditos/valores foram processados conforme a política de cancelamento da plataforma.</p>
+          <p>Confirmamos que a sua reserva abaixo foi cancelada com sucesso:</p>
+          <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:14px;padding:16px;margin:18px 0;">
+            <p style="margin:4px 0;"><strong>🚪 Consultório:</strong> ${roomName} (${clinicName})</p>
+            <p style="margin:4px 0;"><strong>📅 Data:</strong> ${formattedDate}</p>
+            <p style="margin:4px 0;"><strong>⏰ Horário:</strong> ${periodLabel} (${totalSlotsCount}h)</p>
+            <p style="margin:4px 0;"><strong>🔑 Código:</strong> ${codeShort}</p>
+          </div>
+          ${refundNoteHtml}
+          <div style="text-align: center; margin-top: 22px;">
+            <a href="${APP_URL}/dashboard#search" style="display: inline-block; background-color: #BF4B24; color: #FFFFFF; font-weight: 800; font-size: 13px; text-decoration: none; padding: 12px 24px; border-radius: 12px;">Agendar Novo Horário</a>
+          </div>
           `,
         ),
       });
     }
 
+    // 2. E-MAIL PARA O ANFITRIÃO / CLÍNICA
     if (hostEmail) {
       emailPayloads.push({
         from: FROM_EMAIL,
         to: [hostEmail],
-        subject: `❌ Reserva Cancelada na ${roomName} (${formattedDate})`,
+        subject: `❌ Reserva Cancelada na ${roomName} — ${specialistName} (${formattedDate})`,
         html: buildFusionEmailLayout(
-          "Aviso de Cancelamento",
+          "Aviso de Cancelamento de Reserva",
           "Agenda Liberada",
           `
           <p>Olá, <strong>${clinicName}</strong>.</p>
-          <p>A reserva de <strong>${specialistName}</strong> na <strong>${roomName}</strong> para o dia <strong>${formattedDate} às ${formattedHour}</strong> foi cancelada.</p>
-          <p>O horário já está livre e disponível novamente na sua agenda para novas locações.</p>
+          <p>O(a) profissional <strong>${specialistName}</strong> cancelou a reserva abaixo:</p>
+          <div style="background:#FAF7F5;border:1px solid #FED7AA;border-radius:14px;padding:16px;margin:18px 0;">
+            <p style="margin:4px 0;"><strong>👨‍⚕️ Profissional:</strong> ${specialistName}</p>
+            <p style="margin:4px 0;"><strong>🚪 Sala:</strong> ${roomName}</p>
+            <p style="margin:4px 0;"><strong>📅 Data:</strong> ${formattedDate}</p>
+            <p style="margin:4px 0;"><strong>⏰ Horário Liberado:</strong> ${periodLabel} (${totalSlotsCount}h)</p>
+          </div>
+          <p style="font-size:13px;color:#475569;">Este horário já foi liberado automaticamente na agenda para novas locações.</p>
           `,
         ),
       });
     }
 
+    // 3. E-MAIL PARA OS ADMINISTRADORES
     if (adminEmails.length > 0) {
       emailPayloads.push({
         from: FROM_EMAIL,
         to: adminEmails,
-        subject: `❌ [Admin Cancelamento] ${specialistName} — ${roomName} (${formattedDate} ${formattedHour})`,
+        subject: `❌ [Admin Cancelamento] ${specialistName} cancelou ${roomName} (${formattedDate} ${startHourFormatted})`,
         html: buildFusionEmailLayout(
-          "Reserva Cancelada no Sistema",
+          "Reserva Cancelada pelo Usuário",
           "Torre de Controle Admin",
           `
-          <p>A reserva abaixo foi cancelada e o horário foi liberado na agenda:</p>
-          <p><strong>Profissional:</strong> ${specialistName}</p>
-          <p><strong>Sala:</strong> ${roomName} (${clinicName})</p>
-          <p><strong>Data/Hora:</strong> ${formattedDate} às ${formattedHour}</p>
+          <p>Uma reserva foi cancelada e o horário foi liberado na agenda:</p>
+          <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:14px;padding:16px;margin:18px 0;">
+            <p style="margin:4px 0;"><strong>Profissional:</strong> ${specialistName} (${specialistEmail || "Sem e-mail"})</p>
+            <p style="margin:4px 0;"><strong>Sala / Clínica:</strong> ${roomName} • ${clinicName}</p>
+            <p style="margin:4px 0;"><strong>Data e Horário:</strong> ${formattedDate}, das ${periodLabel} (${totalSlotsCount}h)</p>
+            <p style="margin:4px 0;"><strong>Estorno de Créditos:</strong> ${options?.wasRefunded ? "SIM (Cancelado >= 24h antes)" : "NÃO (< 24h ou pagamento externo)"}</p>
+            <p style="margin:4px 0;"><strong>Código:</strong> ${codeShort}</p>
+          </div>
           `,
         ),
       });

@@ -5,7 +5,10 @@ import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
-import { sendCheckoutReceiptEmail } from "@/app/actions/send-email";
+import {
+  sendBookingCancellationEmails,
+  sendCheckoutReceiptEmail,
+} from "@/app/actions/send-email";
 import { createClient } from "@/utils/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -548,6 +551,11 @@ export function BookingsTab({
 
       if (error) throw error;
 
+      // DISPARA O RECIBO ESTILO UBER POR E-MAIL AUTOMATICAMENTE NO CHECK-OUT
+      sendCheckoutReceiptEmail(idsToUpdate).catch((e) =>
+        console.error("Erro ao enviar recibo de check-out:", e),
+      );
+
       const updatedBooking: Booking = {
         ...targetBooking,
         status: "completed",
@@ -568,7 +576,7 @@ export function BookingsTab({
         toast({
           title: "Saída Registrada com Sucesso! 👏",
           description:
-            "Obrigado pela pontualidade e por liberar o consultório no horário.",
+            "Enviamos o recibo do seu atendimento para o seu e-mail.",
         });
         setReviewModal({
           isOpen: true,
@@ -890,13 +898,22 @@ export function BookingsTab({
         });
       }
 
+      // DISPARA E-MAIL DE CANCELAMENTO PARA PROFISSIONAL + ANFITRIÃO + ADMIN
+      await sendBookingCancellationEmails(idsToUpdate, {
+        wasRefunded: isRefundable,
+        refundedCredits: isRefundable ? booking.total_cost : 0,
+        cancelledBy: "specialist",
+      }).catch((e) =>
+        console.error("Erro ao disparar e-mails de cancelamento:", e),
+      );
+
       toast({
         title: isRefundable
           ? "Reserva Cancelada e Reembolsada"
           : "Reserva Cancelada",
         description: isRefundable
-          ? `O valor foi devolvido à sua origem de pagamento.`
-          : "Cancelado com menos de 24h, sem estorno.",
+          ? `O valor foi devolvido à sua carteira e enviamos a confirmação por e-mail.`
+          : "Cancelado com menos de 24h, sem estorno. Confirmação enviada por e-mail.",
       });
 
       setCancelModal({ isOpen: false, booking: null });
