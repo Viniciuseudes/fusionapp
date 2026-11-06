@@ -277,6 +277,7 @@ export function AdminBookingsTab({
   );
   const [isViewOpen, setIsViewOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [sendCancelEmail, setSendCancelEmail] = useState(true);
 
   // Modal de Perfil e Créditos
   const [selectedSpecialist, setSelectedSpecialist] =
@@ -1490,7 +1491,7 @@ export function AdminBookingsTab({
     if (selectedBooking.is_contract) {
       if (
         !confirm(
-          `Esta reserva pertence a um CONTRATO (${selectedBooking.pricing_label}).\n\nDeseja cancelar e liberar a agenda desta data específica para ${selectedBooking.specialist_name}?`,
+          `Esta reserva pertence a um CONTRATO (${selectedBooking.pricing_label}).\n\nDeseja cancelar e liberar a agenda desta data específica para ${selectedBooking.specialist_name}?\n\nE-mail de cancelamento: ${sendCancelEmail ? "SIM (será enviado)" : "NÃO (cancelamento silencioso)"}`,
         )
       )
         return;
@@ -1503,12 +1504,17 @@ export function AdminBookingsTab({
           .eq("id", selectedBooking.id);
         if (error) throw error;
 
-        sendBookingCancellationEmails(selectedBooking.id).catch(console.error);
+        if (sendCancelEmail) {
+          await (sendBookingCancellationEmails as any)(selectedBooking.id, {
+            cancelledBy: "admin",
+          }).catch(console.error);
+        }
 
         toast({
           title: "Data contratual liberada!",
-          description:
-            "O horário foi liberado na agenda para locações avulsas.",
+          description: sendCancelEmail
+            ? "O horário foi liberado e o e-mail de cancelamento foi enviado."
+            : "O horário foi liberado na agenda (sem envio de e-mail).",
         });
         setIsViewOpen(false);
         fetchBookings();
@@ -1531,7 +1537,7 @@ export function AdminBookingsTab({
 
     if (
       !confirm(
-        `Tem certeza que deseja CANCELAR esta reserva?\n\nSerão estornadas ${hoursToRefund}h (Crédito ${tierLabel}) para a carteira de ${selectedBooking.specialist_name}.`,
+        `Tem certeza que deseja CANCELAR esta reserva?\n\n• Estorno: ${hoursToRefund}h (Crédito ${tierLabel}) para ${selectedBooking.specialist_name}\n• Enviar e-mail de cancelamento: ${sendCancelEmail ? "SIM" : "NÃO (silencioso)"}`,
       )
     )
       return;
@@ -1553,8 +1559,6 @@ export function AdminBookingsTab({
         .eq("id", selectedBooking.id);
 
       if (updateError) throw updateError;
-
-      sendBookingCancellationEmails(selectedBooking.id).catch(console.error);
 
       let refunded = false;
       if (
@@ -1602,11 +1606,21 @@ export function AdminBookingsTab({
         }
       }
 
+      if (sendCancelEmail) {
+        await (sendBookingCancellationEmails as any)(selectedBooking.id, {
+          wasRefunded: refunded,
+          refundedCredits: refunded ? hoursToRefund : 0,
+          cancelledBy: "admin",
+        }).catch(console.error);
+      }
+
       toast({
         title: "Reserva cancelada e estornada!",
-        description: refunded
-          ? `${hoursToRefund}h (${tierLabel}) devolvida(s) para a carteira de ${selectedBooking.specialist_name}.`
-          : "O status da reserva foi atualizado para cancelado.",
+        description: `${
+          refunded
+            ? `${hoursToRefund}h (${tierLabel}) devolvida(s) para a carteira de ${selectedBooking.specialist_name}. `
+            : "O status da reserva foi atualizado para cancelado. "
+        }${sendCancelEmail ? "E-mail de cancelamento enviado." : "Nenhum e-mail foi disparado."}`,
       });
 
       setIsViewOpen(false);
@@ -2940,6 +2954,7 @@ export function AdminBookingsTab({
                           size="sm"
                           onClick={() => {
                             setSelectedBooking(booking);
+                            setSendCancelEmail(true);
                             setIsViewOpen(true);
                           }}
                           className="h-8 font-semibold text-xs border-slate-200 text-slate-600 hover:bg-slate-50"
@@ -3450,7 +3465,26 @@ export function AdminBookingsTab({
               </div>
 
               {selectedBooking.status !== "cancelled" && (
-                <div className="pt-6 mt-6 border-t border-slate-200">
+                <div className="pt-6 mt-6 border-t border-slate-200 space-y-3">
+                  <label className="flex items-start gap-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer hover:bg-slate-100/80 transition-colors select-none">
+                    <input
+                      type="checkbox"
+                      checked={sendCancelEmail}
+                      onChange={(e) => setSendCancelEmail(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#BF4B24] focus:ring-[#BF4B24] accent-[#BF4B24] cursor-pointer"
+                    />
+                    <div className="text-xs leading-snug">
+                      <span className="font-bold text-slate-900 block">
+                        Enviar e-mail de cancelamento para o usuário
+                      </span>
+                      <span className="text-slate-500 text-[11px] block mt-0.5">
+                        {sendCancelEmail
+                          ? "O especialista receberá o e-mail confirmando o cancelamento e o estorno."
+                          : "Cancelamento silencioso: a reserva será cancelada sem disparar e-mail."}
+                      </span>
+                    </div>
+                  </label>
+
                   <Button
                     variant="destructive"
                     className="w-full font-semibold h-11 rounded-xl text-xs"
