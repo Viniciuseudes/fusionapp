@@ -271,13 +271,14 @@ export function AdminBookingsTab({
   >("all");
   const [search, setSearch] = useState("");
 
-  // Modal de Visualização de Reserva
+  // Modal de Visualização de Reserva e Opções de Cancelamento
   const [selectedBooking, setSelectedBooking] = useState<BookingInfo | null>(
     null,
   );
   const [isViewOpen, setIsViewOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [sendCancelEmail, setSendCancelEmail] = useState(true);
+  const [shouldRefundCredits, setShouldRefundCredits] = useState(true);
 
   // Modal de Perfil e Créditos
   const [selectedSpecialist, setSelectedSpecialist] =
@@ -1537,7 +1538,7 @@ export function AdminBookingsTab({
 
     if (
       !confirm(
-        `Tem certeza que deseja CANCELAR esta reserva?\n\n• Estorno: ${hoursToRefund}h (Crédito ${tierLabel}) para ${selectedBooking.specialist_name}\n• Enviar e-mail de cancelamento: ${sendCancelEmail ? "SIM" : "NÃO (silencioso)"}`,
+        `Tem certeza que deseja CANCELAR esta reserva?\n\n• Estornar créditos na carteira: ${shouldRefundCredits ? `SIM (+${hoursToRefund}h Crédito ${tierLabel})` : "NÃO (cancelar sem estorno)"}\n• Enviar e-mail de cancelamento: ${sendCancelEmail ? "SIM" : "NÃO (silencioso)"}`,
       )
     )
       return;
@@ -1562,6 +1563,7 @@ export function AdminBookingsTab({
 
       let refunded = false;
       if (
+        shouldRefundCredits &&
         hoursToRefund > 0 &&
         selectedBooking.user_id &&
         (!existingRefund || existingRefund.length === 0)
@@ -1615,11 +1617,13 @@ export function AdminBookingsTab({
       }
 
       toast({
-        title: "Reserva cancelada e estornada!",
+        title: refunded
+          ? "Reserva cancelada e estornada!"
+          : "Reserva cancelada (sem estorno)!",
         description: `${
           refunded
             ? `${hoursToRefund}h (${tierLabel}) devolvida(s) para a carteira de ${selectedBooking.specialist_name}. `
-            : "O status da reserva foi atualizado para cancelado. "
+            : "Nenhum crédito foi estornado para a carteira. "
         }${sendCancelEmail ? "E-mail de cancelamento enviado." : "Nenhum e-mail foi disparado."}`,
       });
 
@@ -1627,7 +1631,7 @@ export function AdminBookingsTab({
       fetchBookings();
     } catch (err: any) {
       toast({
-        title: "Erro ao cancelar e estornar",
+        title: "Erro ao cancelar reserva",
         description: err.message,
         variant: "destructive",
       });
@@ -2955,6 +2959,7 @@ export function AdminBookingsTab({
                           onClick={() => {
                             setSelectedBooking(booking);
                             setSendCancelEmail(true);
+                            setShouldRefundCredits(!booking.is_contract);
                             setIsViewOpen(true);
                           }}
                           className="h-8 font-semibold text-xs border-slate-200 text-slate-600 hover:bg-slate-50"
@@ -3466,6 +3471,35 @@ export function AdminBookingsTab({
 
               {selectedBooking.status !== "cancelled" && (
                 <div className="pt-6 mt-6 border-t border-slate-200 space-y-3">
+                  {/* CAIXA 1: ESTORNAR OU NÃO OS CRÉDITOS NA CARTEIRA */}
+                  {!selectedBooking.is_contract && (
+                    <label className="flex items-start gap-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer hover:bg-slate-100/80 transition-colors select-none">
+                      <input
+                        type="checkbox"
+                        checked={shouldRefundCredits}
+                        onChange={(e) =>
+                          setShouldRefundCredits(e.target.checked)
+                        }
+                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#BF4B24] focus:ring-[#BF4B24] accent-[#BF4B24] cursor-pointer"
+                      />
+                      <div className="text-xs leading-snug">
+                        <span className="font-bold text-slate-900 block">
+                          Estornar créditos ({selectedBooking.credits_used}h{" "}
+                          {formatTierLabel(
+                            normalizeTier(selectedBooking.credit_tier_raw),
+                          )}
+                          ) na carteira
+                        </span>
+                        <span className="text-slate-500 text-[11px] block mt-0.5">
+                          {shouldRefundCredits
+                            ? "As horas serão devolvidas automaticamente para a Carteira Digital do profissional."
+                            : "Sem estorno: a reserva será cancelada sem devolver créditos na carteira."}
+                        </span>
+                      </div>
+                    </label>
+                  )}
+
+                  {/* CAIXA 2: ENVIAR OU NÃO O E-MAIL DE CANCELAMENTO */}
                   <label className="flex items-start gap-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer hover:bg-slate-100/80 transition-colors select-none">
                     <input
                       type="checkbox"
@@ -3479,7 +3513,7 @@ export function AdminBookingsTab({
                       </span>
                       <span className="text-slate-500 text-[11px] block mt-0.5">
                         {sendCancelEmail
-                          ? "O especialista receberá o e-mail confirmando o cancelamento e o estorno."
+                          ? "O especialista receberá o e-mail confirmando o cancelamento."
                           : "Cancelamento silencioso: a reserva será cancelada sem disparar e-mail."}
                       </span>
                     </div>
@@ -3498,7 +3532,9 @@ export function AdminBookingsTab({
                     )}
                     {selectedBooking.is_contract
                       ? "Liberar Data Contratual na Agenda"
-                      : `Cancelar Reserva e Estornar (${selectedBooking.credits_used}h)`}
+                      : shouldRefundCredits
+                        ? `Cancelar Reserva e Estornar (${selectedBooking.credits_used}h)`
+                        : "Cancelar Reserva (Sem Estornar Créditos)"}
                   </Button>
                 </div>
               )}
