@@ -1,7 +1,7 @@
 // components/admin/overview-tab.tsx
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createClient } from "@/utils/supabase/client";
 import {
   calculatePackageBookingArbitrage,
@@ -34,6 +34,17 @@ import {
   MessageCircle,
   QrCode,
   RotateCcw,
+  Bell,
+  CalendarCheck,
+  CalendarX,
+  UserPlus,
+  DoorOpen,
+  CheckCheck,
+  Trash2,
+  Volume2,
+  VolumeX,
+  CheckCircle2,
+  ChevronRight,
 } from "lucide-react";
 import {
   ComposedChart,
@@ -59,6 +70,14 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import {
   subDays,
   addDays,
   startOfYear,
@@ -66,6 +85,7 @@ import {
   endOfDay,
   parseISO,
   format,
+  formatDistanceToNow,
   getDay,
   getHours,
   differenceInDays,
@@ -154,6 +174,999 @@ interface RoomCapacityMetric {
   future_potential_revenue: number;
   future_locked_revenue: number;
   future_open_opportunity_revenue: number;
+}
+
+// ============================================================================
+// TIPOS E COMPONENTE DO SINO DE NOTIFICAÇÕES EM TEMPO REAL DO ADMIN
+// ============================================================================
+export type AdminNotificationEventType =
+  | "booking_created"
+  | "booking_cancelled"
+  | "specialist_registered"
+  | "host_registered"
+  | "room_created"
+  | "booking_checkin"
+  | "booking_checkout";
+
+export interface AdminNotificationItem {
+  id: string;
+  event_type: AdminNotificationEventType | string;
+  title: string;
+  message: string;
+  metadata: {
+    booking_id?: string;
+    user_id?: string;
+    room_id?: string;
+    user_name?: string;
+    room_name?: string;
+    host_name?: string;
+    date?: string;
+    first_hour?: string;
+    slots_count?: number;
+    target_tab?: string;
+    synthetic?: boolean;
+    [key: string]: any;
+  };
+  is_read: boolean;
+  read_at: string | null;
+  created_at: string;
+}
+
+type NotificationFilterCategory =
+  "all" | "unread" | "bookings" | "cancellations" | "users" | "rooms";
+
+const STORAGE_READ_KEY = "fusion_admin_notif_read_ids_v1";
+const STORAGE_CLEARED_KEY = "fusion_admin_notif_cleared_ids_v1";
+
+// Controle em memória (evita conflitos de tipagem com useRef/.current no TSX)
+const recentRealtimeKeys = new Map<string, number>();
+let bellSoundEnabledState = true;
+let bellUsingDbTableState = false;
+
+function getStoredIdSet(key: string): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? new Set(parsed) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function saveStoredIdSet(key: string, set: Set<string>) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(key, JSON.stringify(Array.from(set).slice(-500)));
+  } catch {}
+}
+
+export function AdminNotificationsBell({
+  onNavigateTab,
+}: {
+  onNavigateTab?: (tabName: string, metadata?: Record<string, any>) => void;
+}) {
+  const [supabase] = useState(() => createClient());
+  const { toast } = useToast();
+
+  const [isOpen, setIsOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [notifications, setNotifications] = useState<AdminNotificationItem[]>(
+    [],
+  );
+  const [activeFilter, setActiveFilter] =
+    useState<NotificationFilterCategory>("all");
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [hasNewPulse, setHasNewPulse] = useState(false);
+  const [usingDbTable, setUsingDbTable] = useState(false);
+
+  useEffect(() => {
+    bellSoundEnabledState = soundEnabled;
+  }, [soundEnabled]);
+
+  useEffect(() => {
+    bellUsingDbTableState = usingDbTable;
+  }, [usingDbTable]);
+
+  const playNotificationChime = useCallback(() => {
+    if (!bellSoundEnabledState || typeof window === "undefined") return;
+    try {
+      const AudioCtx =
+        window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc1.type = "sine";
+      osc2.type = "triangle";
+
+      osc1.frequency.setValueAtTime(880, now);
+      osc1.frequency.exponentialRampToValueAtTime(1318.5, now + 0.14);
+
+      osc2.frequency.setValueAtTime(440, now);
+      osc2.frequency.exponentialRampToValueAtTime(659.25, now + 0.14);
+
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.exponentialRampToValueAtTime(0.12, now + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.38);
+
+      osc1.connect(gain);
+      osc2.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc1.start(now);
+      osc2.start(now);
+      osc1.stop(now + 0.4);
+      osc2.stop(now + 0.4);
+    } catch {}
+  }, []);
+
+  const pushIncomingNotification = useCallback(
+    (newNotif: AdminNotificationItem) => {
+      const dedupeKey = `${newNotif.event_type}_${newNotif.metadata?.booking_id || newNotif.metadata?.user_id || newNotif.metadata?.room_id || newNotif.id}`;
+      const nowMs = Date.now();
+      const lastSeen = recentRealtimeKeys.get(dedupeKey) || 0;
+      if (nowMs - lastSeen < 4000) return;
+      recentRealtimeKeys.set(dedupeKey, nowMs);
+
+      setNotifications((prev) => {
+        if (prev.some((n) => n.id === newNotif.id)) return prev;
+        return [newNotif, ...prev].slice(0, 100);
+      });
+
+      setHasNewPulse(true);
+      setTimeout(() => setHasNewPulse(false), 4000);
+
+      playNotificationChime();
+
+      toast({
+        title: newNotif.title,
+        description: newNotif.message,
+      });
+    },
+    [playNotificationChime, toast],
+  );
+
+  const loadFallbackActivityFeed = useCallback(async () => {
+    const readSet = getStoredIdSet(STORAGE_READ_KEY);
+    const clearedSet = getStoredIdSet(STORAGE_CLEARED_KEY);
+
+    const [bookingsRes, profilesRes, roomsRes] = await Promise.all([
+      supabase
+        .from("bookings")
+        .select("id, created_at, start_time, status, room_id, user_id")
+        .in("status", ["confirmed", "completed", "cancelled", "in_progress"])
+        .order("created_at", { ascending: false })
+        .limit(35),
+      supabase
+        .from("profiles")
+        .select("id, full_name, email, role, specialty, created_at")
+        .order("created_at", { ascending: false })
+        .limit(30),
+      supabase
+        .from("rooms")
+        .select("id, name, host_id, tier, created_at")
+        .order("created_at", { ascending: false })
+        .limit(20),
+    ]);
+
+    const bookingsList = bookingsRes.data || [];
+    const profilesList = profilesRes.data || [];
+    const roomsList = roomsRes.data || [];
+
+    const neededUserIds = Array.from(
+      new Set(
+        [
+          ...bookingsList.map((b: any) => b.user_id),
+          ...roomsList.map((r: any) => r.host_id),
+        ].filter(Boolean),
+      ),
+    );
+    const neededRoomIds = Array.from(
+      new Set(bookingsList.map((b: any) => b.room_id).filter(Boolean)),
+    );
+
+    const [extraUsersRes, extraRoomsRes] = await Promise.all([
+      neededUserIds.length > 0
+        ? supabase
+            .from("profiles")
+            .select("id, full_name, email")
+            .in("id", neededUserIds)
+        : Promise.resolve({ data: [] as any[] }),
+      neededRoomIds.length > 0
+        ? supabase.from("rooms").select("id, name").in("id", neededRoomIds)
+        : Promise.resolve({ data: [] as any[] }),
+    ]);
+
+    const userMap = new Map<string, any>();
+    profilesList.forEach((p: any) => userMap.set(p.id, p));
+    (extraUsersRes.data || []).forEach((p: any) => userMap.set(p.id, p));
+
+    const roomMap = new Map<string, any>();
+    roomsList.forEach((r: any) => roomMap.set(r.id, r));
+    (extraRoomsRes.data || []).forEach((r: any) => roomMap.set(r.id, r));
+
+    const synthesized: AdminNotificationItem[] = [];
+
+    bookingsList.forEach((b: any) => {
+      const isCancelled = b.status === "cancelled";
+      const notifId = `synth_booking_${b.id}_${isCancelled ? "cancel" : "create"}`;
+      if (clearedSet.has(notifId)) return;
+
+      const u = userMap.get(b.user_id);
+      const r = roomMap.get(b.room_id);
+      const userName = u?.full_name || u?.email || "Especialista";
+      const roomName = r?.name || "Consultório";
+
+      let formattedSlot = "";
+      try {
+        formattedSlot = format(parseISO(b.start_time), "dd/MM/yyyy 'às' HH:mm");
+      } catch {
+        formattedSlot = String(b.start_time || "").slice(0, 16);
+      }
+
+      synthesized.push({
+        id: notifId,
+        event_type: isCancelled ? "booking_cancelled" : "booking_created",
+        title: isCancelled
+          ? "❌ Reserva Cancelada"
+          : "📅 Nova Reserva Confirmada",
+        message: isCancelled
+          ? `A reserva de ${userName} na sala ${roomName} (${formattedSlot}) foi cancelada.`
+          : `${userName} agendou a sala ${roomName} para ${formattedSlot}.`,
+        metadata: {
+          booking_id: b.id,
+          user_id: b.user_id,
+          room_id: b.room_id,
+          user_name: userName,
+          room_name: roomName,
+          target_tab: "bookings",
+          synthetic: true,
+        },
+        is_read: readSet.has(notifId),
+        read_at: null,
+        created_at: b.created_at || b.start_time || new Date().toISOString(),
+      });
+    });
+
+    profilesList.forEach((p: any) => {
+      if (p.role === "admin" || !p.created_at) return;
+      const isHost = p.role === "host";
+      const notifId = `synth_profile_${p.id}_${isHost ? "host" : "spec"}`;
+      if (clearedSet.has(notifId)) return;
+
+      const userName = p.full_name || p.email || "Novo Usuário";
+      const specSuffix = p.specialty ? ` (${p.specialty})` : "";
+
+      synthesized.push({
+        id: notifId,
+        event_type: isHost ? "host_registered" : "specialist_registered",
+        title: isHost
+          ? "🏢 Novo Anfitrião Cadastrado"
+          : "👨‍⚕️ Novo Especialista Cadastrado",
+        message: isHost
+          ? `${userName} realizou o cadastro como Anfitrião na plataforma.`
+          : `${userName}${specSuffix} criou uma conta de especialista na Fusion Clinic.`,
+        metadata: {
+          user_id: p.id,
+          user_name: userName,
+          role: p.role || "user",
+          target_tab: isHost ? "hosts" : "specialists",
+          synthetic: true,
+        },
+        is_read: readSet.has(notifId),
+        read_at: null,
+        created_at: p.created_at,
+      });
+    });
+
+    roomsList.forEach((r: any) => {
+      if (!r.created_at) return;
+      const notifId = `synth_room_${r.id}`;
+      if (clearedSet.has(notifId)) return;
+
+      const host = userMap.get(r.host_id);
+      const hostName = host?.full_name || host?.email || "Anfitrião";
+      const roomName = r.name || "Novo Consultório";
+
+      synthesized.push({
+        id: notifId,
+        event_type: "room_created",
+        title: "🚪 Nova Sala Cadastrada",
+        message: `${hostName} cadastrou o espaço "${roomName}" na plataforma.`,
+        metadata: {
+          room_id: r.id,
+          room_name: roomName,
+          host_id: r.host_id,
+          host_name: hostName,
+          target_tab: "rooms",
+          synthetic: true,
+        },
+        is_read: readSet.has(notifId),
+        read_at: null,
+        created_at: r.created_at,
+      });
+    });
+
+    synthesized.sort(
+      (a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    );
+
+    setNotifications(synthesized.slice(0, 80));
+  }, [supabase]);
+
+  const fetchNotifications = useCallback(async () => {
+    setLoading(true);
+    try {
+      const readSet = getStoredIdSet(STORAGE_READ_KEY);
+      const clearedSet = getStoredIdSet(STORAGE_CLEARED_KEY);
+
+      const { data, error } = await supabase
+        .from("admin_notifications")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(80);
+
+      if (!error && Array.isArray(data) && data.length > 0) {
+        setUsingDbTable(true);
+        bellUsingDbTableState = true;
+        const merged = (data as AdminNotificationItem[])
+          .filter((item) => !clearedSet.has(item.id))
+          .map((item) => ({
+            ...item,
+            is_read: item.is_read || readSet.has(item.id),
+          }));
+        setNotifications(merged);
+      } else {
+        const tableExists = !error;
+        setUsingDbTable(tableExists);
+        bellUsingDbTableState = tableExists;
+        await loadFallbackActivityFeed();
+      }
+    } catch {
+      await loadFallbackActivityFeed();
+    } finally {
+      setLoading(false);
+    }
+  }, [supabase, loadFallbackActivityFeed]);
+
+  useEffect(() => {
+    fetchNotifications();
+
+    const channel = supabase
+      .channel("fusion-admin-command-bell-realtime")
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "admin_notifications",
+        },
+        (payload) => {
+          const newNotif = payload.new as AdminNotificationItem;
+          pushIncomingNotification(newNotif);
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "bookings",
+        },
+        async (payload) => {
+          if (bellUsingDbTableState) return;
+          const bNew = payload.new as any;
+          const bOld = payload.old as any;
+          if (!bNew?.id) return;
+
+          const isNewConfirmed =
+            (payload.eventType === "INSERT" && bNew.status === "confirmed") ||
+            (payload.eventType === "UPDATE" &&
+              bOld?.status !== "confirmed" &&
+              bNew.status === "confirmed");
+
+          const isCancelled =
+            payload.eventType === "UPDATE" &&
+            bOld?.status !== "cancelled" &&
+            bNew.status === "cancelled";
+
+          if (!isNewConfirmed && !isCancelled) return;
+
+          const [{ data: uData }, { data: rData }] = await Promise.all([
+            bNew.user_id
+              ? supabase
+                  .from("profiles")
+                  .select("full_name, email")
+                  .eq("id", bNew.user_id)
+                  .maybeSingle()
+              : Promise.resolve({ data: null }),
+            bNew.room_id
+              ? supabase
+                  .from("rooms")
+                  .select("name")
+                  .eq("id", bNew.room_id)
+                  .maybeSingle()
+              : Promise.resolve({ data: null }),
+          ]);
+
+          const userName = uData?.full_name || uData?.email || "Especialista";
+          const roomName = rData?.name || "Consultório";
+          let slotStr = "";
+          try {
+            slotStr = format(
+              parseISO(bNew.start_time),
+              "dd/MM/yyyy 'às' HH:mm",
+            );
+          } catch {
+            slotStr = "";
+          }
+
+          pushIncomingNotification({
+            id: `rt_booking_${bNew.id}_${Date.now()}`,
+            event_type: isCancelled ? "booking_cancelled" : "booking_created",
+            title: isCancelled
+              ? "❌ Reserva Cancelada"
+              : "📅 Nova Reserva Confirmada",
+            message: isCancelled
+              ? `A reserva de ${userName} na sala ${roomName} (${slotStr}) foi cancelada.`
+              : `${userName} acabou de reservar a sala ${roomName} (${slotStr}).`,
+            metadata: {
+              booking_id: bNew.id,
+              user_id: bNew.user_id,
+              room_id: bNew.room_id,
+              target_tab: "bookings",
+              synthetic: true,
+            },
+            is_read: false,
+            read_at: null,
+            created_at: new Date().toISOString(),
+          });
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "profiles",
+        },
+        (payload) => {
+          if (bellUsingDbTableState) return;
+          const pNew = payload.new as any;
+          if (!pNew?.id || pNew.role === "admin") return;
+
+          const isHost = pNew.role === "host";
+          const userName = pNew.full_name || pNew.email || "Novo Usuário";
+
+          pushIncomingNotification({
+            id: `rt_profile_${pNew.id}_${Date.now()}`,
+            event_type: isHost ? "host_registered" : "specialist_registered",
+            title: isHost
+              ? "🏢 Novo Anfitrião Cadastrado"
+              : "👨‍⚕️ Novo Especialista Cadastrado",
+            message: isHost
+              ? `${userName} acabou de se cadastrar como Anfitrião.`
+              : `${userName} acabou de criar uma conta de Especialista.`,
+            metadata: {
+              user_id: pNew.id,
+              role: pNew.role,
+              target_tab: isHost ? "hosts" : "specialists",
+              synthetic: true,
+            },
+            is_read: false,
+            read_at: null,
+            created_at: new Date().toISOString(),
+          });
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "rooms",
+        },
+        async (payload) => {
+          if (bellUsingDbTableState) return;
+          const rNew = payload.new as any;
+          if (!rNew?.id) return;
+
+          let hostName = "Um anfitrião";
+          if (rNew.host_id) {
+            const { data: hData } = await supabase
+              .from("profiles")
+              .select("full_name, email")
+              .eq("id", rNew.host_id)
+              .maybeSingle();
+            if (hData) hostName = hData.full_name || hData.email || hostName;
+          }
+
+          pushIncomingNotification({
+            id: `rt_room_${rNew.id}_${Date.now()}`,
+            event_type: "room_created",
+            title: "🚪 Nova Sala Cadastrada",
+            message: `${hostName} publicou a sala "${rNew.name || "Novo Consultório"}".`,
+            metadata: {
+              room_id: rNew.id,
+              host_id: rNew.host_id,
+              target_tab: "rooms",
+              synthetic: true,
+            },
+            is_read: false,
+            read_at: null,
+            created_at: new Date().toISOString(),
+          });
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [supabase, fetchNotifications, pushIncomingNotification]);
+
+  const unreadCount = useMemo(
+    () => notifications.filter((n) => !n.is_read).length,
+    [notifications],
+  );
+
+  const countsByCategory = useMemo(() => {
+    return {
+      all: notifications.length,
+      unread: notifications.filter((n) => !n.is_read).length,
+      bookings: notifications.filter((n) =>
+        ["booking_created", "booking_checkin", "booking_checkout"].includes(
+          n.event_type,
+        ),
+      ).length,
+      cancellations: notifications.filter(
+        (n) => n.event_type === "booking_cancelled",
+      ).length,
+      users: notifications.filter((n) =>
+        ["specialist_registered", "host_registered"].includes(n.event_type),
+      ).length,
+      rooms: notifications.filter((n) => n.event_type === "room_created")
+        .length,
+    };
+  }, [notifications]);
+
+  const filteredNotifications = useMemo(() => {
+    return notifications.filter((n) => {
+      if (activeFilter === "unread") return !n.is_read;
+      if (activeFilter === "bookings")
+        return [
+          "booking_created",
+          "booking_checkin",
+          "booking_checkout",
+        ].includes(n.event_type);
+      if (activeFilter === "cancellations")
+        return n.event_type === "booking_cancelled";
+      if (activeFilter === "users")
+        return ["specialist_registered", "host_registered"].includes(
+          n.event_type,
+        );
+      if (activeFilter === "rooms") return n.event_type === "room_created";
+      return true;
+    });
+  }, [notifications, activeFilter]);
+
+  const handleMarkAsRead = async (id: string) => {
+    const nowIso = new Date().toISOString();
+    const readSet = getStoredIdSet(STORAGE_READ_KEY);
+    readSet.add(id);
+    saveStoredIdSet(STORAGE_READ_KEY, readSet);
+
+    setNotifications((prev) =>
+      prev.map((n) =>
+        n.id === id ? { ...n, is_read: true, read_at: nowIso } : n,
+      ),
+    );
+
+    if (usingDbTable && !id.startsWith("synth_") && !id.startsWith("rt_")) {
+      await supabase
+        .from("admin_notifications")
+        .update({ is_read: true, read_at: nowIso })
+        .eq("id", id);
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    const unreadItems = notifications.filter((n) => !n.is_read);
+    if (unreadItems.length === 0) return;
+
+    const nowIso = new Date().toISOString();
+    const readSet = getStoredIdSet(STORAGE_READ_KEY);
+    unreadItems.forEach((item) => readSet.add(item.id));
+    saveStoredIdSet(STORAGE_READ_KEY, readSet);
+
+    setNotifications((prev) =>
+      prev.map((n) => ({ ...n, is_read: true, read_at: nowIso })),
+    );
+
+    const dbIds = unreadItems
+      .map((n) => n.id)
+      .filter((id) => !id.startsWith("synth_") && !id.startsWith("rt_"));
+
+    if (usingDbTable && dbIds.length > 0) {
+      await supabase
+        .from("admin_notifications")
+        .update({ is_read: true, read_at: nowIso })
+        .in("id", dbIds);
+    }
+
+    toast({
+      title: "Tudo em dia!",
+      description: "Todas as notificações foram marcadas como lidas.",
+    });
+  };
+
+  const handleClearRead = async () => {
+    const readItems = notifications.filter((n) => n.is_read);
+    if (readItems.length === 0) return;
+
+    const clearedSet = getStoredIdSet(STORAGE_CLEARED_KEY);
+    readItems.forEach((item) => clearedSet.add(item.id));
+    saveStoredIdSet(STORAGE_CLEARED_KEY, clearedSet);
+
+    setNotifications((prev) => prev.filter((n) => !n.is_read));
+
+    const dbIds = readItems
+      .map((n) => n.id)
+      .filter((id) => !id.startsWith("synth_") && !id.startsWith("rt_"));
+
+    if (usingDbTable && dbIds.length > 0) {
+      await supabase.from("admin_notifications").delete().in("id", dbIds);
+    }
+
+    toast({
+      title: "Histórico limpo",
+      description: "As notificações já lidas foram removidas.",
+    });
+  };
+
+  const handleNotificationClick = async (item: AdminNotificationItem) => {
+    if (!item.is_read) {
+      await handleMarkAsRead(item.id);
+    }
+
+    const targetTab = item.metadata?.target_tab;
+    if (targetTab) {
+      if (onNavigateTab) {
+        onNavigateTab(targetTab, item.metadata);
+      } else if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("fusion-admin-navigate-tab", {
+            detail: { tab: targetTab, metadata: item.metadata },
+          }),
+        );
+      }
+      setIsOpen(false);
+    }
+  };
+
+  const getEventVisuals = (eventType: string) => {
+    switch (eventType) {
+      case "booking_created":
+        return {
+          icon: CalendarCheck,
+          bgIcon: "bg-emerald-50 text-emerald-600 border-emerald-200",
+          badgeText: "Nova Reserva",
+          badgeClass: "bg-emerald-50 text-emerald-700",
+        };
+      case "booking_cancelled":
+        return {
+          icon: CalendarX,
+          bgIcon: "bg-red-50 text-red-600 border-red-200",
+          badgeText: "Cancelamento",
+          badgeClass: "bg-red-50 text-red-700",
+        };
+      case "specialist_registered":
+        return {
+          icon: UserPlus,
+          bgIcon: "bg-blue-50 text-blue-600 border-blue-200",
+          badgeText: "Novo Especialista",
+          badgeClass: "bg-blue-50 text-blue-700",
+        };
+      case "host_registered":
+        return {
+          icon: Building2,
+          bgIcon: "bg-purple-50 text-purple-600 border-purple-200",
+          badgeText: "Novo Anfitrião",
+          badgeClass: "bg-purple-50 text-purple-700",
+        };
+      case "room_created":
+        return {
+          icon: DoorOpen,
+          bgIcon: "bg-orange-50 text-[#BF4B24] border-orange-200",
+          badgeText: "Nova Sala",
+          badgeClass: "bg-orange-50 text-[#BF4B24]",
+        };
+      case "booking_checkin":
+        return {
+          icon: QrCode,
+          bgIcon: "bg-amber-50 text-amber-700 border-amber-200",
+          badgeText: "Check-in Porta",
+          badgeClass: "bg-amber-50 text-amber-800",
+        };
+      case "booking_checkout":
+        return {
+          icon: CheckCircle2,
+          bgIcon: "bg-teal-50 text-teal-700 border-teal-200",
+          badgeText: "Check-out",
+          badgeClass: "bg-teal-50 text-teal-800",
+        };
+      default:
+        return {
+          icon: Sparkles,
+          bgIcon: "bg-slate-100 text-slate-600 border-slate-200",
+          badgeText: "Sistema",
+          badgeClass: "bg-slate-100 text-slate-700",
+        };
+    }
+  };
+
+  return (
+    <Sheet open={isOpen} onOpenChange={setIsOpen}>
+      <SheetTrigger asChild>
+        <button
+          type="button"
+          title="Central de Notificações em Tempo Real"
+          className={`relative inline-flex items-center justify-center h-10 px-3.5 rounded-xl border transition-all cursor-pointer shadow-2xs gap-2 ${
+            unreadCount > 0
+              ? "bg-orange-50/90 border-orange-200 text-[#BF4B24] hover:bg-orange-100/80"
+              : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-slate-900"
+          } ${hasNewPulse ? "ring-4 ring-[#BF4B24]/25 scale-105" : ""}`}
+        >
+          <Bell
+            className={`w-4 h-4 transition-transform ${
+              hasNewPulse ? "animate-bounce" : ""
+            }`}
+          />
+          <span className="text-xs font-semibold hidden sm:inline">
+            Notificações
+          </span>
+
+          {unreadCount > 0 && (
+            <span className="flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-[#BF4B24] text-white text-[10px] font-black shadow-2xs tabular-nums relative">
+              <span className="absolute inline-flex h-full w-full rounded-full bg-[#BF4B24] opacity-60 animate-ping" />
+              <span className="relative">
+                {unreadCount > 99 ? "99+" : unreadCount}
+              </span>
+            </span>
+          )}
+        </button>
+      </SheetTrigger>
+
+      <SheetContent className="w-full sm:max-w-md md:max-w-lg p-0 flex flex-col bg-[#FAF7F4] border-l border-slate-200">
+        <div className="bg-white px-6 pt-6 pb-4 border-b border-slate-200/90">
+          <SheetHeader className="space-y-1 text-left">
+            <div className="flex items-center justify-between gap-2 pr-6">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-[#BF4B24]/10 text-[#BF4B24] flex items-center justify-center">
+                  <Bell className="w-4 h-4" />
+                </div>
+                <div>
+                  <SheetTitle className="text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
+                    Radar da Plataforma
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      Ao Vivo
+                    </span>
+                  </SheetTitle>
+                  <SheetDescription className="text-xs text-slate-500">
+                    Reservas, cancelamentos, cadastros e novas salas em tempo
+                    real.
+                  </SheetDescription>
+                </div>
+              </div>
+            </div>
+          </SheetHeader>
+
+          <div className="flex items-center justify-between gap-2 mt-4 pt-3 border-t border-slate-100">
+            <div className="flex items-center gap-1.5">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleMarkAllAsRead}
+                disabled={unreadCount === 0}
+                className="h-8 text-[11px] font-bold border-slate-200 text-slate-700 rounded-lg"
+              >
+                <CheckCheck className="w-3.5 h-3.5 mr-1.5 text-emerald-600" />
+                Ler todas ({unreadCount})
+              </Button>
+
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={handleClearRead}
+                disabled={notifications.length - unreadCount === 0}
+                className="h-8 text-[11px] font-semibold text-slate-500 hover:text-red-600 rounded-lg"
+              >
+                <Trash2 className="w-3.5 h-3.5 mr-1" />
+                Limpar lidas
+              </Button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setSoundEnabled((prev) => !prev)}
+              className={`h-8 px-2.5 rounded-lg border text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
+                soundEnabled
+                  ? "bg-slate-900 text-white border-slate-900"
+                  : "bg-slate-100 text-slate-500 border-slate-200"
+              }`}
+            >
+              {soundEnabled ? (
+                <>
+                  <Volume2 className="w-3.5 h-3.5 text-amber-400" />
+                  Som On
+                </>
+              ) : (
+                <>
+                  <VolumeX className="w-3.5 h-3.5" />
+                  Mudo
+                </>
+              )}
+            </button>
+          </div>
+
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar mt-3 pt-1">
+            {[
+              { id: "all", label: `Todas (${countsByCategory.all})` },
+              {
+                id: "unread",
+                label: `Não lidas (${countsByCategory.unread})`,
+              },
+              {
+                id: "bookings",
+                label: `Reservas (${countsByCategory.bookings})`,
+              },
+              {
+                id: "cancellations",
+                label: `Cancelamentos (${countsByCategory.cancellations})`,
+              },
+              {
+                id: "users",
+                label: `Cadastros (${countsByCategory.users})`,
+              },
+              {
+                id: "rooms",
+                label: `Salas (${countsByCategory.rooms})`,
+              },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() =>
+                  setActiveFilter(tab.id as NotificationFilterCategory)
+                }
+                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold whitespace-nowrap transition-all cursor-pointer ${
+                  activeFilter === tab.id
+                    ? "bg-[#BF4B24] text-white shadow-2xs"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200/70"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+          {loading ? (
+            <div className="flex flex-col items-center justify-center h-64 text-slate-400 gap-2">
+              <Loader2 className="w-7 h-7 animate-spin text-[#BF4B24]" />
+              <p className="text-xs font-medium">
+                Carregando eventos da plataforma...
+              </p>
+            </div>
+          ) : filteredNotifications.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-64 text-center px-6">
+              <div className="w-12 h-12 rounded-2xl bg-slate-200/70 text-slate-400 flex items-center justify-center mb-3">
+                <Bell className="w-6 h-6" />
+              </div>
+              <p className="text-sm font-bold text-slate-700">
+                Nenhuma notificação neste filtro
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                Novos agendamentos, cancelamentos, cadastros de especialistas,
+                anfitriões e salas aparecerão aqui instantaneamente.
+              </p>
+            </div>
+          ) : (
+            filteredNotifications.map((item) => {
+              const visual = getEventVisuals(item.event_type);
+              const IconComponent = visual.icon;
+
+              let relativeTime = "";
+              let exactTime = "";
+              try {
+                const parsed = parseISO(item.created_at);
+                relativeTime = formatDistanceToNow(parsed, {
+                  addSuffix: true,
+                  locale: ptBR,
+                });
+                exactTime = format(parsed, "dd/MM/yyyy 'às' HH:mm", {
+                  locale: ptBR,
+                });
+              } catch {
+                relativeTime = "recentemente";
+              }
+
+              return (
+                <div
+                  key={item.id}
+                  onClick={() => handleNotificationClick(item)}
+                  className={`group relative rounded-2xl border p-4 transition-all cursor-pointer ${
+                    !item.is_read
+                      ? "bg-white border-orange-200/90 shadow-xs hover:border-[#BF4B24]"
+                      : "bg-white/70 border-slate-200/70 opacity-80 hover:opacity-100 hover:bg-white"
+                  }`}
+                >
+                  {!item.is_read && (
+                    <span
+                      title="Não lida"
+                      className="absolute top-4 right-4 w-2.5 h-2.5 rounded-full bg-[#BF4B24] ring-4 ring-orange-100"
+                    />
+                  )}
+
+                  <div className="flex items-start gap-3.5">
+                    <div
+                      className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 mt-0.5 ${visual.bgIcon}`}
+                    >
+                      <IconComponent className="w-5 h-5" />
+                    </div>
+
+                    <div className="flex-1 min-w-0 pr-4">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Badge
+                          className={`${visual.badgeClass} border-0 text-[10px] font-bold px-2 py-0`}
+                        >
+                          {visual.badgeText}
+                        </Badge>
+                        <span
+                          title={exactTime}
+                          className="text-[11px] font-medium text-slate-400"
+                        >
+                          {relativeTime}
+                        </span>
+                      </div>
+
+                      <h4 className="text-xs font-extrabold text-slate-900 leading-snug">
+                        {item.title}
+                      </h4>
+
+                      <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                        {item.message}
+                      </p>
+
+                      <div className="mt-2.5 flex items-center justify-between text-[11px] text-slate-400">
+                        <span>{exactTime}</span>
+                        <span className="inline-flex items-center gap-0.5 font-bold text-[#BF4B24] opacity-0 group-hover:opacity-100 transition-opacity">
+                          {item.is_read ? "Ver detalhes" : "Marcar como lida"}{" "}
+                          <ChevronRight className="w-3 h-3" />
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
 }
 
 function normalizeTier(tier?: string | null): "start" | "vip" | "master" {
@@ -392,7 +1405,11 @@ const cleanPhoneForWa = (raw?: string | null) => {
   return digits.startsWith("55") ? digits : `55${digits}`;
 };
 
-export function AdminOverviewTab() {
+export function AdminOverviewTab({
+  onNavigateTab,
+}: {
+  onNavigateTab?: (tabName: string, metadata?: Record<string, any>) => void;
+} = {}) {
   const [supabase] = useState(() => createClient());
   const { toast } = useToast();
 
@@ -520,7 +1537,6 @@ export function AdminOverviewTab() {
     async function fetchRealBI() {
       setIsRefreshing(true);
       try {
-        // Sincroniza automaticamente no banco o valor exato pago no Asaas em assinaturas anteriores
         await fetch("/api/subscriptions/sync-prices", { method: "POST" }).catch(
           () => {},
         );
@@ -846,7 +1862,6 @@ export function AdminOverviewTab() {
               String(b.booking_origin).startsWith("contract")),
           );
 
-          // SUBGRUPO 3: CONTRATOS FIXOS
           if (isContractBooking) {
             const feePct = Number(linkedContract?.platform_fee_pct ?? 15);
             const cType =
@@ -917,7 +1932,6 @@ export function AdminOverviewTab() {
             isExplicitWalletOrigin || isLegacyWalletOrigin,
           );
 
-          // SUBGRUPO 2: PACOTES FUSION PASS+
           if (isPackageBooking) {
             const userTxs = userWalletMap.get(b.user_id) || [];
             const userSubs = userSubsMap.get(b.user_id) || [];
@@ -948,7 +1962,6 @@ export function AdminOverviewTab() {
 
             const detectedPackageHours = Number(activeSub?.hours) || 16;
 
-            // Puxa o valor exato pago na assinatura/renovação ([Paid:XX.XX] / [Rate:XX.XXXX])
             const { hourlyRateBrl: exactUserCreditRate, matchedHours } =
               resolveCreditHourlyValueBRL({
                 usedTier: creditTierUsed,
@@ -1022,7 +2035,6 @@ export function AdminOverviewTab() {
             };
           }
 
-          // SUBGRUPO 1: HORAS AVULSAS DIRETAS
           const computeAvulsoSplit = (grossVal: number) => {
             const fusionFee = grossVal * 0.2;
             const netAfterFusion = Math.max(0, grossVal - fusionFee);
@@ -1454,7 +2466,6 @@ export function AdminOverviewTab() {
           });
         });
 
-        // 3. Inteligência de Assinantes (Exclusivo Compras Fusion Pass+ via PIX/Cartão)
         const breakageReport = computeSubscribersBreakageReport({
           allWalletTransactions: allWalletData,
           allSubscriptions: allSubsData,
@@ -1985,7 +2996,7 @@ export function AdminOverviewTab() {
   return (
     <div className="p-4 lg:p-8 w-full pb-32 font-sans text-slate-900 bg-[#F8FAFC] print:p-0">
       {/* ==================================================================== */}
-      {/* HEADER BI EXECUTIVO E FILTROS DE DATA                                */}
+      {/* HEADER BI EXECUTIVO, SINO DE NOTIFICAÇÕES E FILTROS DE DATA          */}
       {/* ==================================================================== */}
       <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 pb-6 mb-6 border-b border-slate-200 print:mb-4">
         <div>
@@ -2011,6 +3022,9 @@ export function AdminOverviewTab() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 print:hidden">
+          {/* SINO DE NOTIFICAÇÕES EM TEMPO REAL */}
+          <AdminNotificationsBell onNavigateTab={onNavigateTab} />
+
           <div className="flex items-center bg-white border border-slate-200 p-1 rounded-xl">
             {[
               { id: "7d", label: "7 Dias" },
@@ -3226,7 +4240,6 @@ export function AdminOverviewTab() {
             </div>
           </DialogHeader>
 
-          {/* Resumo de Topo do Modal de Assinantes */}
           <div className="grid grid-cols-2 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-slate-200 border-b border-slate-200 bg-slate-50 shrink-0 tabular-nums">
             <div className="px-6 py-3">
               <p className="text-[11px] font-medium text-slate-500">
@@ -3278,7 +4291,6 @@ export function AdminOverviewTab() {
             </div>
           </div>
 
-          {/* Barra de Filtros do Ciclo de Vida e Pagamento */}
           <div className="px-6 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-white shrink-0">
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex flex-wrap items-center bg-slate-100 p-1 rounded-xl">
