@@ -1,22 +1,97 @@
 // app/api/host/parse-expense/route.ts
 import { NextResponse } from "next/server";
 
-const FALLBACK_MODELS = [
+// Ordem de prioridade de modelos modernos com suporte a visão (OCR) e áudio
+const PREFERRED_MODELS_ORDER = [
   "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
   "gemini-2.0-flash",
-  "gemini-1.5-flash",
-  "gemini-1.5-pro",
+  "gemini-2.0-flash-lite",
+  "gemini-flash-latest",
+  "gemini-2.5-pro",
+  "gemini-pro-latest",
 ];
+
+let cachedAvailableModels: string[] | null = null;
+let cacheTimestamp = 0;
+
+/**
+ * Consulta a lista real de modelos ativos na chave da API (ListModels)
+ * para nunca tentar chamar um modelo descontinuado (404).
+ */
+async function getAvailableVisionModels(apiKey: string): Promise<string[]> {
+  const now = Date.now();
+  if (
+    cachedAvailableModels &&
+    cachedAvailableModels.length > 0 &&
+    now - cacheTimestamp < 10 * 60 * 1000
+  ) {
+    return cachedAvailableModels;
+  }
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+    );
+    if (!res.ok) return PREFERRED_MODELS_ORDER;
+
+    const data = await res.json();
+    const modelsList: any[] = Array.isArray(data?.models) ? data.models : [];
+
+    const supportedNames = modelsList
+      .filter((m) => {
+        const methods: string[] = Array.isArray(m?.supportedGenerationMethods)
+          ? m.supportedGenerationMethods
+          : [];
+        const name = String(m?.name || "").replace(/^models\//, "");
+        if (!methods.includes("generateContent")) return false;
+        if (!name.startsWith("gemini-")) return false;
+        // Ignora modelos antigos 1.0/1.5 ou exclusivos de imagem/voz/embedding
+        if (
+          name.includes("1.5") ||
+          name.includes("1.0") ||
+          name.includes("embedding") ||
+          name.includes("tts") ||
+          name.includes("image") ||
+          name.includes("vision") ||
+          name.includes("aqa")
+        ) {
+          return false;
+        }
+        return true;
+      })
+      .map((m) => String(m.name).replace(/^models\//, ""));
+
+    if (supportedNames.length === 0) return PREFERRED_MODELS_ORDER;
+
+    // Ordena priorizando os modelos Flash mais rápidos e estáveis
+    const ordered: string[] = [];
+    for (const pref of PREFERRED_MODELS_ORDER) {
+      if (supportedNames.includes(pref)) {
+        ordered.push(pref);
+      }
+    }
+    for (const name of supportedNames) {
+      if (!ordered.includes(name)) {
+        ordered.push(name);
+      }
+    }
+
+    cachedAvailableModels = ordered.slice(0, 6);
+    cacheTimestamp = now;
+    return cachedAvailableModels;
+  } catch {
+    return PREFERRED_MODELS_ORDER;
+  }
+}
 
 function parseNumericAmount(raw: any): number {
   if (typeof raw === "number" && !isNaN(raw)) return raw;
   if (!raw) return 0;
   const str = String(raw).trim();
-  // Remove "R$", espaços e letras
   const clean = str.replace(/[^\d.,-]/g, "");
   if (!clean) return 0;
 
-  // Se tiver vírgula como separador decimal brasileiro (ex: 1.250,90 ou 45,90)
   if (clean.includes(",") && clean.includes(".")) {
     const lastComma = clean.lastIndexOf(",");
     const lastDot = clean.lastIndexOf(".");
@@ -30,6 +105,36 @@ function parseNumericAmount(raw: any): number {
     return parseFloat(clean.replace(",", ".")) || 0;
   }
   return parseFloat(clean) || 0;
+}
+
+function extractJsonFromCandidateParts(parts: any[]): any | null {
+  if (!Array.isArray(parts) || parts.length === 0) return null;
+
+  // Ignora blocos internos de pensamento (thought: true) do Gemini 2.5
+  const textContent = parts
+    .filter((p) => !p?.thought && typeof p?.text === "string")
+    .map((p) => p.text)
+    .join("\n")
+    .trim();
+
+  const fallbackText =
+    textContent ||
+    parts
+      .map((p) => p?.text || "")
+      .join("\n")
+      .trim();
+
+  if (!fallbackText) return null;
+
+  const cleaned = fallbackText
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
+    .trim();
+
+  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+  const targetStr = jsonMatch ? jsonMatch[0] : cleaned;
+
+  return JSON.parse(targetStr);
 }
 
 export async function POST(req: Request) {
@@ -103,13 +208,13 @@ Você é um leitor especialista de Notas Fiscais, Cupons Fiscais (NFC-e / SAT), 
 Examine atentamente a imagem anexada e/ou o comando de voz.
 
 Instruções de leitura da Nota Fiscal / Cupom:
-1. Localize o VALOR TOTAL PAGO na nota (procure por "VALOR A PAGAR", "VALOR TOTAL R$", "TOTAL", " Cartão de Crédito/Débito/PIX"). Retorne como número decimal em "amount" (ex: 89.90).
+1. Localize o VALOR TOTAL PAGO na nota (procure por "VALOR A PAGAR", "VALOR TOTAL R$", "TOTAL", "Cartão de Crédito/Débito/PIX"). Retorne como número decimal em "amount" (ex: 89.90).
 2. Localize o NOME DO ESTABELECIMENTO / FORNECEDOR no cabeçalho da nota e coloque em "vendor".
 3. Crie um "title" claro e descritivo do que foi comprado ou pago (ex: "Compra de Insumos - [Nome da Loja]" ou os principais itens lidos na nota).
 4. Localize a DATA DE EMISSÃO na nota e converta para "YYYY-MM-DD". Se não estiver legível na foto, use "${todayStr}".
 5. Escolha a categoria mais adequada dentre estas chaves: ${categoriesJson}. Se o comando de voz pedir uma nova categoria, coloque o nome em "category_label".
 6. Salas disponíveis da clínica: ${roomsJson}.
-7. Comando de voz do usuário (se houver): "${voiceTranscript}".
+7. Comando de voz do utilizador (se houver): "${voiceTranscript}".
 
 Retorne EXCLUSIVAMENTE um objeto JSON válido (sem markdown, sem explicações) com esta estrutura:
 {
@@ -154,9 +259,10 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido (sem markdown, sem explicações) 
       });
     }
 
-    let lastError = "";
+    const modelsToTry = await getAvailableVisionModels(apiKey);
+    const errorsLog: string[] = [];
 
-    for (const modelName of FALLBACK_MODELS) {
+    for (const modelName of modelsToTry) {
       try {
         const response = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`,
@@ -167,30 +273,28 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido (sem markdown, sem explicações) 
               contents: [{ parts }],
               generationConfig: {
                 temperature: 0.1,
-                responseMimeType: "application/json",
               },
             }),
           },
         );
 
         if (!response.ok) {
-          const errText = await response.text();
-          lastError = `[${modelName}]: ${errText}`;
+          const errJson = await response.json().catch(() => null);
+          const msg =
+            errJson?.error?.message || `HTTP ${response.status}`;
+          errorsLog.push(`${modelName}: ${msg}`);
           continue;
         }
 
         const result = await response.json();
-        const rawText =
-          result?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        const candidateParts =
+          result?.candidates?.[0]?.content?.parts || [];
 
-        if (!rawText) {
-          lastError = `Resposta vazia do modelo ${modelName}`;
+        const parsed = extractJsonFromCandidateParts(candidateParts);
+        if (!parsed) {
+          errorsLog.push(`${modelName}: Resposta sem JSON válido`);
           continue;
         }
-
-        const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-        const jsonString = jsonMatch ? jsonMatch[0] : rawText;
-        const parsed = JSON.parse(jsonString);
 
         const normalizedAmount = parseNumericAmount(
           parsed.amount ?? parsed.amount_brl ?? parsed.valor ?? parsed.total,
@@ -218,12 +322,16 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido (sem markdown, sem explicações) 
           },
         });
       } catch (err: any) {
-        lastError = err.message || "Erro ao processar modelo";
+        errorsLog.push(`${modelName}: ${err.message || "Falha de leitura"}`);
       }
     }
 
     return NextResponse.json(
-      { error: `Não foi possível ler a nota: ${lastError}` },
+      {
+        error: `Não foi possível ler a nota automaticamente (${
+          errorsLog[0] || "Serviço temporariamente indisponível"
+        }).`,
+      },
       { status: 502 },
     );
   } catch (error: any) {
