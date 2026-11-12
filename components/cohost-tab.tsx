@@ -29,6 +29,9 @@ import {
   CreditCard,
   AlertTriangle,
   Copy,
+  UploadCloud,
+  FileCheck2,
+  ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -52,6 +55,7 @@ import {
   endOfDay,
   getDaysInMonth,
   differenceInCalendarDays,
+  eachMonthOfInterval,
 } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -100,6 +104,95 @@ function parseScheduleObj(raw: any): Record<string, any> {
   return typeof raw === "object" ? { ...raw } : {};
 }
 
+function getRoomCoverImage(room: any): string | null {
+  if (!room) return null;
+  if (typeof room.image_url === "string" && room.image_url.trim() !== "") {
+    return room.image_url;
+  }
+  let addr = room.address_details;
+  if (typeof addr === "string") {
+    try {
+      addr = JSON.parse(addr);
+    } catch {
+      addr = null;
+    }
+  }
+  if (Array.isArray(addr?.gallery) && addr.gallery.length > 0) {
+    return addr.gallery[0];
+  }
+  return null;
+}
+
+function getContractModalityMeta(contract: any) {
+  const isCohost = Boolean(
+    contract?.contract_type === "monthly_exclusive" && contract?.allow_sublease,
+  );
+  const cType = String(contract?.contract_type || "");
+
+  if (isCohost) {
+    const splitPct = Number(contract?.cohost_split_pct || 80);
+    return {
+      isCohost: true,
+      badgeLabel: `Coanfitrião (${splitPct}% Repasse)`,
+      shortTitle: "Sala Exclusiva • Modo Coanfitrião",
+      badgeClass: "bg-emerald-50 text-emerald-800 border-emerald-200",
+    };
+  }
+
+  if (cType === "monthly_exclusive") {
+    return {
+      isCohost: false,
+      badgeLabel: "Sala Exclusiva Fixa",
+      shortTitle: "Contrato Mensal • Uso Exclusivo",
+      badgeClass: "bg-slate-900 text-white border-slate-900",
+    };
+  }
+
+  if (cType === "fixed_shift") {
+    return {
+      isCohost: false,
+      badgeLabel: "Turno Fixo Semanal",
+      shortTitle: "Contrato de Turno Fixo",
+      badgeClass: "bg-stone-100 text-stone-800 border-stone-200",
+    };
+  }
+
+  return {
+    isCohost: false,
+    badgeLabel: "Diária Fixa Semanal",
+    shortTitle: "Contrato de Diária Fixa",
+    badgeClass: "bg-stone-100 text-stone-800 border-stone-200",
+  };
+}
+
+function formatContractScheduleDescription(contract: any): string {
+  if (!contract) return "";
+  if (
+    contract.contract_type === "monthly_exclusive" &&
+    !contract.allow_sublease
+  ) {
+    return "Acesso integral à sala durante toda a vigência";
+  }
+
+  const sched = parseScheduleObj(contract.schedule_config);
+  const daysArr: number[] = Array.isArray(sched.daysOfWeek)
+    ? sched.daysOfWeek.map(Number)
+    : [];
+  const dayNames = daysArr
+    .map((d) => WEEKDAYS.find((w) => w.day === d)?.short)
+    .filter(Boolean)
+    .join(", ");
+
+  const startH = String(sched.startHour ?? 8).padStart(2, "0");
+  const endH = String(sched.endHour ?? 20).padStart(2, "0");
+
+  if (contract.allow_sublease) {
+    return `Sublocação ativa (${startH}h às ${endH}h)`;
+  }
+
+  return `${dayNames || "Dias fixos"} • ${startH}:00 às ${endH}:00`;
+}
+
 const formatBRL = (val: number) =>
   val.toLocaleString("pt-BR", {
     minimumFractionDigits: 2,
@@ -112,15 +205,21 @@ export function CohostTab() {
 
   const [loading, setLoading] = useState(true);
   const [savingQuickDays, setSavingQuickDays] = useState(false);
+  const [uploadingPdf, setUploadingPdf] = useState(false);
 
   const [contracts, setContracts] = useState<any[]>([]);
-  const [selectedContractIdx] = useState(0);
-  const [roomData, setRoomData] = useState<any | null>(null);
+  const [roomsById, setRoomsById] = useState<Record<string, any>>({});
+  const [selectedContractId, setSelectedContractId] = useState<string>("");
+
+  // Reservas de terceiros (quando Coanfitrião)
   const [subleaseBookings, setSubleaseBookings] = useState<any[]>([]);
   const [secondaryContracts, setSecondaryContracts] = useState<any[]>([]);
+
+  // Sessões garantidas do próprio profissional (quando Turno Fixo / Diária Fixa / Sala Fixa)
+  const [ownContractBookings, setOwnContractBookings] = useState<any[]>([]);
+
   const [userProfile, setUserProfile] = useState<any | null>(null);
 
-  // Filtro de Período (Padrão: Este Mês)
   const [periodPreset, setPeriodPreset] =
     useState<PeriodPreset>("current_month");
   const [customStartDate, setCustomStartDate] = useState(
@@ -130,7 +229,6 @@ export function CohostTab() {
     format(endOfMonth(new Date()), "yyyy-MM-dd"),
   );
 
-  // Competência selecionada para pagamento da mensalidade do contrato (YYYY-MM)
   const [invoiceCompetence, setInvoiceCompetence] = useState<string>(() =>
     format(new Date(), "yyyy-MM"),
   );
@@ -138,7 +236,7 @@ export function CohostTab() {
   // Estados do Modal de Pagamento da Mensalidade (PIX / Boleto / Cartão)
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
   const [payMethod, setPayMethod] = useState<"PIX" | "BOLETO" | "CREDIT_CARD">(
-    "PIX",
+    "BOLETO",
   );
   const [payProcessing, setPayProcessing] = useState(false);
   const [generatedPaymentId, setGeneratedPaymentId] = useState<string | null>(
@@ -158,19 +256,49 @@ export function CohostTab() {
   const [cardExpYear, setCardExpYear] = useState("");
   const [cardCcv, setCardCcv] = useState("");
 
-  // Separação entre Reservas Futuras e Anteriores
   const [bookingListTab, setBookingListTab] = useState<"upcoming" | "past">(
     "upcoming",
   );
 
-  // Controle para abrir o editor avançado de horários
   const [editingScheduleRoomId, setEditingScheduleRoomId] = useState<
     string | null
   >(null);
 
-  const activeContract = contracts[selectedContractIdx] || contracts[0] || null;
+  const activeContract = useMemo(() => {
+    if (contracts.length === 0) return null;
+    return (
+      contracts.find((c) => c.id === selectedContractId) || contracts[0] || null
+    );
+  }, [contracts, selectedContractId]);
 
-  // Calcula o intervalo do filtro + trava estrita na vigência do contrato do Coanfitrião
+  const roomData = useMemo(() => {
+    if (!activeContract) return null;
+    return roomsById[activeContract.room_id] || null;
+  }, [activeContract, roomsById]);
+
+  const activeModalityMeta = useMemo(
+    () => getContractModalityMeta(activeContract),
+    [activeContract],
+  );
+
+  const isCohostMode = activeModalityMeta.isCohost;
+
+  // Ajusta a competência selecionada caso o contrato selecionado comece no futuro ou já tenha encerrado
+  useEffect(() => {
+    if (!activeContract) return;
+    const currentComp = format(new Date(), "yyyy-MM");
+    const startComp = String(activeContract.start_date || "").slice(0, 7);
+    const endComp = String(activeContract.end_date || "").slice(0, 7);
+
+    if (startComp && currentComp < startComp) {
+      setInvoiceCompetence(startComp);
+    } else if (endComp && currentComp > endComp) {
+      setInvoiceCompetence(endComp);
+    } else {
+      setInvoiceCompetence(currentComp);
+    }
+  }, [activeContract]);
+
   const dateRange = useMemo(() => {
     const now = new Date();
     let rawStart = startOfMonth(now);
@@ -208,9 +336,6 @@ export function CohostTab() {
       const effectiveEnd =
         rawEnd.getTime() > contractEnd.getTime() ? contractEnd : rawEnd;
 
-      const wasClampedByContractStart =
-        rawStart.getTime() < contractStart.getTime();
-
       return {
         rawStart,
         rawEnd,
@@ -218,7 +343,6 @@ export function CohostTab() {
         end: effectiveEnd,
         contractStart,
         contractEnd,
-        wasClampedByContractStart,
         label,
       };
     }
@@ -230,7 +354,6 @@ export function CohostTab() {
       end: rawEnd,
       contractStart: rawStart,
       contractEnd: rawEnd,
-      wasClampedByContractStart: false,
       label,
     };
   }, [
@@ -241,7 +364,9 @@ export function CohostTab() {
     activeContract?.end_date,
   ]);
 
-  const loadCohostData = useCallback(async () => {
+  // 1. Carrega TODOS os contratos do especialista (Coanfitrião, Sala Fixa Exclusiva, Turno Fixo e Diária Fixa)
+  const loadAllUserContractsAndRooms = useCallback(async () => {
+    setLoading(true);
     try {
       const {
         data: { user },
@@ -251,99 +376,137 @@ export function CohostTab() {
         return;
       }
 
-      const todayStr = format(new Date(), "yyyy-MM-dd");
+      const { data: profData } = await supabase
+        .from("profiles")
+        .select(
+          "id, full_name, email, cpf, cep, phone, whatsapp, cc_token, cc_last4, cc_brand",
+        )
+        .eq("id", user.id)
+        .maybeSingle();
 
-      const [profRes, activeContractsRes] = await Promise.all([
-        supabase
-          .from("profiles")
-          .select(
-            "id, full_name, email, cpf, cep, phone, whatsapp, cc_token, cc_last4, cc_brand",
-          )
-          .eq("id", user.id)
-          .maybeSingle(),
-        supabase
-          .from("room_contracts")
-          .select("*")
-          .eq("specialist_id", user.id)
-          .eq("status", "active")
-          .eq("allow_sublease", true)
-          .lte("start_date", todayStr)
-          .gte("end_date", todayStr)
-          .order("created_at", { ascending: false }),
-      ]);
-
-      if (profRes.data) {
-        setUserProfile(profRes.data);
-        setCustomerCpf(profRes.data.cpf || "");
-        setCustomerCep(profRes.data.cep || "");
-        setCardHolder(profRes.data.full_name || "");
-        setUseSavedCard(Boolean(profRes.data.cc_token));
+      if (profData) {
+        setUserProfile(profData);
+        setCustomerCpf(profData.cpf || "");
+        setCustomerCep(profData.cep || "");
+        setCardHolder(profData.full_name || "");
+        setUseSavedCard(Boolean(profData.cc_token));
       }
 
-      if (activeContractsRes.error) throw activeContractsRes.error;
-      const activeContracts = activeContractsRes.data || [];
+      let contractsQuery = supabase
+        .from("room_contracts")
+        .select("*")
+        .in("status", ["active", "pending_signature"])
+        .order("created_at", { ascending: false });
 
-      if (activeContracts.length === 0) {
+      if (user.email) {
+        contractsQuery = contractsQuery.or(
+          `specialist_id.eq.${user.id},specialist_email.ilike.${user.email}`,
+        );
+      } else {
+        contractsQuery = contractsQuery.eq("specialist_id", user.id);
+      }
+
+      const { data: userContracts, error: cErr } = await contractsQuery;
+      if (cErr) throw cErr;
+
+      const validContracts = userContracts || [];
+
+      if (validContracts.length === 0) {
         setContracts([]);
-        setRoomData(null);
+        setRoomsById({});
         setLoading(false);
         return;
       }
 
-      setContracts(activeContracts);
-      const currentContract =
-        activeContracts[selectedContractIdx] || activeContracts[0];
+      const roomIds = Array.from(
+        new Set(validContracts.map((c: any) => c.room_id).filter(Boolean)),
+      );
 
-      // 2. Busca dados da sala e os subcontratos fixos (Turnos/Diárias) da mesma sala
-      const [roomRes, roomSubContractsRes] = await Promise.all([
-        supabase
-          .from("rooms")
-          .select("*, profiles:host_id(full_name)")
-          .eq("id", currentContract.room_id)
-          .single(),
+      const { data: roomsData } = await supabase
+        .from("rooms")
+        .select("*, profiles:host_id(full_name)")
+        .in("id", roomIds);
+
+      const rMap: Record<string, any> = {};
+      (roomsData || []).forEach((r: any) => {
+        rMap[r.id] = r;
+      });
+
+      setRoomsById(rMap);
+      setContracts(validContracts);
+      setSelectedContractId((prev) =>
+        prev && validContracts.some((c: any) => c.id === prev)
+          ? prev
+          : validContracts[0].id,
+      );
+    } catch (err) {
+      console.error("Erro ao carregar contratos do profissional:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [supabase]);
+
+  // 2. Carrega os dados operacionais da sala/contrato selecionado
+  const loadSelectedContractOperationalData = useCallback(async () => {
+    if (!activeContract || !roomData) return;
+
+    try {
+      const contractStartIso = startOfDay(
+        parseISO(activeContract.start_date),
+      ).toISOString();
+      const contractEndIso = endOfDay(
+        parseISO(activeContract.end_date),
+      ).toISOString();
+
+      const [roomSubContractsRes, bookingsRes] = await Promise.all([
         supabase
           .from("room_contracts")
           .select("*")
-          .eq("room_id", currentContract.room_id)
+          .eq("room_id", activeContract.room_id)
           .eq("status", "active")
-          .neq("id", currentContract.id)
-          .lte("start_date", currentContract.end_date)
-          .gte("end_date", currentContract.start_date)
+          .neq("id", activeContract.id)
+          .lte("start_date", activeContract.end_date)
+          .gte("end_date", activeContract.start_date)
           .order("start_date", { ascending: true }),
+        supabase
+          .from("bookings")
+          .select(
+            "id, user_id, start_time, end_time, status, total_cost, agreed_value_brl, contract_id, booking_origin, created_at",
+          )
+          .eq("room_id", activeContract.room_id)
+          .in("status", [
+            "confirmed",
+            "in_progress",
+            "completed",
+            "pending_payment",
+          ])
+          .gte("start_time", contractStartIso)
+          .lte("start_time", contractEndIso)
+          .order("start_time", { ascending: true }),
       ]);
 
-      if (roomRes.error) throw roomRes.error;
-      const room = roomRes.data;
-      setRoomData(room);
+      const allRoomBookings = bookingsRes.data || [];
 
+      // A) Separa as sessões garantidas do próprio contrato (para Turno Fixo / Diária Fixa / Sala Exclusiva)
+      const myContractSessions = allRoomBookings
+        .filter((b: any) => b.contract_id === activeContract.id)
+        .map((b: any) => ({
+          ...b,
+          hours: calculateSlotUnits(b.start_time, b.end_time),
+        }));
+      setOwnContractBookings(myContractSessions);
+
+      // B) Se for Modo Coanfitrião, processa as sublocações de terceiros
       const subContracts = roomSubContractsRes.data || [];
       setSecondaryContracts(subContracts);
       const subContractsMap = new Map<string, any>(
         subContracts.map((sc: any) => [sc.id, sc]),
       );
 
-      // 3. Busca reservas APENAS da data de início do contrato até o fim
-      const contractStartIso = startOfDay(
-        parseISO(currentContract.start_date),
-      ).toISOString();
-      const contractEndIso = endOfDay(
-        parseISO(currentContract.end_date),
-      ).toISOString();
-
-      const { data: bookingsData } = await supabase
-        .from("bookings")
-        .select(
-          "id, user_id, start_time, end_time, status, total_cost, agreed_value_brl, contract_id, booking_origin, created_at",
-        )
-        .eq("room_id", currentContract.room_id)
-        .in("status", ["confirmed", "in_progress", "completed"])
-        .gte("start_time", contractStartIso)
-        .lte("start_time", contractEndIso)
-        .order("start_time", { ascending: true });
-
-      const validSubleaseBookings = (bookingsData || []).filter((b: any) => {
-        if (b.contract_id && b.contract_id === currentContract.id) {
-          return false; // Ignora o bloqueio do próprio contrato do coanfitrião
+      const validSubleaseBookings = allRoomBookings.filter((b: any) => {
+        if (b.status === "pending_payment") return false;
+        if (b.contract_id && b.contract_id === activeContract.id) {
+          return false;
         }
         return true;
       });
@@ -363,7 +526,7 @@ export function CohostTab() {
         guestMap = new Map((guests || []).map((g: any) => [g.id, g]));
       }
 
-      let addr = room?.address_details || {};
+      let addr = roomData?.address_details || {};
       if (typeof addr === "string") {
         try {
           addr = JSON.parse(addr);
@@ -373,7 +536,7 @@ export function CohostTab() {
       }
       const roomHourlyRate = Number(addr?.pricing?.hourly || 45);
       const cohostPctGlobal =
-        Number(currentContract.cohost_split_pct || 80) / 100;
+        Number(activeContract.cohost_split_pct || 80) / 100;
 
       const enrichedBookings = validSubleaseBookings.map((b: any) => {
         const guest = guestMap.get(b.user_id);
@@ -435,17 +598,19 @@ export function CohostTab() {
 
       setSubleaseBookings(enrichedBookings);
     } catch (err) {
-      console.error("Erro ao carregar painel do Coanfitrião:", err);
-    } finally {
-      setLoading(false);
+      console.error("Erro ao carregar dados operacionais do contrato:", err);
     }
-  }, [supabase, selectedContractIdx]);
+  }, [supabase, activeContract, roomData]);
 
   useEffect(() => {
-    loadCohostData();
-  }, [loadCohostData]);
+    loadAllUserContractsAndRooms();
+  }, [loadAllUserContractsAndRooms]);
 
-  // Polling automático quando um QR Code PIX ou Boleto com PIX estiver aberto no modal
+  useEffect(() => {
+    loadSelectedContractOperationalData();
+  }, [loadSelectedContractOperationalData]);
+
+  // Polling automático de confirmação de pagamento da mensalidade no Asaas
   useEffect(() => {
     if (!isPayModalOpen || !generatedPaymentId || !activeContract) return;
 
@@ -459,12 +624,12 @@ export function CohostTab() {
           if (data.confirmed) {
             clearInterval(timer);
             toast({
-              title: "Mensalidade Confirmada!",
-              description: `O pagamento da competência ${invoiceCompetence} foi confirmado e baixado automaticamente.`,
+              title: "Pagamento Confirmado",
+              description: `A fatura da competência ${invoiceCompetence} (${roomData?.name || "Contrato"}) foi quitada automaticamente.`,
             });
             setIsPayModalOpen(false);
             setGeneratedPaymentId(null);
-            loadCohostData();
+            loadAllUserContractsAndRooms();
           }
         }
       } catch {}
@@ -475,100 +640,133 @@ export function CohostTab() {
     isPayModalOpen,
     generatedPaymentId,
     activeContract,
+    roomData?.name,
     invoiceCompetence,
     toast,
-    loadCohostData,
+    loadAllUserContractsAndRooms,
   ]);
 
-  // Cálculo detalhado da Fatura da Competência Selecionada (Valor Base + Multa + Juros Pro-Rata)
-  const invoiceDetails = useMemo(() => {
-    if (!activeContract) return null;
+  // Calcula os detalhes de fatura de qualquer contrato para uma competência (YYYY-MM)
+  const computeContractInvoiceForCompetence = useCallback(
+    (contractObj: any, comp: string) => {
+      if (!contractObj || !comp) return null;
 
-    const sched = parseScheduleObj(activeContract.schedule_config);
-    const tiers = Array.isArray(sched.pricingTiers) ? sched.pricingTiers : [];
+      const sched = parseScheduleObj(contractObj.schedule_config);
+      const tiers = Array.isArray(sched.pricingTiers) ? sched.pricingTiers : [];
 
-    const dueDayRaw = Math.max(
-      1,
-      Math.min(31, Number(activeContract.due_day) || 8),
-    );
-    const [yearStr, monthStr] = invoiceCompetence.split("-");
-    const maxDays = getDaysInMonth(
-      new Date(Number(yearStr), Number(monthStr) - 1, 1),
-    );
-    const safeDay = String(Math.min(dueDayRaw, maxDays)).padStart(2, "0");
-    const dueDateIso = `${invoiceCompetence}-${safeDay}`;
-
-    // Verifica se há escalonamento de preço para esta competência
-    let baseRent =
-      Number(activeContract.contract_value) > 0
-        ? Number(activeContract.contract_value)
-        : Number(activeContract.session_value || 0);
-
-    if (tiers.length > 0) {
-      const matchedTier = tiers.find(
-        (t: any) => dueDateIso >= t.start_date && dueDateIso <= t.end_date,
+      const dueDayRaw = Math.max(
+        1,
+        Math.min(31, Number(contractObj.due_day) || 8),
       );
-      if (matchedTier && Number(matchedTier.contract_value) > 0) {
-        baseRent = Number(matchedTier.contract_value);
-      }
-    }
+      const [yearStr, monthStr] = comp.split("-");
+      const maxDays = getDaysInMonth(
+        new Date(Number(yearStr), Number(monthStr) - 1, 1),
+      );
+      const safeDay = String(Math.min(dueDayRaw, maxDays)).padStart(2, "0");
+      const dueDateIso = `${comp}-${safeDay}`;
 
-    const finePct = Number(sched.fine_pct ?? activeContract.fine_pct ?? 2);
-    const interestPct = Number(
-      sched.interest_pct ?? activeContract.interest_pct ?? 1,
-    );
+      let baseRent =
+        Number(contractObj.contract_value) > 0
+          ? Number(contractObj.contract_value)
+          : Number(contractObj.session_value || 0);
 
-    const isPaid =
-      activeContract.last_paid_competence === invoiceCompetence ||
-      Boolean(sched.paid_dates && sched.paid_dates[invoiceCompetence]);
-
-    const paidDateStr =
-      sched.paid_dates && sched.paid_dates[invoiceCompetence]
-        ? sched.paid_dates[invoiceCompetence]
-        : null;
-
-    const daysLate = !isPaid
-      ? Math.max(
-          0,
-          differenceInCalendarDays(
-            new Date(),
-            parseISO(`${dueDateIso}T23:59:59`),
-          ),
-        )
-      : 0;
-
-    let fineBrl = 0;
-    let interestBrl = 0;
-
-    if (!isPaid && daysLate > 0 && baseRent > 0) {
-      if (finePct > 0) {
-        fineBrl = Number((baseRent * (finePct / 100)).toFixed(2));
-      }
-      if (interestPct > 0) {
-        interestBrl = Number(
-          (baseRent * (interestPct / 100 / 30) * daysLate).toFixed(2),
+      if (tiers.length > 0) {
+        const matchedTier = tiers.find(
+          (t: any) => dueDateIso >= t.start_date && dueDateIso <= t.end_date,
         );
+        if (matchedTier && Number(matchedTier.contract_value) > 0) {
+          baseRent = Number(matchedTier.contract_value);
+        }
       }
+
+      const finePct = Number(sched.fine_pct ?? contractObj.fine_pct ?? 2);
+      const interestPct = Number(
+        sched.interest_pct ?? contractObj.interest_pct ?? 1,
+      );
+
+      const isPaid =
+        contractObj.last_paid_competence === comp ||
+        Boolean(sched.paid_dates && sched.paid_dates[comp]);
+
+      const paidDateStr =
+        sched.paid_dates && sched.paid_dates[comp]
+          ? sched.paid_dates[comp]
+          : null;
+
+      const daysLate = !isPaid
+        ? Math.max(
+            0,
+            differenceInCalendarDays(
+              new Date(),
+              parseISO(`${dueDateIso}T23:59:59`),
+            ),
+          )
+        : 0;
+
+      let fineBrl = 0;
+      let interestBrl = 0;
+
+      if (!isPaid && daysLate > 0 && baseRent > 0) {
+        if (finePct > 0) {
+          fineBrl = Number((baseRent * (finePct / 100)).toFixed(2));
+        }
+        if (interestPct > 0) {
+          interestBrl = Number(
+            (baseRent * (interestPct / 100 / 30) * daysLate).toFixed(2),
+          );
+        }
+      }
+
+      const totalBrl = Number((baseRent + fineBrl + interestBrl).toFixed(2));
+
+      return {
+        competence: comp,
+        dueDateIso,
+        dueDayRaw,
+        baseRent,
+        finePct,
+        interestPct,
+        isPaid,
+        paidDateStr,
+        daysLate,
+        isOverdue: !isPaid && daysLate > 0,
+        fineBrl,
+        interestBrl,
+        totalBrl,
+      };
+    },
+    [],
+  );
+
+  const invoiceDetails = useMemo(
+    () =>
+      computeContractInvoiceForCompetence(activeContract, invoiceCompetence),
+    [activeContract, invoiceCompetence, computeContractInvoiceForCompetence],
+  );
+
+  // Gera a linha do tempo de todas as competências (meses) do contrato ativo
+  const contractMonthsTimeline = useMemo(() => {
+    if (!activeContract?.start_date || !activeContract?.end_date) return [];
+    try {
+      const s = startOfMonth(parseISO(activeContract.start_date));
+      const e = startOfMonth(parseISO(activeContract.end_date));
+      if (isNaN(s.getTime()) || isNaN(e.getTime()) || e < s) return [];
+
+      const months = eachMonthOfInterval({ start: s, end: e }).slice(0, 24);
+      return months.map((mDate) => {
+        const comp = format(mDate, "yyyy-MM");
+        const label = format(mDate, "MMM/yy", { locale: ptBR });
+        const inv = computeContractInvoiceForCompetence(activeContract, comp);
+        return {
+          comp,
+          label,
+          inv,
+        };
+      });
+    } catch {
+      return [];
     }
-
-    const totalBrl = Number((baseRent + fineBrl + interestBrl).toFixed(2));
-
-    return {
-      competence: invoiceCompetence,
-      dueDateIso,
-      dueDayRaw,
-      baseRent,
-      finePct,
-      interestPct,
-      isPaid,
-      paidDateStr,
-      daysLate,
-      isOverdue: !isPaid && daysLate > 0,
-      fineBrl,
-      interestBrl,
-      totalBrl,
-    };
-  }, [activeContract, invoiceCompetence]);
+  }, [activeContract, computeContractInvoiceForCompetence]);
 
   const handleOpenInvoicePayment = (
     method: "PIX" | "BOLETO" | "CREDIT_CARD",
@@ -655,11 +853,11 @@ export function CohostTab() {
         setPixCopyPaste(data.pixCopyPaste);
       } else if (payMethod === "CREDIT_CARD") {
         toast({
-          title: "Mensalidade Paga com Sucesso!",
-          description: `A competência ${invoiceCompetence} do seu contrato foi baixada automaticamente.`,
+          title: "Fatura Quitada com Sucesso",
+          description: `A competência ${invoiceCompetence} (${roomData?.name || ""}) foi paga e baixada.`,
         });
         setIsPayModalOpen(false);
-        loadCohostData();
+        loadAllUserContractsAndRooms();
       }
     } catch (err: any) {
       toast({
@@ -672,7 +870,62 @@ export function CohostTab() {
     }
   };
 
-  // Filtra as reservas no período + data de início do contrato
+  const handleUploadContractPdf = async (file: File | undefined) => {
+    if (!file || !activeContract) return;
+    setUploadingPdf(true);
+    try {
+      const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const filePath = `${activeContract.room_id}/${Date.now()}_${cleanName}`;
+
+      const { error: uploadErr } = await supabase.storage
+        .from("contracts")
+        .upload(filePath, file, {
+          cacheControl: "3600",
+          upsert: true,
+          contentType: file.type || "application/pdf",
+        });
+
+      if (uploadErr) throw uploadErr;
+
+      const { data: pubData } = supabase.storage
+        .from("contracts")
+        .getPublicUrl(filePath);
+
+      const { error: updateErr } = await supabase
+        .from("room_contracts")
+        .update({
+          pdf_url: pubData.publicUrl,
+          pdf_filename: file.name,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", activeContract.id);
+
+      if (updateErr) throw updateErr;
+
+      setContracts((prev) =>
+        prev.map((c) =>
+          c.id === activeContract.id
+            ? { ...c, pdf_url: pubData.publicUrl, pdf_filename: file.name }
+            : c,
+        ),
+      );
+
+      toast({
+        title: "Contrato PDF anexado",
+        description: `O documento do contrato de ${roomData?.name || ""} foi salvo.`,
+      });
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro ao anexar documento",
+        description: err.message,
+      });
+    } finally {
+      setUploadingPdf(false);
+    }
+  };
+
+  // Filtra sublocações no período (Modo Coanfitrião)
   const bookingsInSelectedPeriod = useMemo(() => {
     const sMs = dateRange.start.getTime();
     const eMs = dateRange.end.getTime();
@@ -689,13 +942,16 @@ export function CohostTab() {
     });
   }, [subleaseBookings, dateRange]);
 
-  // Separação entre Futuras e Anteriores
   const { upcomingBookings, pastBookings } = useMemo(() => {
     const nowMs = Date.now();
+    const sourceList = isCohostMode
+      ? bookingsInSelectedPeriod
+      : ownContractBookings;
+
     const upcoming: any[] = [];
     const past: any[] = [];
 
-    bookingsInSelectedPeriod.forEach((b) => {
+    sourceList.forEach((b) => {
       const bEnd = new Date(b.end_time).getTime();
       if (bEnd >= nowMs) {
         upcoming.push(b);
@@ -714,9 +970,8 @@ export function CohostTab() {
     );
 
     return { upcomingBookings: upcoming, pastBookings: past };
-  }, [bookingsInSelectedPeriod]);
+  }, [isCohostMode, bookingsInSelectedPeriod, ownContractBookings]);
 
-  // Dias da semana ocupados por subcontratos fixos
   const daysWithFixedSubcontract = useMemo(() => {
     const map = new Map<number, string[]>();
     secondaryContracts.forEach((sc) => {
@@ -737,11 +992,11 @@ export function CohostTab() {
           spaceId={editingScheduleRoomId}
           onBack={() => {
             setEditingScheduleRoomId(null);
-            loadCohostData();
+            loadAllUserContractsAndRooms();
           }}
           onSave={() => {
             setEditingScheduleRoomId(null);
-            loadCohostData();
+            loadAllUserContractsAndRooms();
           }}
         />
       </div>
@@ -753,7 +1008,7 @@ export function CohostTab() {
       <div className="flex flex-col items-center justify-center py-32 gap-3">
         <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
         <p className="text-sm font-semibold text-slate-500">
-          Carregando informações da sua sala...
+          Carregando suas salas e contratos...
         </p>
       </div>
     );
@@ -766,12 +1021,12 @@ export function CohostTab() {
           <Building2 className="w-7 h-7 text-slate-700" />
         </div>
         <h2 className="text-xl font-bold text-slate-900 mb-2">
-          Nenhuma sala fixa vinculada
+          Nenhuma sala ou contrato fixo vinculado
         </h2>
         <p className="text-sm text-slate-500 max-w-md mx-auto leading-relaxed">
-          Quando você possui um contrato de sala fixa com sublocação ativa, este
-          painel permite gerenciar seus horários livres e acompanhar seus
-          repasses sobre os aluguéis.
+          Quando você possui um contrato de Sala Exclusiva, Modo Coanfitrião,
+          Turno Fixo ou Diária Fixa, este painel reúne seus boletos, contratos
+          em PDF, horários e repasses em um só lugar.
         </p>
       </div>
     );
@@ -798,6 +1053,7 @@ export function CohostTab() {
       }));
 
   const handleQuickToggleDay = async (dayNumber: number) => {
+    if (!isCohostMode) return;
     setSavingQuickDays(true);
     try {
       const updatedWeek = WEEKDAYS.map((wd) => {
@@ -835,10 +1091,13 @@ export function CohostTab() {
 
       if (error) throw error;
 
-      setRoomData({
-        ...roomData,
-        availability: newAvailabilityPayload,
-      });
+      setRoomsById((prev) => ({
+        ...prev,
+        [roomData.id]: {
+          ...roomData,
+          availability: newAvailabilityPayload,
+        },
+      }));
 
       const targetDayObj = WEEKDAYS.find((w) => w.day === dayNumber);
       const isNowOpen = updatedWeek.find((w) => w.day === dayNumber)?.enabled;
@@ -848,8 +1107,8 @@ export function CohostTab() {
           ? `${targetDayObj?.name}: Aberta para sublocar`
           : `${targetDayObj?.name}: Reservada para seu uso`,
         description: isNowOpen
-          ? "Outros profissionais já podem reservar os horários livres deste dia."
-          : "Este dia foi fechado na vitrine para seu atendimento exclusivo.",
+          ? `Outros profissionais já podem reservar os horários livres de ${roomData.name}.`
+          : `Este dia foi fechado em ${roomData.name} para seu atendimento exclusivo.`,
       });
     } catch (err: any) {
       toast({
@@ -890,270 +1149,346 @@ export function CohostTab() {
     bookingListTab === "upcoming" ? upcomingBookings : pastBookings;
 
   return (
-    <div className="p-4 pt-6 lg:p-8 max-w-5xl mx-auto w-full pb-32 space-y-6 animate-in fade-in duration-200">
-      {/* 1. CABEÇALHO */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 p-5 sm:p-6 shadow-xs">
+    <div className="p-4 pt-6 lg:p-8 max-w-5xl mx-auto w-full pb-32 space-y-6 animate-in fade-in duration-200 font-sans">
+      {/* ================================================================== */}
+      {/* 1. VITRINE SELETORA: MINHAS SALAS E CONTRATOS FIXOS (COM FOTOS)    */}
+      {/* ================================================================== */}
+      <div className="space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-2">
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-[#BF4B24]">
+              Minhas Salas & Contratos Fixos
+            </span>
+            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+              {contracts.length > 1
+                ? `Seus Espaços Contratados (${contracts.length})`
+                : "Meu Espaço Contratado"}
+            </h1>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Toque em uma sala abaixo para acessar o boleto do mês, o contrato
+              em PDF, seus horários fixos ou seus repasses de coanfitrião.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {contracts.map((contractItem) => {
+            const rObj = roomsById[contractItem.room_id];
+            if (!rObj) return null;
+
+            const isSelected = contractItem.id === activeContract.id;
+            const coverImg = getRoomCoverImage(rObj);
+            const currentMonthComp = format(new Date(), "yyyy-MM");
+            const itemInvoice = computeContractInvoiceForCompetence(
+              contractItem,
+              currentMonthComp,
+            );
+            const modalityMeta = getContractModalityMeta(contractItem);
+            const scheduleDesc =
+              formatContractScheduleDescription(contractItem);
+
+            return (
+              <button
+                key={contractItem.id}
+                type="button"
+                onClick={() => setSelectedContractId(contractItem.id)}
+                className={`group text-left rounded-2xl border overflow-hidden transition-all flex flex-col justify-between cursor-pointer ${
+                  isSelected
+                    ? "bg-white border-[#BF4B24] ring-2 ring-[#BF4B24]/20 shadow-md"
+                    : "bg-white border-slate-200/90 opacity-85 hover:opacity-100 hover:border-slate-300"
+                }`}
+              >
+                <div>
+                  <div className="relative h-36 w-full bg-stone-100 overflow-hidden">
+                    {coverImg ? (
+                      <img
+                        src={coverImg}
+                        alt={rObj.name}
+                        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-slate-300">
+                        <Building2 className="w-10 h-10" />
+                      </div>
+                    )}
+
+                    <div className="absolute top-2.5 left-2.5">
+                      <span
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold shadow-xs backdrop-blur-xs ${
+                          isSelected
+                            ? "bg-[#BF4B24] text-white"
+                            : "bg-slate-900/85 text-white"
+                        }`}
+                      >
+                        {modalityMeta.badgeLabel}
+                      </span>
+                    </div>
+
+                    {itemInvoice && (
+                      <div className="absolute bottom-2.5 right-2.5">
+                        {itemInvoice.isPaid ? (
+                          <span className="px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-bold shadow-xs">
+                            Mês Quitado
+                          </span>
+                        ) : itemInvoice.isOverdue ? (
+                          <span className="px-2 py-0.5 rounded-md bg-red-600 text-white text-[10px] font-bold shadow-xs">
+                            Fatura em Aberto
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-md bg-white/95 text-slate-800 text-[10px] font-bold shadow-xs">
+                            Vence dia{" "}
+                            {String(itemInvoice.dueDayRaw).padStart(2, "0")}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="p-4">
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className="text-sm font-bold text-slate-900 truncate">
+                        {rObj.name}
+                      </h3>
+                    </div>
+
+                    <p className="text-[11px] font-medium text-slate-500 mt-0.5 truncate">
+                      {rObj.profiles?.full_name || "Fusion Clinic"}
+                    </p>
+
+                    <p className="text-xs font-semibold text-slate-700 mt-2 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-[#BF4B24] shrink-0" />
+                      <span className="truncate">{scheduleDesc}</span>
+                    </p>
+
+                    <p className="text-[11px] text-slate-500 mt-1.5 line-clamp-2 leading-relaxed">
+                      {rObj.description ||
+                        "Espaço clínico pronto para atendimento com estrutura completa."}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="px-4 py-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs tabular-nums">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">
+                      Valor do Contrato
+                    </span>
+                    <strong className="text-slate-900 font-bold">
+                      R${" "}
+                      {formatBRL(
+                        itemInvoice?.baseRent ||
+                          contractItem.contract_value ||
+                          0,
+                      )}
+                      {contractItem.billing_cycle === "monthly" ? "/mês" : ""}
+                    </strong>
+                  </div>
+
+                  <span
+                    className={`text-[11px] font-bold ${
+                      isSelected ? "text-[#BF4B24]" : "text-slate-500"
+                    }`}
+                  >
+                    {isSelected ? "Visualizando" : "Ver boletos e detalhes"}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ================================================================== */}
+      {/* 2. CABEÇALHO E COFRE DO CONTRATO PDF DA SALA SELECIONADA           */}
+      {/* ================================================================== */}
+      <div className="bg-white rounded-2xl border border-slate-200/90 p-5 sm:p-6 shadow-2xs">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
-          <div className="pr-12 md:pr-0">
-            <div className="flex flex-wrap items-center gap-2 mb-2">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-slate-100 text-slate-800">
-                <Building2 className="w-3.5 h-3.5 text-[#BF4B24]" />
-                Gestão da Minha Sala
+          <div>
+            <div className="flex flex-wrap items-center gap-2 mb-1.5">
+              <span
+                className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-[11px] font-bold border ${activeModalityMeta.badgeClass}`}
+              >
+                {activeModalityMeta.shortTitle}
               </span>
-              <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200/60">
-                Co-Host Avulso: {cohostSplitPct}% Seu
-              </span>
+              {activeContract.status === "pending_signature" && (
+                <Badge className="bg-amber-50 text-amber-800 border border-amber-200 text-[11px] font-semibold">
+                  Aguardando Assinatura
+                </Badge>
+              )}
             </div>
 
-            <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+            <h2 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
               {roomData.name}
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
-              {roomData.profiles?.full_name || "Fusion Clinic"} • Vigência do
-              seu contrato:{" "}
+            </h2>
+            <p className="text-xs text-slate-500 mt-1">
+              {roomData.profiles?.full_name || "Fusion Clinic"} • Vigência:{" "}
               <strong className="text-slate-700">
                 {format(parseISO(activeContract.start_date), "dd/MM/yyyy")} a{" "}
                 {format(parseISO(activeContract.end_date), "dd/MM/yyyy")}
-              </strong>
+              </strong>{" "}
+              • {formatContractScheduleDescription(activeContract)}
             </p>
           </div>
 
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0">
-            {activeContract.pdf_url && (
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            {activeContract.pdf_url ? (
               <a
                 href={activeContract.pdf_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center gap-2 px-4 h-11 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs transition-colors"
+                className="inline-flex items-center justify-center gap-2 px-4 h-10 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs transition-colors"
               >
-                <FileText className="w-4 h-4 text-slate-500" />
-                Ver Contrato PDF
+                <FileCheck2 className="w-4 h-4 text-emerald-600" />
+                Baixar Contrato PDF
                 <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
               </a>
+            ) : (
+              <label className="inline-flex items-center justify-center gap-2 px-4 h-10 rounded-xl border border-dashed border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold text-xs cursor-pointer transition-colors">
+                {uploadingPdf ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-[#BF4B24]" />
+                ) : (
+                  <UploadCloud className="w-4 h-4 text-[#BF4B24]" />
+                )}
+                Anexar Contrato Assinado (PDF)
+                <input
+                  type="file"
+                  accept="application/pdf"
+                  className="hidden"
+                  onChange={(e) => handleUploadContractPdf(e.target.files?.[0])}
+                />
+              </label>
             )}
-            <Button
-              onClick={() => setEditingScheduleRoomId(roomData.id)}
-              className="h-11 px-5 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold text-sm shadow-xs"
-            >
-              <SlidersHorizontal className="w-4 h-4 mr-2" />
-              Configurar Horários
-            </Button>
+
+            {isCohostMode && (
+              <Button
+                onClick={() => setEditingScheduleRoomId(roomData.id)}
+                className="h-10 px-4 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs cursor-pointer"
+              >
+                <SlidersHorizontal className="w-4 h-4 mr-2" />
+                Configurar Horários da Sala
+              </Button>
+            )}
           </div>
         </div>
       </div>
 
-      {/* 2. SELETOR DE PERÍODO + AVISO DE CORTE NA DATA INICIAL */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-xs space-y-3">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-          <div className="flex flex-col gap-0.5">
-            <div className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase tracking-wider">
-              <Filter className="w-3.5 h-3.5 text-[#BF4B24]" />
-              <span>Período selecionado:</span>
-              <span className="text-slate-900 capitalize font-black">
-                {dateRange.label}
-              </span>
-            </div>
-            <p className="text-[11px] font-semibold text-slate-500 flex items-center gap-1 mt-0.5">
-              <Info className="w-3.5 h-3.5 text-[#BF4B24] shrink-0" />
-              Repasses contabilizados apenas a partir de{" "}
-              <strong className="text-slate-800">
-                {format(parseISO(activeContract.start_date), "dd/MM/yyyy")}
-              </strong>{" "}
-              (início do contrato).
-            </p>
-          </div>
-
-          <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-1">
-            {[
-              { id: "current_month", label: "Este mês" },
-              { id: "last_month", label: "Mês passado" },
-              { id: "last_3_months", label: "Últimos 3 meses" },
-              { id: "all_contract", label: "Todo o contrato" },
-              { id: "custom", label: "Personalizado" },
-            ].map((item) => {
-              const active = periodPreset === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setPeriodPreset(item.id as PeriodPreset)}
-                  className={`px-3.5 py-2 rounded-lg text-xs font-bold whitespace-nowrap transition-colors ${
-                    active
-                      ? "bg-slate-900 text-white"
-                      : "bg-slate-100 text-slate-600 hover:bg-slate-200/70"
-                  }`}
-                >
-                  {item.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {periodPreset === "custom" && (
-          <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-3 animate-in fade-in">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-slate-500">De:</span>
-              <input
-                type="date"
-                min={activeContract.start_date}
-                max={activeContract.end_date}
-                value={customStartDate}
-                onChange={(e) => setCustomStartDate(e.target.value)}
-                className="h-9 px-3 rounded-lg border border-slate-200 text-xs font-bold text-slate-800 bg-slate-50"
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-slate-500">Até:</span>
-              <input
-                type="date"
-                min={activeContract.start_date}
-                max={activeContract.end_date}
-                value={customEndDate}
-                onChange={(e) => setCustomEndDate(e.target.value)}
-                className="h-9 px-3 rounded-lg border border-slate-200 text-xs font-bold text-slate-800 bg-slate-50"
-              />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* 3. RESUMO FINANCEIRO E ABATIMENTO DO ALUGUEL */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="md:col-span-2 bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/90 shadow-xs flex flex-col justify-between">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                Seu Ganho Líquido no Período
-              </span>
-              <div className="flex items-baseline gap-2 mt-1">
-                <p className="text-3xl font-black text-emerald-700">
-                  R${" "}
-                  {totalCohostNet80.toLocaleString("pt-BR", {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
-                </p>
-                <span className="text-xs font-semibold text-slate-400">
-                  de R${" "}
-                  {totalGrossSubleased.toLocaleString("pt-BR", {
-                    minimumFractionDigits: 2,
-                  })}{" "}
-                  bruto
-                </span>
-              </div>
-            </div>
-            <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center shrink-0">
-              <Wallet className="w-5 h-5 text-emerald-700" />
-            </div>
-          </div>
-
-          <div className="mt-6 pt-4 border-t border-slate-100">
-            <div className="flex items-center justify-between text-xs mb-2">
-              <span className="font-semibold text-slate-600">
-                Cobertura da mensalidade fixa (R${" "}
-                {monthlyFixedRent.toLocaleString("pt-BR", {
-                  minimumFractionDigits: 2,
-                })}
-                )
-              </span>
-              <span className="font-black text-slate-900">
-                {rentCoveragePct}% abatido
-              </span>
-            </div>
-            <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-emerald-600 rounded-full transition-all duration-500"
-                style={{ width: `${rentCoveragePct}%` }}
-              />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/90 shadow-xs flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                Horas Sublocadas
-              </span>
-              <Clock className="w-4 h-4 text-[#BF4B24]" />
-            </div>
-            <p className="text-3xl font-black text-slate-900 mt-1">
-              {totalHoursSubleased}h
-            </p>
-            <p className="text-xs font-medium text-slate-500 mt-0.5">
-              Em {bookingsInSelectedPeriod.length} reserva(s) no período
-            </p>
-          </div>
-
-          <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between text-xs">
-            <span className="font-semibold text-slate-500">
-              Vencimento do fixo:
-            </span>
-            <span className="font-bold text-slate-900 bg-slate-100 px-2.5 py-1 rounded-md">
-              Todo dia {String(activeContract.due_day || 8).padStart(2, "0")}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* 3.1 FATURA MENSAL DO CONTRATO (PAGAMENTO VIA PIX, BOLETO OU CARTÃO COM MULTA/JUROS ASAAS) */}
+      {/* ================================================================== */}
+      {/* 3. CENTRAL DE FATURAS E BOLETOS DO CONTRATO (PARA TODOS OS TIPOS)  */}
+      {/* ================================================================== */}
       {invoiceDetails && (
-        <div className="bg-white rounded-2xl border border-slate-200/90 p-5 sm:p-6 shadow-xs space-y-4">
+        <div className="bg-white rounded-2xl border border-slate-200/90 p-5 sm:p-6 shadow-2xs space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-base sm:text-lg font-black text-slate-900 flex items-center gap-2">
+                <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
                   <CalendarClock className="w-5 h-5 text-[#BF4B24]" />
-                  Mensalidade do Seu Contrato Fixo
+                  Faturas e Boletos do Contrato — {roomData.name}
                 </h2>
                 {invoiceDetails.isPaid ? (
-                  <Badge className="bg-emerald-50 text-emerald-700 border-0 text-xs font-bold flex items-center gap-1">
+                  <Badge className="bg-emerald-50 text-emerald-700 border-0 text-xs font-semibold flex items-center gap-1">
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     Competência Quitada
                   </Badge>
                 ) : invoiceDetails.isOverdue ? (
-                  <Badge className="bg-red-50 text-red-700 border-0 text-xs font-bold flex items-center gap-1">
+                  <Badge className="bg-red-50 text-red-700 border-0 text-xs font-semibold flex items-center gap-1">
                     <AlertTriangle className="w-3.5 h-3.5" />
                     Vencida há {invoiceDetails.daysLate} dia(s)
                   </Badge>
                 ) : (
-                  <Badge className="bg-amber-50 text-amber-800 border-0 text-xs font-bold flex items-center gap-1">
+                  <Badge className="bg-amber-50 text-amber-800 border-0 text-xs font-semibold flex items-center gap-1">
                     <Clock className="w-3.5 h-3.5" />
                     Vence em{" "}
                     {format(parseISO(invoiceDetails.dueDateIso), "dd/MM/yyyy")}
                   </Badge>
                 )}
               </div>
-              <p className="text-xs text-slate-500 font-medium mt-1">
-                Pague até o dia{" "}
+              <p className="text-xs text-slate-500 mt-1">
+                Vencimento todo dia{" "}
                 <strong>
                   {String(invoiceDetails.dueDayRaw).padStart(2, "0")}
-                </strong>{" "}
-                de cada mês sem encargos. Após o vencimento, incide multa de{" "}
-                <strong>{invoiceDetails.finePct}%</strong> e juros de{" "}
-                <strong>{invoiceDetails.interestPct}% a.m.</strong>
+                </strong>
+                . Selecione o mês abaixo para emitir seu boleto registrado, QR
+                Code PIX ou pagar com cartão.
               </p>
             </div>
 
             <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 self-start sm:self-auto">
-              <span className="text-xs font-bold text-slate-500">Mês:</span>
+              <span className="text-xs font-semibold text-slate-500">
+                Competência:
+              </span>
               <input
                 type="month"
                 min={activeContract.start_date.slice(0, 7)}
                 max={activeContract.end_date.slice(0, 7)}
                 value={invoiceCompetence}
                 onChange={(e) => setInvoiceCompetence(e.target.value)}
-                className="text-xs font-black text-slate-900 bg-transparent border-0 outline-none"
+                className="text-xs font-bold text-slate-900 bg-transparent border-0 outline-none"
               />
             </div>
           </div>
 
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
-            <div className="space-y-2 tabular-nums">
+          {/* Linha do Tempo Rápida das Competências (Meses do Contrato) */}
+          {contractMonthsTimeline.length > 0 && (
+            <div>
+              <span className="text-[11px] font-semibold text-slate-500 block mb-2">
+                Parcelas / Meses de Vigência deste Contrato:
+              </span>
+              <div className="flex items-center gap-2 overflow-x-auto pb-1.5 no-scrollbar tabular-nums">
+                {contractMonthsTimeline.map((mItem) => {
+                  const isSelectedComp = mItem.comp === invoiceCompetence;
+                  const inv = mItem.inv;
+                  return (
+                    <button
+                      key={mItem.comp}
+                      type="button"
+                      onClick={() => setInvoiceCompetence(mItem.comp)}
+                      className={`px-3 py-2 rounded-xl border text-left transition-all shrink-0 cursor-pointer min-w-[115px] ${
+                        isSelectedComp
+                          ? "bg-slate-900 text-white border-slate-900 shadow-2xs"
+                          : inv?.isPaid
+                            ? "bg-emerald-50/60 text-emerald-900 border-emerald-200 hover:bg-emerald-50"
+                            : inv?.isOverdue
+                              ? "bg-red-50/70 text-red-900 border-red-200 hover:bg-red-50"
+                              : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="text-xs font-bold capitalize">
+                          {mItem.label}
+                        </span>
+                        <span
+                          className={`w-2 h-2 rounded-full ${
+                            inv?.isPaid
+                              ? "bg-emerald-500"
+                              : inv?.isOverdue
+                                ? "bg-red-500"
+                                : "bg-amber-400"
+                          }`}
+                        />
+                      </div>
+                      <span
+                        className={`text-[10px] font-semibold block mt-0.5 ${
+                          isSelectedComp ? "text-slate-300" : "opacity-80"
+                        }`}
+                      >
+                        {inv?.isPaid
+                          ? "Quitado"
+                          : inv?.isOverdue
+                            ? "Em atraso"
+                            : `R$ ${formatBRL(inv?.baseRent || 0)}`}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Detalhe e Botões de Pagamento do Mês Selecionado */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5 pt-2 border-t border-slate-100">
+            <div className="space-y-1.5 tabular-nums">
               <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-slate-600">
                 <span>
-                  Valor Base:{" "}
+                  Valor Contratual ({roomData.name}):{" "}
                   <strong className="text-slate-900">
                     R$ {formatBRL(invoiceDetails.baseRent)}
                   </strong>
@@ -1183,7 +1518,7 @@ export function CohostTab() {
 
               {invoiceDetails.isPaid && (
                 <p className="text-xs font-semibold text-emerald-700">
-                  Pagamento confirmado para a competência {invoiceCompetence}
+                  Fatura da competência {invoiceCompetence} quitada
                   {invoiceDetails.paidDateStr
                     ? ` em ${format(parseISO(invoiceDetails.paidDateStr), "dd/MM/yyyy")}`
                     : ""}
@@ -1198,11 +1533,11 @@ export function CohostTab() {
                   {invoiceDetails.isPaid
                     ? "Total Pago"
                     : invoiceDetails.isOverdue
-                      ? "Total Atualizado c/ Encargos"
-                      : "Valor a Pagar"}
+                      ? "Total Atualizado"
+                      : "Valor da Fatura"}
                 </span>
                 <span
-                  className={`text-2xl font-black tracking-tight ${
+                  className={`text-2xl font-bold tracking-tight ${
                     invoiceDetails.isPaid
                       ? "text-emerald-700"
                       : invoiceDetails.isOverdue
@@ -1218,8 +1553,17 @@ export function CohostTab() {
                 <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                   <Button
                     type="button"
+                    onClick={() => handleOpenInvoicePayment("BOLETO")}
+                    className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs h-10 rounded-xl px-4 cursor-pointer"
+                  >
+                    <Barcode className="w-4 h-4 mr-1.5" />
+                    Emitir Boleto
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
                     onClick={() => handleOpenInvoicePayment("PIX")}
-                    className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs h-10 rounded-xl px-4"
+                    className="border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold text-xs h-10 rounded-xl px-4 cursor-pointer"
                   >
                     <QrCode className="w-4 h-4 mr-1.5 text-[#BF4B24]" />
                     Pagar c/ PIX
@@ -1227,17 +1571,8 @@ export function CohostTab() {
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => handleOpenInvoicePayment("BOLETO")}
-                    className="border-slate-200 text-slate-700 hover:bg-slate-50 font-bold text-xs h-10 rounded-xl px-4"
-                  >
-                    <Barcode className="w-4 h-4 mr-1.5" />
-                    Boleto
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
                     onClick={() => handleOpenInvoicePayment("CREDIT_CARD")}
-                    className="border-slate-200 text-slate-700 hover:bg-slate-50 font-bold text-xs h-10 rounded-xl px-4"
+                    className="border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold text-xs h-10 rounded-xl px-4 cursor-pointer"
                   >
                     <CreditCard className="w-4 h-4 mr-1.5" />
                     Cartão
@@ -1249,196 +1584,410 @@ export function CohostTab() {
         </div>
       )}
 
-      {/* 4. SUBCONTRATOS FIXOS NA SALA (Usando a % negociada de cada um) */}
-      {secondaryContracts.length > 0 && (
-        <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/90 shadow-xs space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <h2 className="text-base sm:text-lg font-black text-slate-900 flex items-center gap-2">
-                <Repeat className="w-4 h-4 text-[#BF4B24]" />
-                Contratos Fixos de Terceiros (Turnos & Diárias)
-              </h2>
-              <p className="text-xs text-slate-500 font-medium mt-0.5">
-                Estes profissionais possuem horários fixos dentro da sua sala. O
-                repasse que você ganha sobre cada contrato é definido na
-                negociação.
-              </p>
+      {/* ================================================================== */}
+      {/* 4. BLOCOS EXCLUSIVOS DO MODO COANFITRIÃO (RENDIMENTO E VITRINE)    */}
+      {/* ================================================================== */}
+      {isCohostMode ? (
+        <>
+          {/* Seletor de Período para Rendimentos de Sublocação */}
+          <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div className="flex flex-col gap-0.5">
+                <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
+                  <Filter className="w-3.5 h-3.5 text-[#BF4B24]" />
+                  <span>Rendimento de sublocações em {roomData.name}:</span>
+                  <span className="text-slate-900 capitalize font-bold">
+                    {dateRange.label}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
+                  <Info className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  Repasses contabilizados a partir de{" "}
+                  <strong className="text-slate-700">
+                    {format(parseISO(activeContract.start_date), "dd/MM/yyyy")}
+                  </strong>
+                  .
+                </p>
+              </div>
+
+              <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-1">
+                {[
+                  { id: "current_month", label: "Este mês" },
+                  { id: "last_month", label: "Mês passado" },
+                  { id: "last_3_months", label: "Últimos 3 meses" },
+                  { id: "all_contract", label: "Todo o contrato" },
+                  { id: "custom", label: "Personalizado" },
+                ].map((item) => {
+                  const active = periodPreset === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setPeriodPreset(item.id as PeriodPreset)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
+                        active
+                          ? "bg-slate-900 text-white"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200/70"
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-            <Badge className="bg-slate-900 text-white border-0 text-xs font-bold w-fit">
-              {secondaryContracts.length} subcontrato(s) fixo(s)
-            </Badge>
+
+            {periodPreset === "custom" && (
+              <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-slate-500">
+                    De:
+                  </span>
+                  <input
+                    type="date"
+                    min={activeContract.start_date}
+                    max={activeContract.end_date}
+                    value={customStartDate}
+                    onChange={(e) => setCustomStartDate(e.target.value)}
+                    className="h-9 px-3 rounded-lg border border-slate-200 text-xs font-semibold text-slate-800 bg-slate-50"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-slate-500">
+                    Até:
+                  </span>
+                  <input
+                    type="date"
+                    min={activeContract.start_date}
+                    max={activeContract.end_date}
+                    value={customEndDate}
+                    onChange={(e) => setCustomEndDate(e.target.value)}
+                    className="h-9 px-3 rounded-lg border border-slate-200 text-xs font-semibold text-slate-800 bg-slate-50"
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {secondaryContracts.map((sc) => {
-              const scDays = (sc.schedule_config?.daysOfWeek || [])
-                .map((d: number) => WEEKDAYS.find((w) => w.day === d)?.short)
-                .filter(Boolean)
-                .join(", ");
-              const startH = String(
-                sc.schedule_config?.startHour ?? 8,
-              ).padStart(2, "0");
-              const endH = String(sc.schedule_config?.endHour ?? 20).padStart(
-                2,
-                "0",
-              );
-
-              const scGross = Number(sc.contract_value || 0);
-              const scCohostPct = Number(sc.host_split_pct ?? 80);
-              const scCohostNet = scGross * (scCohostPct / 100);
-
-              return (
-                <div
-                  key={sc.id}
-                  className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 flex flex-col justify-between gap-3"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="font-black text-slate-900 text-sm">
-                        {sc.specialist_name}
-                      </p>
-                      <p className="text-xs font-semibold text-slate-500 mt-0.5">
-                        {scDays} • {startH}:00 às {endH}:00
-                      </p>
-                    </div>
-                    <Badge className="bg-slate-200 text-slate-800 border-0 text-[10px] font-bold">
-                      {sc.contract_type === "fixed_shift"
-                        ? "Turno Fixo"
-                        : "Diária Fixa"}
-                    </Badge>
-                  </div>
-
-                  <div className="pt-2.5 border-t border-slate-200/80 flex items-center justify-between text-xs">
-                    <span className="text-slate-500 font-medium">
-                      Vigência: {format(parseISO(sc.start_date), "dd/MM/yy")} a{" "}
-                      {format(parseISO(sc.end_date), "dd/MM/yy")}
-                    </span>
-                    <span className="font-black text-emerald-700">
-                      Seu repasse ({scCohostPct}%): R${" "}
-                      {scCohostNet.toLocaleString("pt-BR", {
-                        minimumFractionDigits: 2,
-                      })}
-                      /mês
+          {/* Cards de Rendimento de Sublocação */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 tabular-nums">
+            <div className="md:col-span-2 bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col justify-between">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <span className="text-xs font-semibold text-slate-500">
+                    Seu Ganho Líquido de Sublocação ({roomData.name})
+                  </span>
+                  <div className="flex items-baseline gap-2 mt-1">
+                    <p className="text-3xl font-bold text-emerald-700">
+                      R$ {formatBRL(totalCohostNet80)}
+                    </p>
+                    <span className="text-xs text-slate-400">
+                      de R$ {formatBRL(totalGrossSubleased)} bruto sublocado
                     </span>
                   </div>
                 </div>
-              );
-            })}
+                <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center shrink-0">
+                  <Wallet className="w-5 h-5 text-emerald-700" />
+                </div>
+              </div>
+
+              <div className="mt-6 pt-4 border-t border-slate-100">
+                <div className="flex items-center justify-between text-xs mb-2">
+                  <span className="font-medium text-slate-600">
+                    Abatimento sobre a mensalidade desta sala (R${" "}
+                    {formatBRL(monthlyFixedRent)})
+                  </span>
+                  <span className="font-bold text-slate-900">
+                    {rentCoveragePct}% coberto pelas sublocações
+                  </span>
+                </div>
+                <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-600 rounded-full transition-all duration-500"
+                    style={{ width: `${rentCoveragePct}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-semibold text-slate-500">
+                    Horas Sublocadas
+                  </span>
+                  <Clock className="w-4 h-4 text-[#BF4B24]" />
+                </div>
+                <p className="text-3xl font-bold text-slate-900 mt-1">
+                  {totalHoursSubleased}h
+                </p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Em {bookingsInSelectedPeriod.length} reserva(s) no período
+                </p>
+              </div>
+
+              <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between text-xs">
+                <span className="text-slate-500">Seu repasse avulso:</span>
+                <span className="font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-md">
+                  {cohostSplitPct}% Líquido
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Subcontratos Fixos de Terceiros na Sala */}
+          {secondaryContracts.length > 0 && (
+            <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/90 shadow-2xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                    <Repeat className="w-4 h-4 text-[#BF4B24]" />
+                    Subcontratos Fixos em {roomData.name}
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Profissionais com turnos ou diárias fixas recorrentes dentro
+                    desta sala.
+                  </p>
+                </div>
+                <Badge className="bg-slate-900 text-white border-0 text-xs font-semibold w-fit">
+                  {secondaryContracts.length} subcontrato(s)
+                </Badge>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 tabular-nums">
+                {secondaryContracts.map((sc) => {
+                  const scDays = (sc.schedule_config?.daysOfWeek || [])
+                    .map(
+                      (d: number) => WEEKDAYS.find((w) => w.day === d)?.short,
+                    )
+                    .filter(Boolean)
+                    .join(", ");
+                  const startH = String(
+                    sc.schedule_config?.startHour ?? 8,
+                  ).padStart(2, "0");
+                  const endH = String(
+                    sc.schedule_config?.endHour ?? 20,
+                  ).padStart(2, "0");
+
+                  const scGross = Number(sc.contract_value || 0);
+                  const scCohostPct = Number(sc.host_split_pct ?? 80);
+                  const scCohostNet = scGross * (scCohostPct / 100);
+
+                  return (
+                    <div
+                      key={sc.id}
+                      className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 flex flex-col justify-between gap-3"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="font-bold text-slate-900 text-sm">
+                            {sc.specialist_name}
+                          </p>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            {scDays} • {startH}:00 às {endH}:00
+                          </p>
+                        </div>
+                        <Badge className="bg-slate-200 text-slate-800 border-0 text-[10px] font-semibold">
+                          {sc.contract_type === "fixed_shift"
+                            ? "Turno Fixo"
+                            : "Diária Fixa"}
+                        </Badge>
+                      </div>
+
+                      <div className="pt-2.5 border-t border-slate-200/80 flex items-center justify-between text-xs">
+                        <span className="text-slate-500">
+                          {format(parseISO(sc.start_date), "dd/MM/yy")} a{" "}
+                          {format(parseISO(sc.end_date), "dd/MM/yy")}
+                        </span>
+                        <span className="font-bold text-emerald-700">
+                          Seu repasse ({scCohostPct}%): R${" "}
+                          {formatBRL(scCohostNet)}/mês
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Controle de Disponibilidade da Semana (Apenas Coanfitrião) */}
+          <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/90 shadow-2xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-slate-900">
+                    Disponibilidade para Sublocação — {roomData.name}
+                  </h2>
+                  <Badge className="bg-slate-100 text-slate-700 border-0 text-xs font-semibold">
+                    {openDaysCount} de 7 dias abertos
+                  </Badge>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5 max-w-lg">
+                  Clique em um dia para alternar entre{" "}
+                  <strong className="text-slate-800">Meu Uso Exclusivo</strong>{" "}
+                  e{" "}
+                  <strong className="text-emerald-700">
+                    Aberto para Sublocar
+                  </strong>
+                  .
+                </p>
+              </div>
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setEditingScheduleRoomId(roomData.id)}
+                className="rounded-xl font-semibold border-slate-200 text-slate-700 hover:bg-slate-50 shrink-0 h-9 text-xs cursor-pointer"
+              >
+                Editar horas por dia
+                <ArrowUpRight className="w-3.5 h-3.5 ml-1" />
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2.5">
+              {WEEKDAYS.map((wd) => {
+                const cfg = currentWeekConfig.find(
+                  (c: any) => c.day === wd.day,
+                );
+                const isOpenForSublease = Boolean(cfg?.enabled);
+                const hoursCount = Array.isArray(cfg?.availableHours)
+                  ? cfg.availableHours.length
+                  : 0;
+                const fixedTenantsOnDay =
+                  daysWithFixedSubcontract.get(wd.day) || [];
+
+                return (
+                  <button
+                    key={wd.day}
+                    type="button"
+                    disabled={savingQuickDays}
+                    onClick={() => handleQuickToggleDay(wd.day)}
+                    className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between min-h-[108px] cursor-pointer ${
+                      isOpenForSublease
+                        ? "border-emerald-600/40 bg-emerald-50/40 hover:bg-emerald-50/80"
+                        : "border-slate-200 bg-slate-50/70 hover:bg-slate-100/70"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full">
+                      <span className="text-sm font-bold text-slate-900">
+                        {wd.short}
+                      </span>
+                      {isOpenForSublease ? (
+                        <Unlock className="w-3.5 h-3.5 text-emerald-700" />
+                      ) : (
+                        <Lock className="w-3.5 h-3.5 text-slate-400" />
+                      )}
+                    </div>
+
+                    <div className="mt-3 space-y-1">
+                      {isOpenForSublease ? (
+                        <>
+                          <span className="inline-block text-[10px] font-semibold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
+                            Sublocando
+                          </span>
+                          <p className="text-[11px] font-semibold text-emerald-800">
+                            {hoursCount}h livres
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <span className="inline-block text-[10px] font-semibold bg-slate-200 text-slate-700 px-2 py-0.5 rounded">
+                            Meu Uso
+                          </span>
+                          <p className="text-[11px] text-slate-500">Fechado</p>
+                        </>
+                      )}
+
+                      {fixedTenantsOnDay.length > 0 && (
+                        <span
+                          title={`Turno/Diária Fixa: ${fixedTenantsOnDay.join(", ")}`}
+                          className="block text-[9px] font-semibold bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded truncate"
+                        >
+                          Fixo: {fixedTenantsOnDay[0].split(" ")[0]}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      ) : (
+        /* ================================================================== */
+        /* 4B. BLOCO PARA CONTRATO FIXO SEM SUBLOCAÇÃO / TURNO / DIÁRIA FIXA  */
+        /* ================================================================== */
+        <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/90 shadow-2xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-stone-100 border border-stone-200 flex items-center justify-center text-[#BF4B24] shrink-0">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-slate-900">
+                  Resumo da Sua Alocação Fixa — {roomData.name}
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Este contrato garante reserva automática na agenda da sala sem
+                  gerar sublocações a terceiros.
+                </p>
+              </div>
+            </div>
+
+            <Badge className="bg-slate-900 text-white border-0 text-xs font-semibold w-fit">
+              Uso Próprio Garantido
+            </Badge>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs tabular-nums">
+            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
+              <span className="text-[11px] text-slate-500 block">
+                Modalidade Contratada
+              </span>
+              <strong className="text-sm font-bold text-slate-900 mt-0.5 block">
+                {activeModalityMeta.shortTitle}
+              </strong>
+            </div>
+
+            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
+              <span className="text-[11px] text-slate-500 block">
+                Dias e Horários Reservados
+              </span>
+              <strong className="text-sm font-bold text-slate-900 mt-0.5 block">
+                {formatContractScheduleDescription(activeContract)}
+              </strong>
+            </div>
+
+            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80">
+              <span className="text-[11px] text-slate-500 block">
+                Datas Alocadas na Agenda
+              </span>
+              <strong className="text-sm font-bold text-emerald-700 mt-0.5 block">
+                {ownContractBookings.length > 0
+                  ? `${ownContractBookings.length} sessões garantidas`
+                  : "Sala 100% reservada p/ você"}
+              </strong>
+            </div>
           </div>
         </div>
       )}
 
-      {/* 5. CONTROLE RÁPIDO DA SEMANA (Uso Próprio vs. Sublocação) */}
-      <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/90 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-base sm:text-lg font-black text-slate-900">
-                Disponibilidade da Semana
-              </h2>
-              <Badge className="bg-slate-100 text-slate-700 border-0 text-xs font-bold">
-                {openDaysCount} de 7 dias abertos
-              </Badge>
-            </div>
-            <p className="text-xs text-slate-500 font-medium mt-0.5 max-w-lg">
-              Toque em um dia para alternar entre{" "}
-              <strong className="text-slate-800">Meu Uso Exclusivo</strong>{" "}
-              (fechado) e{" "}
-              <strong className="text-emerald-700">Aberto para Sublocar</strong>
-              .
-            </p>
-          </div>
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setEditingScheduleRoomId(roomData.id)}
-            className="rounded-xl font-bold border-slate-200 text-slate-700 hover:bg-slate-50 shrink-0 h-9"
-          >
-            Editar horas por dia
-            <ArrowUpRight className="w-3.5 h-3.5 ml-1" />
-          </Button>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2.5">
-          {WEEKDAYS.map((wd) => {
-            const cfg = currentWeekConfig.find((c: any) => c.day === wd.day);
-            const isOpenForSublease = Boolean(cfg?.enabled);
-            const hoursCount = Array.isArray(cfg?.availableHours)
-              ? cfg.availableHours.length
-              : 0;
-            const fixedTenantsOnDay =
-              daysWithFixedSubcontract.get(wd.day) || [];
-
-            return (
-              <button
-                key={wd.day}
-                type="button"
-                disabled={savingQuickDays}
-                onClick={() => handleQuickToggleDay(wd.day)}
-                className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between min-h-[112px] ${
-                  isOpenForSublease
-                    ? "border-emerald-600/40 bg-emerald-50/40 hover:bg-emerald-50/80"
-                    : "border-slate-200 bg-slate-50/70 hover:bg-slate-100/70"
-                }`}
-              >
-                <div className="flex items-center justify-between w-full">
-                  <span className="text-sm font-black text-slate-900">
-                    {wd.short}
-                  </span>
-                  {isOpenForSublease ? (
-                    <Unlock className="w-3.5 h-3.5 text-emerald-700" />
-                  ) : (
-                    <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  )}
-                </div>
-
-                <div className="mt-3 space-y-1">
-                  {isOpenForSublease ? (
-                    <>
-                      <span className="inline-block text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
-                        Sublocando
-                      </span>
-                      <p className="text-[11px] font-semibold text-emerald-800">
-                        {hoursCount}h livres
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      <span className="inline-block text-[10px] font-bold bg-slate-200 text-slate-700 px-2 py-0.5 rounded">
-                        Meu Uso
-                      </span>
-                      <p className="text-[11px] font-medium text-slate-500">
-                        Fechado p/ mim
-                      </p>
-                    </>
-                  )}
-
-                  {fixedTenantsOnDay.length > 0 && (
-                    <span
-                      title={`Turno/Diária Fixa: ${fixedTenantsOnDay.join(", ")}`}
-                      className="block text-[9px] font-bold bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded truncate"
-                    >
-                      Fixo: {fixedTenantsOnDay[0].split(" ")[0]}
-                    </span>
-                  )}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 6. RESERVAS SEPARADAS: PRÓXIMAS (FUTURAS) vs ANTERIORES (REALIZADAS) */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
+      {/* ================================================================== */}
+      {/* 5. LISTA DE RESERVAS (SUBLOCAÇÕES SE CO-HOST | PRÓPRIAS SE FIXO)   */}
+      {/* ================================================================== */}
+      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
         <div className="p-5 sm:p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h3 className="text-base sm:text-lg font-black text-slate-900">
-              Agenda de Sublocações da Sala
+            <h3 className="text-base font-bold text-slate-900">
+              {isCohostMode
+                ? `Sublocações de Terceiros em ${roomData.name}`
+                : `Suas Datas Garantidas em ${roomData.name}`}
             </h3>
-            <p className="text-xs text-slate-500 font-medium mt-0.5">
-              Acompanhe as reservas (avulsas e subcontratos) do período
-              filtrado.
+            <p className="text-xs text-slate-500 mt-0.5">
+              {isCohostMode
+                ? "Reservas realizadas por outros profissionais nos seus horários livres."
+                : "Datas e turnos bloqueados exclusivamente para o seu atendimento neste contrato."}
             </p>
           </div>
 
@@ -1446,9 +1995,9 @@ export function CohostTab() {
             <button
               type="button"
               onClick={() => setBookingListTab("upcoming")}
-              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all ${
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 bookingListTab === "upcoming"
-                  ? "bg-white text-slate-900 shadow-xs"
+                  ? "bg-white text-slate-900 shadow-2xs"
                   : "text-slate-500 hover:text-slate-800"
               }`}
             >
@@ -1458,29 +2007,33 @@ export function CohostTab() {
             <button
               type="button"
               onClick={() => setBookingListTab("past")}
-              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all ${
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 bookingListTab === "past"
-                  ? "bg-white text-slate-900 shadow-xs"
+                  ? "bg-white text-slate-900 shadow-2xs"
                   : "text-slate-500 hover:text-slate-800"
               }`}
             >
               <History className="w-3.5 h-3.5 text-slate-500" />
-              Anteriores ({pastBookings.length})
+              Realizadas ({pastBookings.length})
             </button>
           </div>
         </div>
 
         {displayedBookings.length === 0 ? (
           <div className="py-14 text-center px-4">
-            <CalendarDays className="w-10 h-10 text-slate-200 mx-auto mb-2.5" />
-            <p className="text-sm font-bold text-slate-700">
-              {bookingListTab === "upcoming"
-                ? "Nenhuma sublocação futura agendada neste período."
-                : "Nenhuma sublocação anterior registrada neste período."}
+            <CalendarDays className="w-9 h-9 text-slate-200 mx-auto mb-2" />
+            <p className="text-xs font-semibold text-slate-600">
+              {isCohostMode
+                ? bookingListTab === "upcoming"
+                  ? `Nenhuma sublocação futura agendada em ${roomData.name}.`
+                  : `Nenhuma sublocação anterior registrada em ${roomData.name} neste período.`
+                : activeContract.contract_type === "monthly_exclusive"
+                  ? `Sua sala (${roomData.name}) está 100% bloqueada para seu uso exclusivo durante toda a vigência.`
+                  : "Nenhuma sessão listada nesta aba."}
             </p>
           </div>
         ) : (
-          <div className="divide-y divide-slate-100">
+          <div className="divide-y divide-slate-100 tabular-nums">
             {displayedBookings.map((b) => {
               const startDt = parseISO(b.start_time);
               const endDt = parseISO(b.end_time);
@@ -1490,67 +2043,74 @@ export function CohostTab() {
                   className="p-4 sm:px-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-slate-50/70 transition-colors"
                 >
                   <div className="flex items-start sm:items-center gap-3.5">
-                    <div className="w-12 h-12 rounded-xl bg-slate-100 border border-slate-200/80 flex flex-col items-center justify-center shrink-0">
-                      <span className="text-[10px] font-bold uppercase text-slate-500 leading-none">
+                    <div className="w-11 h-11 rounded-xl bg-slate-100 border border-slate-200/80 flex flex-col items-center justify-center shrink-0">
+                      <span className="text-[10px] font-semibold uppercase text-slate-500 leading-none">
                         {format(startDt, "MMM", { locale: ptBR })}
                       </span>
-                      <span className="text-base font-black text-slate-900 leading-tight mt-0.5">
+                      <span className="text-sm font-bold text-slate-900 leading-tight mt-0.5">
                         {format(startDt, "dd")}
                       </span>
                     </div>
 
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
-                        <p className="font-bold text-slate-900 text-sm">
-                          {format(startDt, "EEEE", { locale: ptBR })} •{" "}
-                          {format(startDt, "HH:mm")} às {format(endDt, "HH:mm")}
+                        <p className="font-bold text-slate-900 text-xs sm:text-sm capitalize">
+                          {format(startDt, "EEEE, dd/MM/yyyy", {
+                            locale: ptBR,
+                          })}{" "}
+                          • {format(startDt, "HH:mm")} às{" "}
+                          {format(endDt, "HH:mm")}
                         </p>
                         <Badge
-                          className={`border-0 text-[10px] font-bold ${
+                          className={`border-0 text-[10px] font-semibold ${
                             bookingListTab === "upcoming"
-                              ? "bg-amber-50 text-amber-800"
+                              ? "bg-emerald-50 text-emerald-800"
                               : "bg-slate-100 text-slate-700"
                           }`}
                         >
                           {bookingListTab === "upcoming"
-                            ? "Agendada"
-                            : "Realizada"}
+                            ? "Reservado"
+                            : "Concluído"}
                         </Badge>
-                        {b.isSubContractBooking && (
-                          <Badge className="bg-slate-900 text-white border-0 text-[10px] font-bold">
-                            Subcontrato Fixo
-                          </Badge>
-                        )}
                       </div>
 
-                      <p className="text-xs text-slate-500 font-medium mt-1 flex items-center gap-1.5">
-                        <User className="w-3.5 h-3.5 text-slate-400" />
-                        <span>{b.guestName}</span>
-                        <span className="text-slate-300">•</span>
-                        <span>{b.guestSpecialty}</span>
-                        <span className="text-slate-300">•</span>
-                        <span>{b.hours}h</span>
-                      </p>
+                      {isCohostMode ? (
+                        <p className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
+                          <User className="w-3.5 h-3.5 text-slate-400" />
+                          <span>{b.guestName}</span>
+                          <span className="text-slate-300">•</span>
+                          <span>{b.guestSpecialty}</span>
+                          <span className="text-slate-300">•</span>
+                          <span>{b.hours}h</span>
+                        </p>
+                      ) : (
+                        <p className="text-xs text-slate-500 mt-1">
+                          {roomData.name} • Turno de {b.hours}h garantido pelo
+                          seu contrato
+                        </p>
+                      )}
                     </div>
                   </div>
 
-                  <div className="flex sm:flex-col items-center sm:items-end justify-between border-t sm:border-t-0 border-slate-100 pt-3 sm:pt-0">
-                    <span className="text-[11px] font-medium text-slate-400">
-                      Bruto: R${" "}
-                      {b.grossBrl.toLocaleString("pt-BR", {
-                        minimumFractionDigits: 2,
-                      })}
-                    </span>
-                    <span className="text-sm sm:text-base font-black text-emerald-700">
-                      + R${" "}
-                      {b.cohostNetBrl.toLocaleString("pt-BR", {
-                        minimumFractionDigits: 2,
-                      })}{" "}
-                      <span className="text-[10px] font-bold text-emerald-600">
-                        ({b.appliedCohostPct * 100}%)
+                  {isCohostMode ? (
+                    <div className="flex sm:flex-col items-center sm:items-end justify-between border-t sm:border-t-0 border-slate-100 pt-3 sm:pt-0">
+                      <span className="text-[11px] text-slate-400">
+                        Bruto: R$ {formatBRL(b.grossBrl)}
                       </span>
-                    </span>
-                  </div>
+                      <span className="text-sm font-bold text-emerald-700">
+                        + R$ {formatBRL(b.cohostNetBrl)}{" "}
+                        <span className="text-[10px] font-semibold text-emerald-600">
+                          ({Math.round(b.appliedCohostPct * 100)}%)
+                        </span>
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="text-right">
+                      <Badge className="bg-stone-100 text-stone-800 border-0 text-[11px] font-semibold">
+                        Horário Exclusivo Seu
+                      </Badge>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1558,37 +2118,38 @@ export function CohostTab() {
         )}
       </div>
 
-      {/* MODAL DE CHECKOUT TRANSPARENTE DA MENSALIDADE DO COANFITRIÃO */}
+      {/* ================================================================== */}
+      {/* MODAL DE PAGAMENTO DA FATURA DO CONTRATO (BOLETO / PIX / CARTÃO)   */}
+      {/* ================================================================== */}
       <Dialog open={isPayModalOpen} onOpenChange={setIsPayModalOpen}>
         <DialogContent className="sm:max-w-lg bg-white border-slate-200 rounded-2xl">
           <DialogHeader>
             <DialogTitle className="text-lg font-bold text-slate-900">
-              Pagar Mensalidade do Contrato ({invoiceCompetence})
+              Fatura de {roomData.name} ({invoiceCompetence})
             </DialogTitle>
             <DialogDescription className="text-xs text-slate-500">
-              Escolha entre PIX, Boleto Bancário ou Cartão de Crédito. A baixa
-              do seu contrato é registrada automaticamente.
+              Escolha entre Boleto Bancário, PIX ou Cartão de Crédito para
+              quitar a competência deste contrato.
             </DialogDescription>
           </DialogHeader>
 
           {invoiceDetails && (
             <div className="space-y-4">
-              {/* Resumo do Valor + Encargos de Atraso */}
               <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 text-xs tabular-nums">
                 <div className="flex justify-between text-slate-600">
-                  <span>Sala Contratada:</span>
+                  <span>Sala / Contrato:</span>
                   <span className="font-bold text-slate-900">
-                    {roomData.name}
+                    {roomData.name} ({activeModalityMeta.badgeLabel})
                   </span>
                 </div>
                 <div className="flex justify-between text-slate-600">
-                  <span>Data de Vencimento:</span>
+                  <span>Vencimento:</span>
                   <span className="font-semibold text-slate-800">
                     {format(parseISO(invoiceDetails.dueDateIso), "dd/MM/yyyy")}
                   </span>
                 </div>
                 <div className="flex justify-between text-slate-600">
-                  <span>Valor Base Mensal:</span>
+                  <span>Valor Base:</span>
                   <span className="font-semibold text-slate-900">
                     R$ {formatBRL(invoiceDetails.baseRent)}
                   </span>
@@ -1597,7 +2158,7 @@ export function CohostTab() {
                 {invoiceDetails.isOverdue && (
                   <>
                     <div className="flex justify-between text-red-700">
-                      <span>Multa por atraso ({invoiceDetails.finePct}%):</span>
+                      <span>Multa ({invoiceDetails.finePct}%):</span>
                       <span className="font-semibold">
                         + R$ {formatBRL(invoiceDetails.fineBrl)}
                       </span>
@@ -1624,9 +2185,8 @@ export function CohostTab() {
                 </div>
               </div>
 
-              {/* Abas de Método de Pagamento */}
               <div className="grid grid-cols-3 gap-2 bg-slate-100 p-1 rounded-xl">
-                {(["PIX", "BOLETO", "CREDIT_CARD"] as const).map((m) => (
+                {(["BOLETO", "PIX", "CREDIT_CARD"] as const).map((m) => (
                   <button
                     key={m}
                     type="button"
@@ -1634,18 +2194,17 @@ export function CohostTab() {
                       setPayMethod(m);
                       setGeneratedPaymentId(null);
                     }}
-                    className={`py-2 rounded-lg text-xs font-semibold transition-all ${
+                    className={`py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                       payMethod === m
                         ? "bg-white text-slate-900 shadow-2xs"
                         : "text-slate-600 hover:text-slate-900"
                     }`}
                   >
-                    {m === "PIX" ? "PIX" : m === "BOLETO" ? "Boleto" : "Cartão"}
+                    {m === "BOLETO" ? "Boleto" : m === "PIX" ? "PIX" : "Cartão"}
                   </button>
                 ))}
               </div>
 
-              {/* CPF e CEP */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label className="text-[11px] font-semibold text-slate-600">
@@ -1671,7 +2230,6 @@ export function CohostTab() {
                 </div>
               </div>
 
-              {/* Campos de Cartão de Crédito */}
               {payMethod === "CREDIT_CARD" && (
                 <div className="space-y-3 pt-1">
                   {userProfile?.cc_token && (
@@ -1761,7 +2319,6 @@ export function CohostTab() {
                 </div>
               )}
 
-              {/* Exibição do QR Code PIX gerado */}
               {payMethod === "PIX" && pixQrCode && (
                 <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col items-center text-center space-y-3">
                   <img
@@ -1784,18 +2341,13 @@ export function CohostTab() {
                     <Copy className="w-3.5 h-3.5 mr-1.5" />
                     Copiar Código PIX Copia e Cola
                   </Button>
-                  <p className="text-[11px] text-emerald-700 font-medium flex items-center gap-1.5">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Aguardando confirmação automática do pagamento...
-                  </p>
                 </div>
               )}
 
-              {/* Exibição do Boleto Bancário gerado */}
               {payMethod === "BOLETO" && generatedPaymentId && (
                 <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
                   <p className="text-xs font-bold text-slate-900">
-                    Boleto Registrado Gerado com Sucesso
+                    Boleto Emitido — {roomData.name}
                   </p>
                   {boletoLine && (
                     <div className="p-2.5 bg-white rounded-lg border border-slate-200 font-mono text-[11px] break-all text-slate-700">
@@ -1833,25 +2385,24 @@ export function CohostTab() {
                 </div>
               )}
 
-              {/* Botão Principal de Ação */}
               {!generatedPaymentId && (
                 <Button
                   type="button"
                   disabled={payProcessing}
                   onClick={handleGenerateOrPayContract}
-                  className="w-full h-11 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs"
+                  className="w-full h-11 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs cursor-pointer"
                 >
                   {payProcessing ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Processando junto ao Asaas...
+                      Processando cobrança...
                     </>
-                  ) : payMethod === "PIX" ? (
-                    `Gerar QR Code PIX (R$ ${formatBRL(invoiceDetails.totalBrl)})`
                   ) : payMethod === "BOLETO" ? (
                     `Emitir Boleto Registrado (R$ ${formatBRL(invoiceDetails.totalBrl)})`
+                  ) : payMethod === "PIX" ? (
+                    `Gerar QR Code PIX (R$ ${formatBRL(invoiceDetails.totalBrl)})`
                   ) : (
-                    `Pagar Agora no Cartão (R$ ${formatBRL(invoiceDetails.totalBrl)})`
+                    `Pagar no Cartão (R$ ${formatBRL(invoiceDetails.totalBrl)})`
                   )}
                 </Button>
               )}

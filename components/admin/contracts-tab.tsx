@@ -17,7 +17,6 @@ import {
   ExternalLink,
   Loader2,
   Users,
-  Sparkles,
   Percent,
   Clock,
   FileCheck2,
@@ -29,6 +28,7 @@ import {
   Barcode,
   CreditCard,
   Copy,
+  ArrowLeft,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -38,7 +38,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -148,6 +147,9 @@ export function AdminContractsTab({
   const [supabase] = useState(() => createClient());
   const { toast } = useToast();
 
+  // Controle de navegação em Tela Cheia: "list" vs "form"
+  const [viewMode, setViewMode] = useState<"list" | "form">("list");
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingPdfId, setUploadingPdfId] = useState<string | null>(null);
@@ -163,7 +165,6 @@ export function AdminContractsTab({
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
 
-  const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingContract, setEditingContract] = useState<RoomContract | null>(
     null,
   );
@@ -180,7 +181,7 @@ export function AdminContractsTab({
     }[]
   >([]);
 
-  // Estados do Modal de Pagamento / Cobrança Asaas (PIX, Boleto, Cartão)
+  // Modal de Cobrança Asaas
   const [payModalOpen, setPayModalOpen] = useState(false);
   const [payContract, setPayContract] = useState<RoomContract | null>(null);
   const [payMethod, setPayMethod] = useState<"PIX" | "BOLETO" | "CREDIT_CARD">(
@@ -243,7 +244,6 @@ export function AdminContractsTab({
     loadInitialData();
   }, [preselectedRoomId]);
 
-  // Polling automático quando um QR Code PIX de contrato estiver aberto
   useEffect(() => {
     if (!payModalOpen || !generatedPaymentId || !payContract) return;
 
@@ -257,7 +257,7 @@ export function AdminContractsTab({
           if (data.confirmed) {
             clearInterval(timer);
             toast({
-              title: "Mensalidade Confirmada pelo Asaas!",
+              title: "Mensalidade Confirmada",
               description: `Baixa automática aplicada ao contrato de ${payContract.specialist_name}.`,
             });
             setPayModalOpen(false);
@@ -421,7 +421,7 @@ export function AdminContractsTab({
     return map;
   }, [contracts]);
 
-  const parentCohostForModalRoom = useMemo(() => {
+  const parentCohostForFormRoom = useMemo(() => {
     if (!form.room_id) return null;
     const cohostContract = activeCohostContractByRoomId.get(form.room_id);
     if (!cohostContract) return null;
@@ -675,7 +675,6 @@ export function AdminContractsTab({
     const startH = Number(cfg.startHour ?? 8);
     const endH = Number(cfg.endHour ?? 20);
 
-    // CENÁRIO 1: CONTRATO PRINCIPAL DE CO-ANFITRIÃO
     if (
       contract.contract_type === "monthly_exclusive" &&
       contract.allow_sublease
@@ -745,7 +744,7 @@ export function AdminContractsTab({
           await supabase.from("notifications").insert({
             user_id: contract.specialist_id,
             type: "cohost_activated",
-            title: "Modo Coanfitrião Ativado!",
+            title: "Modo Coanfitrião Ativado",
             content:
               "Sua sala fixa está ativa! Acesse a aba 'Minha Sala' no seu painel para gerenciar seus horários livres e acompanhar seus repasses.",
             link: "/dashboard#cohost",
@@ -757,7 +756,6 @@ export function AdminContractsTab({
       return openSubleaseDays.length;
     }
 
-    // CENÁRIO 2: CONTRATO FIXO SEM SUBLOCAÇÃO OU SUBCONTRATO FIXO
     const effectiveDays =
       contract.contract_type === "monthly_exclusive" && !contract.allow_sublease
         ? [1, 2, 3, 4, 5, 6, 0]
@@ -917,8 +915,8 @@ export function AdminContractsTab({
       if (error) throw error;
 
       toast({
-        title: "Contrato PDF anexado com sucesso!",
-        description: `Arquivo "${uploaded.filename}" salvo no cofre digital.`,
+        title: "Contrato PDF anexado",
+        description: `Arquivo "${uploaded.filename}" salvo com sucesso.`,
       });
 
       loadInitialData();
@@ -972,11 +970,8 @@ export function AdminContractsTab({
 
       toast({
         title: newCompetence
-          ? `Pagamento de ${currentMonthLabel} confirmado!`
-          : `Baixa de ${currentMonthLabel} desfeita.`,
-        description: newCompetence
-          ? `O contrato de ${contract.specialist_name} foi marcado como pago neste mês.`
-          : "O contrato voltou para o status de aguardando pagamento no mês.",
+          ? `Pagamento de ${currentMonthLabel} confirmado`
+          : `Baixa de ${currentMonthLabel} desfeita`,
       });
 
       loadInitialData();
@@ -1075,7 +1070,7 @@ export function AdminContractsTab({
         setPixCopyPaste(data.pixCopyPaste);
       } else if (payMethod === "CREDIT_CARD") {
         toast({
-          title: "Pagamento Processado com Sucesso!",
+          title: "Pagamento Processado",
           description: `A competência ${currentCompetence} foi baixada.`,
         });
         setPayModalOpen(false);
@@ -1092,7 +1087,7 @@ export function AdminContractsTab({
     }
   };
 
-  const openCreateModal = () => {
+  const openCreateFormPage = () => {
     setEditingContract(null);
     setPdfFile(null);
     setSpecSearch("");
@@ -1131,10 +1126,10 @@ export function AdminContractsTab({
       endHour: 20,
       notes: "",
     });
-    setIsModalOpen(true);
+    setViewMode("form");
   };
 
-  const openEditModal = (c: RoomContract) => {
+  const openEditFormPage = (c: RoomContract) => {
     setEditingContract(c);
     setPdfFile(null);
     setSpecSearch("");
@@ -1185,7 +1180,7 @@ export function AdminContractsTab({
       endHour: c.schedule_config?.endHour ?? 20,
       notes: c.notes || "",
     });
-    setIsModalOpen(true);
+    setViewMode("form");
   };
 
   const handleSaveContract = async () => {
@@ -1224,7 +1219,7 @@ export function AdminContractsTab({
       });
     }
 
-    const isSubContractUnderCohost = Boolean(parentCohostForModalRoom);
+    const isSubContractUnderCohost = Boolean(parentCohostForFormRoom);
 
     let effectiveStartDate = form.start_date;
     let effectiveEndDate = form.end_date;
@@ -1292,7 +1287,6 @@ export function AdminContractsTab({
           ? form.allow_sublease
           : false;
 
-      // Preserva paid_dates, last_paid_date e invoices ao salvar o contrato
       const scheduleConfig: ContractScheduleConfig = {
         ...(editingContract?.schedule_config || {}),
         daysOfWeek:
@@ -1364,16 +1358,16 @@ export function AdminContractsTab({
 
       toast({
         title: editingContract
-          ? "Contrato atualizado com sucesso!"
-          : "Contrato registrado e ativado!",
+          ? "Contrato atualizado com sucesso"
+          : "Contrato registrado e ativado",
         description: isSubContractUnderCohost
-          ? `Subcontrato fixo vinculado ao Coanfitrião (${parsedHostPct}% Coanfitrião / ${parsedFusionPct}% Fusion)! ${generatedCount} datas alocadas.`
+          ? `Subcontrato vinculado ao Coanfitrião (${parsedHostPct}% Coanfitrião / ${parsedFusionPct}% Fusion). ${generatedCount} datas alocadas.`
           : finalAllowSublease
-            ? `Modo Co-Anfitrião ativo! ${generatedCount} dia(s) abertos na vitrine.`
-            : `Split configurado e ${generatedCount} bloqueio(s) lançado(s) na agenda.`,
+            ? `Modo Coanfitrião ativo com ${generatedCount} dia(s) abertos na vitrine.`
+            : `Split configurado e ${generatedCount} bloqueio(s) sincronizados na agenda.`,
       });
 
-      setIsModalOpen(false);
+      setViewMode("list");
       loadInitialData();
     } catch (err: any) {
       console.error("Erro ao salvar contrato:", err);
@@ -1472,7 +1466,7 @@ export function AdminContractsTab({
     if (c.status === "cancelled" || c.status === "expired") {
       return {
         state: "inactive",
-        label: `Dia limite: ${dayStr}`,
+        label: `Dia ${dayStr}`,
         daysLate: 0,
         fineBrl: 0,
         interestBrl: 0,
@@ -1515,7 +1509,7 @@ export function AdminContractsTab({
 
       return {
         state: "overdue",
-        label: `Atrasado há ${daysLate}d (Venceu dia ${dayStr})`,
+        label: `Vencido há ${daysLate}d (Dia ${dayStr})`,
         daysLate,
         fineBrl,
         interestBrl,
@@ -1542,7 +1536,7 @@ export function AdminContractsTab({
     }
     return {
       state: "upcoming",
-      label: `Pagar até dia ${dayStr}`,
+      label: `Vence dia ${dayStr}`,
       daysLate: 0,
       fineBrl: 0,
       interestBrl: 0,
@@ -1595,16 +1589,13 @@ export function AdminContractsTab({
     if (parentCohost) {
       return (
         <div className="flex flex-col gap-1">
-          <Badge className="bg-slate-900 text-white border-0 w-fit font-bold">
+          <Badge className="bg-slate-900 text-white border-0 w-fit font-semibold text-[11px]">
             {c.contract_type === "fixed_shift"
               ? "Subcontrato • Turno Fixo"
               : "Subcontrato • Diária Fixa"}
           </Badge>
-          <Badge className="bg-emerald-50 text-emerald-800 border border-emerald-200 w-fit text-[10px] font-bold">
-            Repasse p/ Co-Host: {parentCohost.specialist_name.split(" ")[0]}
-          </Badge>
-          <span className="text-[10px] font-semibold text-slate-400 flex items-center gap-1">
-            <Lock className="w-3 h-3" /> Sem direito a sublocar
+          <span className="text-[10px] font-semibold text-emerald-700">
+            Coanfitrião: {parentCohost.specialist_name.split(" ")[0]}
           </span>
         </div>
       );
@@ -1614,35 +1605,35 @@ export function AdminContractsTab({
       case "monthly_exclusive":
         return (
           <div className="flex flex-col gap-1">
-            <Badge className="bg-purple-100 text-purple-800 border-0 w-fit font-bold">
-              Fixo Mensal (Sala Exclusiva)
+            <Badge className="bg-slate-900 text-white border-0 w-fit font-semibold text-[11px]">
+              Sala Exclusiva Mensal
             </Badge>
             {c.allow_sublease ? (
-              <Badge className="bg-amber-100 text-amber-800 border-0 w-fit text-[10px] font-black">
-                <Sparkles className="w-3 h-3 mr-1" /> Co-Anfitrião (Sublocação)
-              </Badge>
+              <span className="text-[10px] font-semibold text-[#BF4B24]">
+                Coanfitrião (Sublocação ativa)
+              </span>
             ) : (
-              <Badge className="bg-slate-200 text-slate-700 border-0 w-fit text-[10px] font-bold">
-                100% Bloqueada (Sem Sublocação)
-              </Badge>
+              <span className="text-[10px] text-slate-500">
+                100% Exclusiva (Sem sublocação)
+              </span>
             )}
           </div>
         );
       case "fixed_shift":
         return (
-          <Badge className="bg-blue-100 text-blue-800 border-0 font-bold">
-            Turno Fixo Recorrente
+          <Badge className="bg-slate-100 text-slate-800 border-0 font-semibold text-[11px]">
+            Turno Fixo Semanal
           </Badge>
         );
       case "fixed_daily":
         return (
-          <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold">
+          <Badge className="bg-slate-100 text-slate-800 border-0 font-semibold text-[11px]">
             Diária Fixa Semanal
           </Badge>
         );
       default:
         return (
-          <Badge className="bg-slate-100 text-slate-700 border-0 font-bold">
+          <Badge className="bg-slate-100 text-slate-700 border-0 font-semibold text-[11px]">
             Contrato de Diárias
           </Badge>
         );
@@ -1653,25 +1644,25 @@ export function AdminContractsTab({
     switch (status) {
       case "active":
         return (
-          <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold">
+          <Badge className="bg-emerald-50 text-emerald-700 border-0 font-semibold">
             Vigente
           </Badge>
         );
       case "pending_signature":
         return (
-          <Badge className="bg-amber-100 text-amber-800 border-0 font-bold">
-            Aguardando Assinatura
+          <Badge className="bg-amber-50 text-amber-800 border-0 font-semibold">
+            Pendente Assinatura
           </Badge>
         );
       case "expired":
         return (
-          <Badge className="bg-slate-200 text-slate-700 border-0 font-bold">
+          <Badge className="bg-slate-100 text-slate-600 border-0 font-semibold">
             Encerrado
           </Badge>
         );
       case "cancelled":
         return (
-          <Badge className="bg-red-100 text-red-800 border-0 font-bold">
+          <Badge className="bg-red-50 text-red-700 border-0 font-semibold">
             Cancelado
           </Badge>
         );
@@ -1681,7 +1672,7 @@ export function AdminContractsTab({
   const formatScheduleSummary = (c: RoomContract) => {
     const cfg = c.schedule_config;
     if (c.contract_type === "monthly_exclusive" && !c.allow_sublease) {
-      return "Full-Time (100% Bloqueada p/ Locatário)";
+      return "Integral (Sala 100% reservada)";
     }
     if (!cfg || !cfg.daysOfWeek) return "Personalizado";
     const dayLabels = cfg.daysOfWeek
@@ -1690,9 +1681,9 @@ export function AdminContractsTab({
       .join(", ");
     const prefix =
       c.contract_type === "monthly_exclusive" && c.allow_sublease
-        ? "Sublocação aberta: "
+        ? "Sublocação: "
         : "";
-    return `${prefix}${dayLabels || "Definido pelo Co-Anfitrião"} • ${String(cfg.startHour ?? 8).padStart(2, "0")}:00 às ${String(cfg.endHour ?? 20).padStart(2, "0")}:00`;
+    return `${prefix}${dayLabels || "Configurado pelo Coanfitrião"} • ${String(cfg.startHour ?? 8).padStart(2, "0")}h às ${String(cfg.endHour ?? 20).padStart(2, "0")}h`;
   };
 
   const filteredSpecialists =
@@ -1723,120 +1714,1130 @@ export function AdminContractsTab({
     ? getEffectiveContractPricing(payContract).contractValue
     : 0;
 
+  const selectedRoomObj = rooms.find((r) => r.id === form.room_id);
+
+  // ==========================================================================
+  // VISÃO EM TELA CHEIA: FORMULÁRIO DE CRIAÇÃO / EDIÇÃO DE CONTRATO
+  // ==========================================================================
+  if (viewMode === "form") {
+    return (
+      <div className="p-4 lg:p-8 max-w-7xl mx-auto w-full pb-32 font-sans animate-in fade-in duration-200">
+        {/* Topo de Navegação */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 mb-6 border-b border-slate-200">
+          <div className="flex items-center gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setViewMode("list")}
+              className="h-10 px-3.5 rounded-xl border-slate-200 text-slate-700 font-semibold text-xs cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 mr-1.5" />
+              Voltar para Contratos
+            </Button>
+            <div>
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+                {editingContract
+                  ? `Editar Contrato — ${editingContract.specialist_name}`
+                  : "Novo Contrato de Locação de Sala"}
+              </h1>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Configure a unidade, vigência, regras de coanfitrião, divisão de
+                repasses e anexe o instrumento assinado em PDF.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setViewMode("list")}
+              className="h-10 rounded-xl font-semibold text-xs text-slate-600"
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              disabled={saving}
+              onClick={handleSaveContract}
+              className="h-10 px-5 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs cursor-pointer"
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Sincronizando...
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-4 h-4 mr-2" />
+                  Salvar Contrato e Sincronizar Agenda
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          {/* COLUNA PRINCIPAL DO FORMULÁRIO (8 COLUNAS) */}
+          <div className="lg:col-span-8 space-y-6">
+            {/* Aviso caso seja subcontrato dentro da sala de um Coanfitrião */}
+            {parentCohostForFormRoom && (
+              <div className="p-5 rounded-2xl bg-stone-100 border border-stone-200 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900 flex items-center gap-2">
+                    <Building2 className="w-4 h-4 text-[#BF4B24]" />
+                    Subcontrato vinculado à sala do Coanfitrião{" "}
+                    {parentCohostForFormRoom.specialist_name}
+                  </span>
+                  <Badge className="bg-slate-900 text-white border-0 text-[10px]">
+                    Sublocação Fixa
+                  </Badge>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Esta sala possui contrato mensal vigente com{" "}
+                  <strong>{parentCohostForFormRoom.specialist_name}</strong> (
+                  {format(
+                    parseISO(parentCohostForFormRoom.start_date),
+                    "dd/MM/yyyy",
+                  )}{" "}
+                  a{" "}
+                  {format(
+                    parseISO(parentCohostForFormRoom.end_date),
+                    "dd/MM/yyyy",
+                  )}
+                  ). Este novo contrato bloqueará os dias escolhidos abaixo e
+                  direcionará o repasse líquido diretamente ao coanfitrião.
+                </p>
+              </div>
+            )}
+
+            {/* BLOCO 1: UNIDADE E MODALIDADE */}
+            <div className="bg-white p-6 rounded-2xl border border-slate-200/90 space-y-5">
+              <div className="border-b border-slate-100 pb-3">
+                <h2 className="text-sm font-bold text-slate-900">
+                  1. Consultório e Modalidade Contratual
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Defina a sala que será alocada e o formato jurídico da
+                  locação.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Sala / Consultório *
+                  </Label>
+                  <select
+                    value={form.room_id}
+                    onChange={(e) => {
+                      const nextRoomId = e.target.value;
+                      const cohostOnRoom =
+                        activeCohostContractByRoomId.get(nextRoomId);
+                      const isSub =
+                        cohostOnRoom &&
+                        (!editingContract ||
+                          editingContract.id !== cohostOnRoom.id);
+
+                      setForm({
+                        ...form,
+                        room_id: nextRoomId,
+                        contract_type:
+                          isSub && form.contract_type === "monthly_exclusive"
+                            ? "fixed_daily"
+                            : form.contract_type,
+                        allow_sublease: isSub ? false : form.allow_sublease,
+                        platform_fee_pct: isSub ? "20" : form.platform_fee_pct,
+                        host_split_pct: isSub ? "80" : form.host_split_pct,
+                      });
+                    }}
+                    disabled={Boolean(preselectedRoomId)}
+                    className="mt-1.5 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 outline-none"
+                  >
+                    <option value="">Selecione uma sala...</option>
+                    {rooms.map((r) => {
+                      const roomCohost = activeCohostContractByRoomId.get(r.id);
+                      return (
+                        <option key={r.id} value={r.id}>
+                          {r.name} ({String(r.tier || "start").toUpperCase()})
+                          {roomCohost
+                            ? ` • Co-Host: ${roomCohost.specialist_name}`
+                            : ""}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Modalidade *
+                  </Label>
+                  <select
+                    value={form.contract_type}
+                    onChange={(e) => {
+                      const nextType = e.target.value as any;
+                      setForm({
+                        ...form,
+                        contract_type: nextType,
+                        allow_sublease:
+                          nextType === "monthly_exclusive" &&
+                          !parentCohostForFormRoom
+                            ? form.allow_sublease
+                            : false,
+                        daysOfWeek:
+                          nextType === "monthly_exclusive" &&
+                          !form.allow_sublease
+                            ? [1, 2, 3, 4, 5, 6, 0]
+                            : form.daysOfWeek,
+                      });
+                    }}
+                    className="mt-1.5 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 outline-none"
+                  >
+                    {!parentCohostForFormRoom && (
+                      <option value="monthly_exclusive">
+                        Sala Exclusiva Mensal / Coanfitrião
+                      </option>
+                    )}
+                    <option value="fixed_shift">
+                      Turno Fixo Recorrente (Ex: Segunda Manhã)
+                    </option>
+                    <option value="fixed_daily">
+                      Diária Fixa Recorrente (Ex: Segunda Dia Todo)
+                    </option>
+                    <option value="custom_daily">Diárias Personalizadas</option>
+                  </select>
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Status do Contrato
+                  </Label>
+                  <select
+                    value={form.status}
+                    onChange={(e) =>
+                      setForm({ ...form, status: e.target.value as any })
+                    }
+                    className="mt-1.5 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 outline-none"
+                  >
+                    <option value="active">Vigente (Ativo)</option>
+                    <option value="pending_signature">
+                      Aguardando Assinatura
+                    </option>
+                    <option value="expired">Encerrado</option>
+                    <option value="cancelled">Cancelado</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Opção de Direito de Coanfitrião (Sublocação) */}
+              {form.contract_type === "monthly_exclusive" &&
+                !parentCohostForFormRoom && (
+                  <div className="p-4 rounded-xl bg-[#FAF7F4] border border-stone-200/90 space-y-4">
+                    <label className="flex items-start justify-between gap-4 cursor-pointer select-none">
+                      <div>
+                        <span className="text-xs font-bold text-slate-900 block">
+                          Habilitar Modo Coanfitrião (Permissão para Sublocar
+                          Horários Livres)
+                        </span>
+                        <span className="text-xs text-slate-600 mt-0.5 block">
+                          Permite que o locatário disponibilize seus dias/horas
+                          livres na plataforma e receba repasse sobre cada
+                          reserva realizada na sala.
+                        </span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={form.allow_sublease}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setForm({
+                            ...form,
+                            allow_sublease: checked,
+                            cohost_split_pct: checked ? "80" : "0",
+                            daysOfWeek: checked
+                              ? [2, 4]
+                              : [1, 2, 3, 4, 5, 6, 0],
+                          });
+                        }}
+                        className="h-4 w-4 accent-[#BF4B24] rounded mt-0.5 cursor-pointer"
+                      />
+                    </label>
+
+                    {form.allow_sublease && (
+                      <div className="pt-3 border-t border-stone-200/80 grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+                        <div>
+                          <Label className="text-xs font-semibold text-slate-700">
+                            Porcentagem do Coanfitrião nas Sublocações Avulsas
+                            (%)
+                          </Label>
+                          <div className="relative mt-1">
+                            <Input
+                              type="number"
+                              min="0"
+                              max="100"
+                              value={form.cohost_split_pct}
+                              onChange={(e) =>
+                                setForm({
+                                  ...form,
+                                  cohost_split_pct: e.target.value,
+                                })
+                              }
+                              className="bg-white border-stone-200 font-bold text-slate-900 pr-8 h-9 text-xs"
+                            />
+                            <Percent className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
+                          </div>
+                        </div>
+                        <p className="text-[11px] text-slate-600">
+                          O profissional verá esta sala na aba{" "}
+                          <strong>Minha Sala</strong> e receberá{" "}
+                          <strong>{form.cohost_split_pct || 80}%</strong> das
+                          sublocações realizadas durante a vigência.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+            </div>
+
+            {/* BLOCO 2: QUALIFICAÇÃO DO PROFISSIONAL LOCATÁRIO */}
+            <div className="bg-white p-6 rounded-2xl border border-slate-200/90 space-y-5">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">
+                    2. Dados do Profissional Locatário
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Vincule a um especialista cadastrado na plataforma para
+                    sincronizar o painel e faturas.
+                  </p>
+                </div>
+                {form.specialist_id && (
+                  <Badge className="bg-emerald-50 text-emerald-700 border-0 text-[10px] font-semibold">
+                    Conta Vinculada
+                  </Badge>
+                )}
+              </div>
+
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <Input
+                  placeholder="Pesquisar profissional cadastrado por nome, CPF ou e-mail..."
+                  value={specSearch}
+                  onChange={(e) => setSpecSearch(e.target.value)}
+                  className="bg-slate-50 border-slate-200 h-10 pl-9 text-xs rounded-xl"
+                />
+                {filteredSpecialists.length > 0 && (
+                  <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                    {filteredSpecialists.slice(0, 8).map((p) => (
+                      <button
+                        type="button"
+                        key={p.id}
+                        onClick={() => {
+                          setForm({
+                            ...form,
+                            specialist_id: p.id,
+                            specialist_name: p.full_name || "",
+                            specialist_document: p.cpf || "",
+                            specialist_email: p.email || "",
+                            specialist_phone: p.whatsapp || p.phone || "",
+                          });
+                          setSpecSearch("");
+                        }}
+                        className="w-full text-left px-4 py-2.5 hover:bg-slate-50 border-b border-slate-100 last:border-0 flex items-center justify-between text-xs"
+                      >
+                        <span className="font-bold text-slate-900">
+                          {p.full_name}
+                        </span>
+                        <span className="text-slate-500">
+                          CPF: {p.cpf || "Não informado"} • {p.email}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Nome Completo *
+                  </Label>
+                  <Input
+                    value={form.specialist_name}
+                    onChange={(e) =>
+                      setForm({ ...form, specialist_name: e.target.value })
+                    }
+                    placeholder="Nome do profissional"
+                    className="mt-1 h-10 text-xs rounded-xl"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    CPF / CNPJ
+                  </Label>
+                  <Input
+                    value={form.specialist_document}
+                    onChange={(e) =>
+                      setForm({ ...form, specialist_document: e.target.value })
+                    }
+                    placeholder="000.000.000-00"
+                    className="mt-1 h-10 text-xs rounded-xl"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    WhatsApp / Telefone
+                  </Label>
+                  <Input
+                    value={form.specialist_phone}
+                    onChange={(e) =>
+                      setForm({ ...form, specialist_phone: e.target.value })
+                    }
+                    placeholder="(84) 99999-9999"
+                    className="mt-1 h-10 text-xs rounded-xl"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    E-mail
+                  </Label>
+                  <Input
+                    value={form.specialist_email}
+                    onChange={(e) =>
+                      setForm({ ...form, specialist_email: e.target.value })
+                    }
+                    placeholder="profissional@email.com"
+                    className="mt-1 h-10 text-xs rounded-xl"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* BLOCO 3: VIGÊNCIA E GRADE DE HORÁRIOS */}
+            <div className="bg-white p-6 rounded-2xl border border-slate-200/90 space-y-5">
+              <div className="border-b border-slate-100 pb-3">
+                <h2 className="text-sm font-bold text-slate-900">
+                  3. Vigência e Alocação de Agenda
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Período de validade do contrato e dias/turnos reservados na
+                  sala.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Data de Início *
+                  </Label>
+                  <Input
+                    type="date"
+                    value={form.start_date}
+                    onChange={(e) =>
+                      setForm({ ...form, start_date: e.target.value })
+                    }
+                    className="mt-1 h-10 text-xs font-semibold rounded-xl"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Data de Término *
+                  </Label>
+                  <Input
+                    type="date"
+                    value={form.end_date}
+                    onChange={(e) =>
+                      setForm({ ...form, end_date: e.target.value })
+                    }
+                    className="mt-1 h-10 text-xs font-semibold rounded-xl"
+                  />
+                </div>
+              </div>
+
+              {form.contract_type === "monthly_exclusive" &&
+              !form.allow_sublease ? (
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700 font-medium">
+                  Sala 100% exclusiva sem sublocação: todos os dias e horários
+                  da semana ficarão reservados para o profissional durante a
+                  vigência.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700 mb-2 block">
+                      {form.contract_type === "monthly_exclusive" &&
+                      form.allow_sublease
+                        ? "Dias da semana inicialmente abertos para sublocação:"
+                        : "Dias da semana reservados para este contrato:"}
+                    </Label>
+                    <div className="flex flex-wrap gap-2">
+                      {WEEK_DAYS.map((d) => {
+                        const active = form.daysOfWeek.includes(d.id);
+                        return (
+                          <button
+                            type="button"
+                            key={d.id}
+                            onClick={() => toggleDayOfWeek(d.id)}
+                            className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
+                              active
+                                ? "bg-slate-900 text-white border-slate-900"
+                                : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
+                            }`}
+                          >
+                            {d.full}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <Label className="text-xs font-semibold text-slate-700">
+                        Faixa de Turno
+                      </Label>
+                      <select
+                        value={form.selectedShift}
+                        onChange={(e) =>
+                          handleShiftChange(e.target.value as any)
+                        }
+                        className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800"
+                      >
+                        {SHIFT_OPTIONS.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <Label className="text-xs font-semibold text-slate-700">
+                        Hora Inicial
+                      </Label>
+                      <Input
+                        type="number"
+                        min="6"
+                        max="22"
+                        value={form.startHour}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            startHour: Number(e.target.value),
+                          })
+                        }
+                        className="mt-1 h-10 text-xs font-semibold rounded-xl"
+                      />
+                    </div>
+
+                    <div>
+                      <Label className="text-xs font-semibold text-slate-700">
+                        Hora Final
+                      </Label>
+                      <Input
+                        type="number"
+                        min="7"
+                        max="23"
+                        value={form.endHour}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            endHour: Number(e.target.value),
+                          })
+                        }
+                        className="mt-1 h-10 text-xs font-semibold rounded-xl"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* BLOCO 4: CONDIÇÕES FINANCEIRAS, SPLIT E ESCALONAMENTO */}
+            <div className="bg-white p-6 rounded-2xl border border-slate-200/90 space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">
+                    4. Valores, Vencimento, Encargos e Divisão (Split)
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Configure o valor da mensalidade, dia de vencimento, multa e
+                    repasses.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleAddPricingTier}
+                  className="h-8 rounded-xl border-slate-200 text-slate-700 font-semibold text-xs cursor-pointer"
+                >
+                  <Layers className="w-3.5 h-3.5 mr-1.5 text-[#BF4B24]" />
+                  {pricingTiers.length === 0
+                    ? "Adicionar Escalonamento por Período"
+                    : "Novo Período de Valor (+)"}
+                </Button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Ciclo de Cobrança
+                  </Label>
+                  <select
+                    value={form.billing_cycle}
+                    onChange={(e) =>
+                      setForm({ ...form, billing_cycle: e.target.value as any })
+                    }
+                    className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800"
+                  >
+                    <option value="monthly">Mensal</option>
+                    <option value="upfront">Valor Total Fechado</option>
+                    <option value="weekly">Semanal</option>
+                  </select>
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Dia de Vencimento *
+                  </Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    max="31"
+                    value={form.due_day}
+                    onChange={(e) =>
+                      setForm({ ...form, due_day: e.target.value })
+                    }
+                    className="mt-1 h-10 text-xs font-bold rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Valor Mensal / Base (R$) *
+                  </Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    placeholder="Ex: 1200.00"
+                    value={form.contract_value}
+                    onChange={(e) =>
+                      setForm({ ...form, contract_value: e.target.value })
+                    }
+                    className="mt-1 h-10 text-xs font-bold rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Valor por Sessão/Diária (R$)
+                  </Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    placeholder={`Auto: R$ ${getComputedSessionValue().toFixed(2)}`}
+                    value={form.session_value}
+                    onChange={(e) =>
+                      setForm({ ...form, session_value: e.target.value })
+                    }
+                    className="mt-1 h-10 text-xs font-semibold rounded-xl"
+                  />
+                </div>
+              </div>
+
+              {/* Escalonamento por períodos (se ativo) */}
+              {pricingTiers.length > 0 && (
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-800">
+                      Valores Escalonados por Período
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setPricingTiers([])}
+                      className="text-xs font-semibold text-red-600 hover:underline"
+                    >
+                      Remover escalonamento
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {pricingTiers.map((tier, idx) => (
+                      <div
+                        key={tier.id}
+                        className="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-end bg-white p-3 rounded-xl border border-slate-200"
+                      >
+                        <div className="md:col-span-3">
+                          <Label className="text-[10px] font-semibold text-slate-500">
+                            {idx + 1}º Período — Início
+                          </Label>
+                          <Input
+                            type="date"
+                            value={tier.start_date}
+                            onChange={(e) =>
+                              handleUpdatePricingTier(
+                                tier.id,
+                                "start_date",
+                                e.target.value,
+                              )
+                            }
+                            className="mt-1 h-9 text-xs"
+                          />
+                        </div>
+                        <div className="md:col-span-3">
+                          <Label className="text-[10px] font-semibold text-slate-500">
+                            Término
+                          </Label>
+                          <Input
+                            type="date"
+                            value={tier.end_date}
+                            onChange={(e) =>
+                              handleUpdatePricingTier(
+                                tier.id,
+                                "end_date",
+                                e.target.value,
+                              )
+                            }
+                            className="mt-1 h-9 text-xs"
+                          />
+                        </div>
+                        <div className="md:col-span-3">
+                          <Label className="text-[10px] font-semibold text-slate-700">
+                            Valor no Período (R$)
+                          </Label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            value={tier.contract_value}
+                            onChange={(e) =>
+                              handleUpdatePricingTier(
+                                tier.id,
+                                "contract_value",
+                                e.target.value,
+                              )
+                            }
+                            className="mt-1 h-9 text-xs font-bold"
+                          />
+                        </div>
+                        <div className="md:col-span-2">
+                          <Label className="text-[10px] font-semibold text-slate-500">
+                            Valor/Sessão
+                          </Label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            value={tier.session_value}
+                            onChange={(e) =>
+                              handleUpdatePricingTier(
+                                tier.id,
+                                "session_value",
+                                e.target.value,
+                              )
+                            }
+                            className="mt-1 h-9 text-xs"
+                          />
+                        </div>
+                        <div className="md:col-span-1 flex justify-end">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleRemovePricingTier(tier.id)}
+                            className="h-9 w-9 text-slate-400 hover:text-red-600"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Split e Multa/Juros */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-2 border-t border-slate-100">
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Taxa Fusion (%)
+                  </Label>
+                  <Input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    max="100"
+                    value={form.platform_fee_pct}
+                    onChange={(e) => handleFusionPctChange(e.target.value)}
+                    className="mt-1 h-10 text-xs font-bold rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    {parentCohostForFormRoom
+                      ? "Repasse Coanfitrião (%)"
+                      : "Repasse Clínica (%)"}
+                  </Label>
+                  <Input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    max="100"
+                    value={form.host_split_pct}
+                    onChange={(e) => handleHostPctChange(e.target.value)}
+                    className="mt-1 h-10 text-xs font-bold rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Multa por Atraso (%)
+                  </Label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="20"
+                    value={form.fine_pct}
+                    onChange={(e) =>
+                      setForm({ ...form, fine_pct: e.target.value })
+                    }
+                    className="mt-1 h-10 text-xs rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Juros ao Mês (% a.m.)
+                  </Label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="10"
+                    value={form.interest_pct}
+                    onChange={(e) =>
+                      setForm({ ...form, interest_pct: e.target.value })
+                    }
+                    className="mt-1 h-10 text-xs rounded-xl"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* BLOCO 5: ANEXO DO CONTRATO PDF E OBSERVAÇÕES */}
+            <div className="bg-white p-6 rounded-2xl border border-slate-200/90 space-y-4">
+              <div className="border-b border-slate-100 pb-3">
+                <h2 className="text-sm font-bold text-slate-900">
+                  5. Documento Assinado (PDF) e Observações
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Anexe o contrato em PDF referente a esta sala para que fique
+                  disponível no painel do profissional e da administração.
+                </p>
+              </div>
+
+              <div className="p-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-[#BF4B24] shrink-0">
+                    <UploadCloud className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-slate-900">
+                      {pdfFile
+                        ? `Novo arquivo selecionado: ${pdfFile.name}`
+                        : editingContract?.pdf_filename
+                          ? `PDF anexado: ${editingContract.pdf_filename}`
+                          : "Nenhum PDF anexado a este contrato"}
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      Formato aceito: PDF (disponibilizado automaticamente na
+                      sala selecionada).
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {editingContract?.pdf_url && !pdfFile && (
+                    <a
+                      href={editingContract.pdf_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-50 inline-flex items-center gap-1.5"
+                    >
+                      Ver PDF Atual
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  )}
+                  <label className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer transition-colors">
+                    {editingContract?.pdf_url || pdfFile
+                      ? "Substituir PDF"
+                      : "Escolher Arquivo PDF"}
+                    <input
+                      type="file"
+                      accept="application/pdf"
+                      className="hidden"
+                      onChange={(e) => setPdfFile(e.target.files?.[0] || null)}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <Label className="text-xs font-semibold text-slate-700">
+                  Observações Internas (Opcional)
+                </Label>
+                <Input
+                  value={form.notes}
+                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                  placeholder="Ex: Condição comercial negociada, reajuste ou observação específica desta sala"
+                  className="mt-1 h-10 text-xs rounded-xl"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* COLUNA LATERAL DIREITA: RESUMO EXECUTIVO FIXO (4 COLUNAS) */}
+          <div className="lg:col-span-4 lg:sticky lg:top-24 space-y-4">
+            <div className="bg-slate-900 text-white rounded-2xl p-6 space-y-5 shadow-lg tabular-nums">
+              <div className="border-b border-slate-800 pb-4">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Resumo Executivo do Contrato
+                </span>
+                <h3 className="text-lg font-bold text-white mt-1">
+                  {selectedRoomObj?.name || "Selecione uma sala"}
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Locatário:{" "}
+                  <strong className="text-white">
+                    {form.specialist_name || "Não informado"}
+                  </strong>
+                </p>
+              </div>
+
+              <div className="space-y-2.5 text-xs">
+                <div className="flex justify-between text-slate-300">
+                  <span>Vigência:</span>
+                  <span className="font-semibold text-white">
+                    {format(parseISO(form.start_date), "dd/MM/yy")} a{" "}
+                    {format(parseISO(form.end_date), "dd/MM/yy")}
+                  </span>
+                </div>
+
+                <div className="flex justify-between text-slate-300">
+                  <span>Vencimento Mensal:</span>
+                  <span className="font-semibold text-white">
+                    Todo dia {String(form.due_day || 8).padStart(2, "0")}
+                  </span>
+                </div>
+
+                <div className="flex justify-between text-slate-300">
+                  <span>Datas Alocadas no Período:</span>
+                  <span className="font-semibold text-white">
+                    {form.contract_type === "monthly_exclusive" &&
+                    !form.allow_sublease
+                      ? "Sala 100% Exclusiva"
+                      : `${previewDates.length} ocorrências`}
+                  </span>
+                </div>
+
+                <div className="flex justify-between text-slate-300">
+                  <span>Encargos após vencimento:</span>
+                  <span className="text-slate-300">
+                    Multa {previewFinePct}% + {previewInterestPct}% a.m.
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-800/90 border border-slate-700 space-y-2.5 text-xs">
+                <div className="flex justify-between items-baseline">
+                  <span className="text-slate-400">Valor Base:</span>
+                  <span className="text-lg font-bold text-white">
+                    R$ {formatBRL(previewContractVal)}
+                  </span>
+                </div>
+
+                <div className="pt-2 border-t border-slate-700 flex justify-between text-slate-300">
+                  <span>Receita Fusion ({previewFusionPct}%):</span>
+                  <span className="font-bold text-emerald-400">
+                    R${" "}
+                    {formatBRL((previewContractVal * previewFusionPct) / 100)}
+                  </span>
+                </div>
+
+                <div className="flex justify-between text-slate-300">
+                  <span>
+                    {parentCohostForFormRoom
+                      ? `Repasse Coanfitrião (${previewHostPct}%):`
+                      : `Repasse Clínica (${previewHostPct}%):`}
+                  </span>
+                  <span className="font-semibold text-white">
+                    R$ {formatBRL((previewContractVal * previewHostPct) / 100)}
+                  </span>
+                </div>
+
+                {form.allow_sublease && (
+                  <div className="pt-2 border-t border-slate-700 flex justify-between text-amber-300">
+                    <span>Sublocações futuras da sala:</span>
+                    <span className="font-bold">
+                      {form.cohost_split_pct || 80}% Coanfitrião
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2.5 pt-2">
+                <Button
+                  type="button"
+                  disabled={saving}
+                  onClick={handleSaveContract}
+                  className="w-full h-11 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold text-xs cursor-pointer"
+                >
+                  {saving ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Salvando e Sincronizando...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 mr-2" />
+                      Confirmar e Ativar Contrato
+                    </>
+                  )}
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setViewMode("list")}
+                  className="w-full h-10 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-semibold"
+                >
+                  Voltar sem salvar
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ==========================================================================
+  // VISÃO PADRÃO: LISTAGEM EXECUTIVA DE CONTRATOS
+  // ==========================================================================
   return (
     <div className="p-4 lg:p-8 w-full pb-32 font-sans">
       {/* HEADER */}
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6">
         <div>
-          <h1 className="text-xl md:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-2">
-            <FileText className="w-7 h-7 text-[#BF4B24] shrink-0" />
-            Gestão de Contratos, Turnos Fixos & Co-Anfitriões
+          <h1 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight">
+            Contratos, Turnos Fixos & Coanfitriões
           </h1>
-          <p className="text-xs md:text-sm text-slate-500 font-medium mt-1">
-            Controle de salas fixas mensais, subcontratos de Co-Anfitrião,
-            cobranças via PIX/Boleto/Cartão com multa e juros no Asaas.
+          <p className="text-sm text-slate-500 mt-1">
+            Gestão de salas exclusivas, turnos fixos recorrentes, cobranças
+            mensais e documentos PDF por sala.
           </p>
         </div>
         <Button
-          onClick={openCreateModal}
-          className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black h-12 px-6 rounded-xl shadow-md w-full sm:w-auto"
+          onClick={openCreateFormPage}
+          className="bg-slate-900 hover:bg-slate-800 text-white font-semibold h-10 px-5 rounded-xl text-xs cursor-pointer"
         >
-          <Plus className="w-5 h-5 mr-2" /> Novo Contrato de Sala
+          <Plus className="w-4 h-4 mr-2" /> Novo Contrato de Sala
         </Button>
       </div>
 
       {/* KPIs DE CONTRATOS */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 tabular-nums">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/90">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-400 uppercase">
-              Volume Contratual Vigente
+            <span className="text-xs font-semibold text-slate-500">
+              Volume Contratual Ativo
             </span>
-            <Wallet className="w-5 h-5 text-emerald-600" />
+            <Wallet className="w-4 h-4 text-slate-400" />
           </div>
-          <p className="text-2xl font-black text-slate-900">
-            R${" "}
-            {totalContractRevenue.toLocaleString("pt-BR", {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}
+          <p className="text-2xl font-bold text-slate-900">
+            R$ {formatBRL(totalContractRevenue)}
           </p>
-          <p className="text-[11px] font-bold text-[#BF4B24] mt-1">
-            Take Fusion Contratos: R${" "}
-            {totalFusionContractTake.toLocaleString("pt-BR", {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}
+          <p className="text-xs font-semibold text-emerald-700 mt-1">
+            Receita Fusion: R$ {formatBRL(totalFusionContractTake)}
           </p>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/90">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-400 uppercase">
+            <span className="text-xs font-semibold text-slate-500">
               Contratos Vigentes
             </span>
-            <CalendarDays className="w-5 h-5 text-[#BF4B24]" />
+            <CalendarDays className="w-4 h-4 text-slate-400" />
           </div>
-          <p className="text-2xl font-black text-slate-900">
+          <p className="text-2xl font-bold text-slate-900">
             {activeContracts.length}
           </p>
-          <p className="text-[11px] font-medium text-slate-400 mt-1">
-            Sincronizados automaticamente na agenda
+          <p className="text-xs text-slate-500 mt-1">
+            Sincronizados na agenda das salas
           </p>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/90">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-400 uppercase">
-              Salas com Co-Anfitrião
+            <span className="text-xs font-semibold text-slate-500">
+              Salas com Coanfitrião
             </span>
-            <Sparkles className="w-5 h-5 text-purple-600" />
+            <Building2 className="w-4 h-4 text-[#BF4B24]" />
           </div>
-          <p className="text-2xl font-black text-slate-900">{cohostCount}</p>
-          <p className="text-[11px] font-medium text-slate-400 mt-1">
-            Sublocação na vitrine habilitada
+          <p className="text-2xl font-bold text-slate-900">{cohostCount}</p>
+          <p className="text-xs text-slate-500 mt-1">
+            Sublocação habilitada na vitrine
           </p>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/90">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-400 uppercase">
-              Mensalidades Vencidas ({currentMonthLabel})
+            <span className="text-xs font-semibold text-slate-500">
+              Mensalidades em Atraso ({currentMonthLabel})
             </span>
             <CalendarClock
-              className={`w-5 h-5 ${overdueCount > 0 ? "text-red-500" : "text-emerald-500"}`}
+              className={`w-4 h-4 ${
+                overdueCount > 0 ? "text-red-500" : "text-emerald-600"
+              }`}
             />
           </div>
           <p
-            className={`text-2xl font-black ${overdueCount > 0 ? "text-red-600" : "text-slate-900"}`}
+            className={`text-2xl font-bold ${
+              overdueCount > 0 ? "text-red-600" : "text-slate-900"
+            }`}
           >
             {overdueCount}
           </p>
-          <p className="text-[11px] font-medium text-slate-400 mt-1">
-            Com multa e juros aplicados após vencimento
+          <p className="text-xs text-slate-500 mt-1">
+            Cálculo automático de multa e juros
           </p>
         </div>
       </div>
 
       {/* BARRA DE FILTROS */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-xs p-4 mb-6 flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center justify-between gap-3">
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-4 mb-6 flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center justify-between gap-3">
         <div className="relative flex-1 min-w-[220px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <Input
-            placeholder="Buscar especialista, sala ou clínica..."
+            placeholder="Buscar profissional, sala ou clínica..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="h-10 pl-9 rounded-xl border-slate-200 w-full"
+            className="h-9 pl-9 rounded-xl border-slate-200 text-xs w-full"
           />
         </div>
 
         <select
           value={typeFilter}
           onChange={(e) => setTypeFilter(e.target.value)}
-          className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none"
+          className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none"
         >
           <option value="all">Todas as Modalidades</option>
-          <option value="monthly_exclusive">Fixo Mensal / Co-Anfitrião</option>
+          <option value="monthly_exclusive">
+            Sala Exclusiva / Coanfitrião
+          </option>
           <option value="fixed_shift">Turno Fixo Semanal</option>
           <option value="fixed_daily">Diária Fixa Semanal</option>
         </select>
@@ -1844,11 +2845,11 @@ export function AdminContractsTab({
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none"
+          className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none"
         >
           <option value="all">Todos os Status</option>
           <option value="active">Vigentes</option>
-          <option value="overdue">Pagamento em Atraso no Mês</option>
+          <option value="overdue">Mensalidade Vencida no Mês</option>
           <option value="pending_signature">Aguardando Assinatura</option>
           <option value="expired">Encerrados</option>
           <option value="cancelled">Cancelados</option>
@@ -1856,38 +2857,40 @@ export function AdminContractsTab({
       </div>
 
       {/* TABELA DE CONTRATOS */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+      <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden">
         {loading ? (
           <div className="py-20 flex justify-center">
             <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
           </div>
         ) : filteredContracts.length === 0 ? (
           <div className="py-16 text-center px-4">
-            <FileText className="w-12 h-12 text-slate-200 mx-auto mb-3" />
-            <p className="text-slate-600 font-bold">
-              Nenhum contrato cadastrado para este filtro.
+            <FileText className="w-10 h-10 text-slate-200 mx-auto mb-3" />
+            <p className="text-slate-700 font-bold text-sm">
+              Nenhum contrato encontrado para este filtro.
             </p>
             <p className="text-xs text-slate-400 mt-1">
-              Cadastre contratos mensais, turnos fixos ou diárias recorrentes
-              para bloquear a agenda ou habilitar um Co-Anfitrião.
+              Clique em "Novo Contrato de Sala" para cadastrar uma alocação fixa
+              ou habilitar um coanfitrião.
             </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm whitespace-nowrap">
-              <thead className="bg-slate-50 text-slate-500 font-bold text-[10px] uppercase tracking-wider border-b border-slate-100">
+            <table className="w-full text-left text-xs whitespace-nowrap tabular-nums">
+              <thead className="bg-slate-50 text-slate-500 font-semibold text-[11px] border-b border-slate-200">
                 <tr>
-                  <th className="px-6 py-4">Sala & Clínica</th>
-                  <th className="px-6 py-4">Locatário / Co-Anfitrião</th>
-                  <th className="px-6 py-4">Modalidade & Alocação</th>
-                  <th className="px-6 py-4">Vigência (Início → Fim)</th>
-                  <th className="px-6 py-4 text-center">
-                    Vencimento, Multa & Juros
+                  <th className="px-6 py-3.5">Sala & Clínica</th>
+                  <th className="px-6 py-3.5">Locatário / Coanfitrião</th>
+                  <th className="px-6 py-3.5">Modalidade & Alocação</th>
+                  <th className="px-6 py-3.5">Vigência</th>
+                  <th className="px-6 py-3.5 text-center">
+                    Fatura Mensal ({currentMonthLabel})
                   </th>
-                  <th className="px-6 py-4 text-right">Valor Fixo & Divisão</th>
-                  <th className="px-6 py-4 text-center">Contrato (PDF)</th>
-                  <th className="px-6 py-4 text-center">Status</th>
-                  <th className="px-6 py-4 text-center">Ações</th>
+                  <th className="px-6 py-3.5 text-right">
+                    Valor & Divisão (Split)
+                  </th>
+                  <th className="px-6 py-3.5 text-center">Contrato (PDF)</th>
+                  <th className="px-6 py-3.5 text-center">Status</th>
+                  <th className="px-6 py-3.5 text-center">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -1908,44 +2911,42 @@ export function AdminContractsTab({
                   return (
                     <tr
                       key={c.id}
-                      className="hover:bg-orange-50/20 transition-colors"
+                      className="hover:bg-slate-50/80 transition-colors"
                     >
                       <td className="px-6 py-4">
-                        <p className="font-black text-slate-900 flex items-center gap-1.5">
-                          <Building2 className="w-4 h-4 text-slate-400" />
+                        <p className="font-bold text-slate-900">
                           {c.room_name}
                         </p>
-                        <p className="text-[11px] font-bold text-slate-400 ml-5">
+                        <p className="text-[11px] text-slate-400 mt-0.5">
                           {c.clinic_name}
                         </p>
                       </td>
 
                       <td className="px-6 py-4">
-                        <p className="font-bold text-[#BF4B24]">
+                        <p className="font-bold text-slate-900">
                           {c.specialist_name}
                         </p>
-                        <p className="text-[11px] text-slate-400 font-medium">
+                        <p className="text-[11px] text-slate-400 mt-0.5">
                           {c.specialist_document ||
                             c.specialist_phone ||
                             c.specialist_email ||
-                            "Especialista Parceiro"}
+                            "Profissional Parceiro"}
                         </p>
                       </td>
 
                       <td className="px-6 py-4">
                         {getContractTypeBadge(c)}
-                        <p className="text-[11px] font-bold text-slate-600 mt-1 flex items-center gap-1">
-                          <Clock className="w-3 h-3 text-slate-400" />
+                        <p className="text-[11px] text-slate-500 mt-1">
                           {formatScheduleSummary(c)}
                         </p>
                       </td>
 
                       <td className="px-6 py-4">
-                        <p className="font-bold text-slate-700">
-                          {format(parseISO(c.start_date), "dd/MM/yyyy")} até{" "}
+                        <p className="font-semibold text-slate-800">
+                          {format(parseISO(c.start_date), "dd/MM/yyyy")} a{" "}
                           {format(parseISO(c.end_date), "dd/MM/yyyy")}
                         </p>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase mt-0.5">
+                        <p className="text-[11px] text-slate-400 mt-0.5">
                           Ciclo:{" "}
                           {c.billing_cycle === "monthly"
                             ? "Mensal"
@@ -1957,18 +2958,8 @@ export function AdminContractsTab({
 
                       <td className="px-6 py-4 text-center">
                         <div className="flex flex-col items-center gap-1">
-                          <span className="text-xs font-black text-slate-800 flex items-center gap-1">
-                            <CalendarClock className="w-3.5 h-3.5 text-[#BF4B24]" />
-                            Todo dia {String(c.due_day || 8).padStart(2, "0")}
-                          </span>
-
-                          <span className="text-[10px] font-semibold text-slate-400">
-                            Multa {paymentInfo.finePct}% • Juros{" "}
-                            {paymentInfo.interestPct}% a.m.
-                          </span>
-
                           {paymentInfo.state === "paid" && (
-                            <Badge className="bg-emerald-100 text-emerald-800 border-0 text-[10px] font-black">
+                            <Badge className="bg-emerald-50 text-emerald-700 border-0 text-[10px] font-semibold">
                               <CheckCircle2 className="w-3 h-3 mr-1" />
                               {paymentInfo.label}
                             </Badge>
@@ -1976,26 +2967,25 @@ export function AdminContractsTab({
 
                           {paymentInfo.state === "overdue" && (
                             <div className="flex flex-col items-center gap-0.5">
-                              <Badge className="bg-red-100 text-red-800 border-0 text-[10px] font-black">
+                              <Badge className="bg-red-50 text-red-700 border-0 text-[10px] font-semibold">
                                 <AlertTriangle className="w-3 h-3 mr-1" />
                                 {paymentInfo.label}
                               </Badge>
-                              <span className="text-[10px] font-black text-red-600">
-                                Com encargos: R${" "}
+                              <span className="text-[10px] font-bold text-red-600">
+                                Atualizado: R${" "}
                                 {formatBRL(paymentInfo.totalWithChargesBrl)}
                               </span>
                             </div>
                           )}
 
                           {paymentInfo.state === "due_today" && (
-                            <Badge className="bg-amber-100 text-amber-800 border-0 text-[10px] font-black">
-                              <Clock className="w-3 h-3 mr-1" />
+                            <Badge className="bg-amber-50 text-amber-800 border-0 text-[10px] font-semibold">
                               {paymentInfo.label}
                             </Badge>
                           )}
 
                           {paymentInfo.state === "upcoming" && (
-                            <Badge className="bg-slate-100 text-slate-700 border-0 text-[10px] font-bold">
+                            <Badge className="bg-slate-100 text-slate-700 border-0 text-[10px] font-semibold">
                               {paymentInfo.label}
                             </Badge>
                           )}
@@ -2006,27 +2996,29 @@ export function AdminContractsTab({
                                 {paymentInfo.state !== "paid" && (
                                   <button
                                     type="button"
-                                    onClick={() => openAsaasPayModal(c, "PIX")}
-                                    className="text-[10px] font-black bg-slate-900 text-white px-2.5 py-1 rounded-md hover:bg-slate-800 transition-colors"
+                                    onClick={() =>
+                                      openAsaasPayModal(c, "BOLETO")
+                                    }
+                                    className="text-[10px] font-semibold bg-slate-900 text-white px-2.5 py-1 rounded-md hover:bg-slate-800 transition-colors cursor-pointer"
                                   >
-                                    Pagar / Cobrar Asaas
+                                    Emitir Cobrança
                                   </button>
                                 )}
                                 <button
                                   type="button"
                                   disabled={togglingPaymentId === c.id}
                                   onClick={() => handleToggleMonthPaid(c)}
-                                  className={`text-[10px] font-bold underline transition-colors ${
+                                  className={`text-[10px] font-semibold underline transition-colors cursor-pointer ${
                                     paymentInfo.state === "paid"
                                       ? "text-slate-400 hover:text-slate-600"
                                       : "text-emerald-700 hover:text-emerald-900"
                                   }`}
                                 >
                                   {togglingPaymentId === c.id
-                                    ? "Atualizando..."
+                                    ? "..."
                                     : paymentInfo.state === "paid"
                                       ? "Desfazer baixa"
-                                      : `Dar baixa manual`}
+                                      : "Baixa manual"}
                                 </button>
                               </div>
                             )}
@@ -2036,49 +3028,26 @@ export function AdminContractsTab({
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
                           {tiersList.length > 0 && (
-                            <Badge className="bg-orange-100 text-[#BF4B24] border-0 text-[9px] font-black">
-                              <Layers className="w-3 h-3 mr-1" />
-                              Escalonado ({tiersList.length} períodos)
+                            <Badge className="bg-orange-50 text-[#BF4B24] border-0 text-[9px] font-semibold">
+                              {tiersList.length} períodos
                             </Badge>
                           )}
-                          <p className="font-black text-slate-900">
-                            R${" "}
-                            {effectivePricing.contractValue.toLocaleString(
-                              "pt-BR",
-                              {
-                                minimumFractionDigits: 2,
-                              },
-                            )}
+                          <p className="font-bold text-slate-900">
+                            R$ {formatBRL(effectivePricing.contractValue)}
                           </p>
                         </div>
 
-                        <div className="flex items-center justify-end gap-2 mt-0.5">
-                          <span className="text-[10px] font-bold text-[#BF4B24]">
-                            Fusion ({fusionPct}%): R${" "}
-                            {fusionAmount.toLocaleString("pt-BR", {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}
-                          </span>
-                          <span className="text-slate-300">•</span>
-                          <span className="text-[10px] font-bold text-emerald-700">
-                            {parentCohost
-                              ? `Co-Host ${parentCohost.specialist_name.split(" ")[0]} (${recipientPct}%):`
-                              : `Anfitrião (${recipientPct}%):`}{" "}
-                            R${" "}
-                            {recipientAmount.toLocaleString("pt-BR", {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}
-                          </span>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          Fusion ({fusionPct}%):{" "}
+                          <strong className="text-emerald-700">
+                            R$ {formatBRL(fusionAmount)}
+                          </strong>{" "}
+                          •{" "}
+                          {parentCohost
+                            ? `Co-Host (${recipientPct}%):`
+                            : `Clínica (${recipientPct}%):`}{" "}
+                          R$ {formatBRL(recipientAmount)}
                         </div>
-                        {c.allow_sublease && (
-                          <p className="text-[10px] font-black text-purple-700 mt-0.5">
-                            Sublocações a partir de{" "}
-                            {format(parseISO(c.start_date), "dd/MM/yy")}:{" "}
-                            {c.cohost_split_pct}% Co-Anfitrião
-                          </p>
-                        )}
                       </td>
 
                       <td className="px-6 py-4 text-center">
@@ -2088,14 +3057,14 @@ export function AdminContractsTab({
                               href={c.pdf_url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-bold transition-colors"
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-semibold transition-colors"
                             >
                               <FileCheck2 className="w-3.5 h-3.5" />
-                              Abrir PDF
+                              PDF
                               <ExternalLink className="w-3 h-3" />
                             </a>
                             <label
-                              title="Substituir PDF assinado"
+                              title="Substituir PDF assinado desta sala"
                               className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:text-slate-900 hover:bg-slate-50 cursor-pointer"
                             >
                               <UploadCloud className="w-3.5 h-3.5" />
@@ -2110,13 +3079,13 @@ export function AdminContractsTab({
                             </label>
                           </div>
                         ) : (
-                          <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-dashed border-amber-400 bg-amber-50/60 text-amber-800 hover:bg-amber-100 text-xs font-bold cursor-pointer transition-colors">
+                          <label className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-dashed border-slate-300 bg-slate-50 text-slate-700 hover:bg-slate-100 text-xs font-semibold cursor-pointer transition-colors">
                             {uploadingPdfId === c.id ? (
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
                             ) : (
-                              <UploadCloud className="w-3.5 h-3.5" />
+                              <UploadCloud className="w-3.5 h-3.5 text-[#BF4B24]" />
                             )}
-                            Anexar PDF Assinado
+                            Anexar PDF
                             <input
                               type="file"
                               accept="application/pdf"
@@ -2138,8 +3107,8 @@ export function AdminContractsTab({
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => openEditModal(c)}
-                            className="h-8 font-bold border-slate-200 text-slate-700"
+                            onClick={() => openEditFormPage(c)}
+                            className="h-8 font-semibold text-xs border-slate-200 text-slate-700 cursor-pointer"
                           >
                             <Edit3 className="w-3.5 h-3.5 mr-1" /> Editar
                           </Button>
@@ -2162,17 +3131,16 @@ export function AdminContractsTab({
         )}
       </div>
 
-      {/* MODAL DE COBRANÇA / PAGAMENTO ASAAS DO CONTRATO (PIX, BOLETO, CARTÃO) */}
+      {/* MODAL DE COBRANÇA ASAAS (BOLETO / PIX / CARTÃO) */}
       <Dialog open={payModalOpen} onOpenChange={setPayModalOpen}>
         <DialogContent className="sm:max-w-lg bg-white border-slate-200 rounded-2xl">
           <DialogHeader>
             <DialogTitle className="text-lg font-bold text-slate-900">
-              Mensalidade do Contrato ({currentMonthLabel})
+              Cobrança Mensal ({currentMonthLabel})
             </DialogTitle>
             <DialogDescription className="text-xs text-slate-500">
-              Gere o PIX, Boleto Bancário ou pague via Cartão de Crédito. Se
-              estiver em atraso, a multa e os juros são aplicados
-              automaticamente.
+              Emita o Boleto Registrado, QR Code PIX ou processe via Cartão para
+              o contrato desta sala.
             </DialogDescription>
           </DialogHeader>
 
@@ -2180,13 +3148,19 @@ export function AdminContractsTab({
             <div className="space-y-4">
               <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 text-xs tabular-nums">
                 <div className="flex justify-between text-slate-600">
-                  <span>Locatário / Coanfitrião:</span>
+                  <span>Sala:</span>
+                  <span className="font-bold text-slate-900">
+                    {payContract.room_name}
+                  </span>
+                </div>
+                <div className="flex justify-between text-slate-600">
+                  <span>Profissional:</span>
                   <span className="font-bold text-slate-900">
                     {payContract.specialist_name}
                   </span>
                 </div>
                 <div className="flex justify-between text-slate-600">
-                  <span>Vencimento da Competência:</span>
+                  <span>Vencimento:</span>
                   <span className="font-semibold text-slate-800">
                     {format(
                       parseISO(activePayPreview.dueDateIso),
@@ -2195,7 +3169,7 @@ export function AdminContractsTab({
                   </span>
                 </div>
                 <div className="flex justify-between text-slate-600">
-                  <span>Valor base do contrato:</span>
+                  <span>Valor Base:</span>
                   <span className="font-semibold text-slate-900">
                     R$ {formatBRL(activePayBaseVal)}
                   </span>
@@ -2204,16 +3178,14 @@ export function AdminContractsTab({
                 {activePayPreview.daysLate > 0 && (
                   <>
                     <div className="flex justify-between text-red-700">
-                      <span>
-                        Multa por atraso ({activePayPreview.finePct}%):
-                      </span>
+                      <span>Multa ({activePayPreview.finePct}%):</span>
                       <span className="font-semibold">
                         + R$ {formatBRL(activePayPreview.fineBrl)}
                       </span>
                     </div>
                     <div className="flex justify-between text-red-700">
                       <span>
-                        Juros pro-rata ({activePayPreview.daysLate}d •{" "}
+                        Juros ({activePayPreview.daysLate}d •{" "}
                         {activePayPreview.interestPct}% a.m.):
                       </span>
                       <span className="font-semibold">
@@ -2234,7 +3206,7 @@ export function AdminContractsTab({
               </div>
 
               <div className="grid grid-cols-3 gap-2 bg-slate-100 p-1 rounded-xl">
-                {(["PIX", "BOLETO", "CREDIT_CARD"] as const).map((m) => (
+                {(["BOLETO", "PIX", "CREDIT_CARD"] as const).map((m) => (
                   <button
                     key={m}
                     type="button"
@@ -2242,13 +3214,13 @@ export function AdminContractsTab({
                       setPayMethod(m);
                       setGeneratedPaymentId(null);
                     }}
-                    className={`py-2 rounded-lg text-xs font-semibold transition-all ${
+                    className={`py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                       payMethod === m
                         ? "bg-white text-slate-900 shadow-2xs"
                         : "text-slate-600 hover:text-slate-900"
                     }`}
                   >
-                    {m === "PIX" ? "PIX" : m === "BOLETO" ? "Boleto" : "Cartão"}
+                    {m === "BOLETO" ? "Boleto" : m === "PIX" ? "PIX" : "Cartão"}
                   </button>
                 ))}
               </div>
@@ -2365,17 +3337,13 @@ export function AdminContractsTab({
                     <Copy className="w-3.5 h-3.5 mr-1.5" />
                     Copiar Código PIX Copia e Cola
                   </Button>
-                  <p className="text-[11px] text-emerald-700 font-medium flex items-center gap-1.5">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Aguardando confirmação automática do pagamento...
-                  </p>
                 </div>
               )}
 
               {payMethod === "BOLETO" && generatedPaymentId && (
                 <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
                   <p className="text-xs font-bold text-slate-900">
-                    Boleto Registrado Emitido no Asaas
+                    Boleto Registrado Emitido
                   </p>
                   {boletoLine && (
                     <div className="p-2.5 bg-white rounded-lg border border-slate-200 font-mono text-[11px] break-all text-slate-700">
@@ -2418,915 +3386,24 @@ export function AdminContractsTab({
                   type="button"
                   disabled={payProcessing}
                   onClick={handleExecuteAsaasContractCharge}
-                  className="w-full h-11 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs"
+                  className="w-full h-11 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs cursor-pointer"
                 >
                   {payProcessing ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                       Comunicando com o Asaas...
                     </>
-                  ) : payMethod === "PIX" ? (
-                    `Gerar QR Code PIX (R$ ${formatBRL(activePayPreview.totalWithChargesBrl)})`
                   ) : payMethod === "BOLETO" ? (
                     `Emitir Boleto Registrado (R$ ${formatBRL(activePayPreview.totalWithChargesBrl)})`
+                  ) : payMethod === "PIX" ? (
+                    `Gerar QR Code PIX (R$ ${formatBRL(activePayPreview.totalWithChargesBrl)})`
                   ) : (
-                    `Cobrar no Cartão Agora (R$ ${formatBRL(activePayPreview.totalWithChargesBrl)})`
+                    `Cobrar no Cartão (R$ ${formatBRL(activePayPreview.totalWithChargesBrl)})`
                   )}
                 </Button>
               )}
             </div>
           )}
-        </DialogContent>
-      </Dialog>
-
-      {/* MODAL COMPLETO CRIAR / EDITAR CONTRATO */}
-      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
-        <DialogContent className="max-w-[95vw] sm:max-w-3xl max-h-[92vh] overflow-y-auto bg-white">
-          <DialogHeader>
-            <DialogTitle className="text-lg sm:text-xl font-black text-slate-900 flex items-center gap-2">
-              <FileText className="w-5 h-5 text-[#BF4B24]" />
-              {editingContract
-                ? "Editar Contrato de Locação"
-                : "Novo Contrato de Sala & Alocação na Agenda"}
-            </DialogTitle>
-            <DialogDescription>
-              Configure a modalidade contratual, vencimento, multa e juros de
-              atraso (estilo Asaas), Modo Co-Anfitrião ou Subcontratos Fixos.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-6 py-2">
-            {/* ALERTA QUANDO A SALA SELECIONADA JÁ POSSUI UM CO-ANFITRIÃO ATIVO */}
-            {parentCohostForModalRoom && (
-              <div className="p-4 rounded-2xl bg-slate-900 text-white border border-slate-800 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
-                    <Building2 className="w-4 h-4" />
-                    Subcontrato Fixo dentro da Sala do Co-Anfitrião
-                  </span>
-                  <Badge className="bg-emerald-500/20 text-emerald-300 border-0 text-[10px] font-bold">
-                    Repasse Personalizável
-                  </Badge>
-                </div>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  Esta sala possui contrato exclusivo com o Co-Anfitrião{" "}
-                  <strong className="text-white">
-                    {parentCohostForModalRoom.specialist_name}
-                  </strong>{" "}
-                  (vigência de{" "}
-                  {format(
-                    parseISO(parentCohostForModalRoom.start_date),
-                    "dd/MM/yyyy",
-                  )}{" "}
-                  a{" "}
-                  {format(
-                    parseISO(parentCohostForModalRoom.end_date),
-                    "dd/MM/yyyy",
-                  )}
-                  ). Este novo contrato fixo (Turno ou Diária) alocará os dias
-                  escolhidos abaixo, não poderá sublocar a sala e terá o repasse
-                  configurável (Padrão: 80% Co-Anfitrião e 20% Fusion, mas você
-                  pode editar abaixo).
-                </p>
-              </div>
-            )}
-
-            {/* 1. SALA E MODALIDADE */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <Label className="text-xs font-bold uppercase text-slate-500">
-                  Sala do Contrato *
-                </Label>
-                <select
-                  value={form.room_id}
-                  onChange={(e) => {
-                    const nextRoomId = e.target.value;
-                    const cohostOnRoom =
-                      activeCohostContractByRoomId.get(nextRoomId);
-                    const isSub =
-                      cohostOnRoom &&
-                      (!editingContract ||
-                        editingContract.id !== cohostOnRoom.id);
-
-                    setForm({
-                      ...form,
-                      room_id: nextRoomId,
-                      contract_type:
-                        isSub && form.contract_type === "monthly_exclusive"
-                          ? "fixed_daily"
-                          : form.contract_type,
-                      allow_sublease: isSub ? false : form.allow_sublease,
-                      platform_fee_pct: isSub ? "20" : form.platform_fee_pct,
-                      host_split_pct: isSub ? "80" : form.host_split_pct,
-                    });
-                  }}
-                  disabled={Boolean(preselectedRoomId)}
-                  className="mt-1 w-full h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-800 outline-none"
-                >
-                  <option value="">Selecione uma sala...</option>
-                  {rooms.map((r) => {
-                    const roomCohost = activeCohostContractByRoomId.get(r.id);
-                    return (
-                      <option key={r.id} value={r.id}>
-                        {r.name} ({String(r.tier || "start").toUpperCase()})
-                        {roomCohost
-                          ? ` — [Co-Host: ${roomCohost.specialist_name}]`
-                          : ""}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-
-              <div>
-                <Label className="text-xs font-bold uppercase text-slate-500">
-                  Modalidade de Contrato *
-                </Label>
-                <select
-                  value={form.contract_type}
-                  onChange={(e) => {
-                    const nextType = e.target.value as any;
-                    setForm({
-                      ...form,
-                      contract_type: nextType,
-                      allow_sublease:
-                        nextType === "monthly_exclusive" &&
-                        !parentCohostForModalRoom
-                          ? form.allow_sublease
-                          : false,
-                      daysOfWeek:
-                        nextType === "monthly_exclusive" && !form.allow_sublease
-                          ? [1, 2, 3, 4, 5, 6, 0]
-                          : form.daysOfWeek,
-                    });
-                  }}
-                  className="mt-1 w-full h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-bold text-slate-800 outline-none"
-                >
-                  {!parentCohostForModalRoom && (
-                    <option value="monthly_exclusive">
-                      Contrato Fixo Mensal (Sala Exclusiva / Co-Anfitrião)
-                    </option>
-                  )}
-                  <option value="fixed_shift">
-                    Contrato de Turno Fixo (Ex: Toda Segunda pela Manhã)
-                  </option>
-                  <option value="fixed_daily">
-                    Contrato de Diária Fixa (Ex: Toda Segunda o Dia Todo)
-                  </option>
-                  <option value="custom_daily">
-                    Contrato de Diárias Personalizadas
-                  </option>
-                </select>
-              </div>
-            </div>
-
-            {/* 2. ESPECIALISTA LOCATÁRIO */}
-            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-4">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs font-black uppercase text-slate-600 flex items-center gap-1.5">
-                  <Users className="w-4 h-4 text-[#BF4B24]" />
-                  {parentCohostForModalRoom
-                    ? "Profissional do Subcontrato Fixo (Sem direito a sublocar)"
-                    : "Profissional Locatário (Ou Co-Anfitrião da Sala)"}
-                </Label>
-                {form.specialist_id && (
-                  <Badge className="bg-emerald-100 text-emerald-800 border-0 text-[10px]">
-                    Vinculado ao Perfil da Plataforma
-                  </Badge>
-                )}
-              </div>
-
-              <div className="relative">
-                <Input
-                  placeholder="Buscar profissional já cadastrado pelo nome ou CPF..."
-                  value={specSearch}
-                  onChange={(e) => setSpecSearch(e.target.value)}
-                  className="bg-white border-slate-200 h-10 text-sm"
-                />
-                {filteredSpecialists.length > 0 && (
-                  <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-44 overflow-y-auto">
-                    {filteredSpecialists.slice(0, 8).map((p) => (
-                      <button
-                        type="button"
-                        key={p.id}
-                        onClick={() => {
-                          setForm({
-                            ...form,
-                            specialist_id: p.id,
-                            specialist_name: p.full_name || "",
-                            specialist_document: p.cpf || "",
-                            specialist_email: p.email || "",
-                            specialist_phone: p.whatsapp || p.phone || "",
-                          });
-                          setSpecSearch("");
-                        }}
-                        className="w-full text-left px-4 py-2.5 hover:bg-orange-50 border-b border-slate-100 last:border-0 flex items-center justify-between"
-                      >
-                        <span className="font-bold text-sm text-slate-800">
-                          {p.full_name}
-                        </span>
-                        <span className="text-xs text-slate-400">
-                          CPF: {p.cpf || "N/A"}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-xs font-bold text-slate-600">
-                    Nome Completo do Locatário *
-                  </Label>
-                  <Input
-                    value={form.specialist_name}
-                    onChange={(e) =>
-                      setForm({ ...form, specialist_name: e.target.value })
-                    }
-                    placeholder="Ex: Dra. Aniely Barreto"
-                    className="mt-1 bg-white"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs font-bold text-slate-600">
-                    CPF / CNPJ
-                  </Label>
-                  <Input
-                    value={form.specialist_document}
-                    onChange={(e) =>
-                      setForm({ ...form, specialist_document: e.target.value })
-                    }
-                    placeholder="000.000.000-00"
-                    className="mt-1 bg-white"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs font-bold text-slate-600">
-                    WhatsApp / Telefone
-                  </Label>
-                  <Input
-                    value={form.specialist_phone}
-                    onChange={(e) =>
-                      setForm({ ...form, specialist_phone: e.target.value })
-                    }
-                    placeholder="(84) 99999-9999"
-                    className="mt-1 bg-white"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs font-bold text-slate-600">
-                    E-mail
-                  </Label>
-                  <Input
-                    value={form.specialist_email}
-                    onChange={(e) =>
-                      setForm({ ...form, specialist_email: e.target.value })
-                    }
-                    placeholder="especialista@email.com"
-                    className="mt-1 bg-white"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* 3. REGRA DE CO-ANFITRIÃO (Apenas para Contrato Mensal Principal) */}
-            {form.contract_type === "monthly_exclusive" &&
-              !parentCohostForModalRoom && (
-                <div className="p-5 rounded-2xl border-2 border-purple-200 bg-purple-50/40 space-y-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h4 className="font-black text-purple-950 flex items-center gap-2 text-sm">
-                        <Sparkles className="w-4 h-4 text-purple-600" />
-                        Ativar Modo Co-Anfitrião (Direito de Sublocação na
-                        Fusion)
-                      </h4>
-                      <p className="text-xs text-purple-800/80 font-medium mt-1">
-                        O Co-Anfitrião poderá gerenciar os horários da sala e
-                        receberá a porcentagem estipulada abaixo de tudo que
-                        sublocar (avulso ou subcontratos) a partir da Data
-                        Inicial deste contrato.
-                      </p>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={form.allow_sublease}
-                      onChange={(e) => {
-                        const checked = e.target.checked;
-                        setForm({
-                          ...form,
-                          allow_sublease: checked,
-                          cohost_split_pct: checked ? "80" : "0",
-                          daysOfWeek: checked ? [2, 4] : [1, 2, 3, 4, 5, 6, 0],
-                        });
-                      }}
-                      className="h-5 w-5 accent-purple-600 rounded cursor-pointer mt-1"
-                    />
-                  </div>
-
-                  {form.allow_sublease && (
-                    <div className="pt-2 border-t border-purple-200/60 grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
-                      <div>
-                        <Label className="text-xs font-bold text-purple-900">
-                          Participação do Co-Anfitrião nas Sublocações Avulsas
-                          (%)
-                        </Label>
-                        <div className="relative mt-1">
-                          <Input
-                            type="number"
-                            min="0"
-                            max="100"
-                            value={form.cohost_split_pct}
-                            onChange={(e) =>
-                              setForm({
-                                ...form,
-                                cohost_split_pct: e.target.value,
-                              })
-                            }
-                            className="bg-white border-purple-200 font-black text-purple-900 pr-8"
-                          />
-                          <Percent className="w-4 h-4 text-purple-500 absolute right-3 top-1/2 -translate-y-1/2" />
-                        </div>
-                      </div>
-                      <div className="text-xs text-purple-900 bg-white/80 p-3 rounded-xl border border-purple-100 font-medium">
-                        Apenas reservas a partir de{" "}
-                        <strong>
-                          {format(parseISO(form.start_date), "dd/MM/yyyy")}
-                        </strong>{" "}
-                        entrarão no repasse de{" "}
-                        <strong>{form.cohost_split_pct || 80}%</strong> do
-                        Co-Anfitrião.
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-            {/* 4. VIGÊNCIA, DIAS DA SEMANA E TURNOS */}
-            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-4">
-              <Label className="text-xs font-black uppercase text-slate-600 flex items-center gap-1.5">
-                <CalendarDays className="w-4 h-4 text-[#BF4B24]" />
-                {form.contract_type === "monthly_exclusive" &&
-                form.allow_sublease
-                  ? "Vigência do Co-Anfitrião e Dias Iniciais Abertos para Sublocação"
-                  : "Vigência e Alocação Automática na Agenda"}
-              </Label>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div>
-                  <Label className="text-xs font-bold text-slate-600">
-                    Data Inicial (Corte de Repasse) *
-                  </Label>
-                  <Input
-                    type="date"
-                    value={form.start_date}
-                    onChange={(e) =>
-                      setForm({ ...form, start_date: e.target.value })
-                    }
-                    className="mt-1 bg-white font-bold"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs font-bold text-slate-600">
-                    Data Final *
-                  </Label>
-                  <Input
-                    type="date"
-                    value={form.end_date}
-                    onChange={(e) =>
-                      setForm({ ...form, end_date: e.target.value })
-                    }
-                    className="mt-1 bg-white font-bold"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs font-bold text-slate-600">
-                    Status do Contrato
-                  </Label>
-                  <select
-                    value={form.status}
-                    onChange={(e) =>
-                      setForm({ ...form, status: e.target.value as any })
-                    }
-                    className="mt-1 w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-800"
-                  >
-                    <option value="active">Vigente (Ativo)</option>
-                    <option value="pending_signature">
-                      Aguardando Assinatura (Pré-Reserva)
-                    </option>
-                    <option value="expired">Encerrado</option>
-                    <option value="cancelled">Cancelado</option>
-                  </select>
-                </div>
-              </div>
-
-              {form.contract_type === "monthly_exclusive" &&
-              !form.allow_sublease ? (
-                <div className="bg-slate-900 text-white p-3.5 rounded-xl text-xs font-bold flex items-center justify-between">
-                  <span>
-                    🔒 Sala Fixa Exclusiva (Sem Co-Anfitrião): Todos os dias e
-                    horários ficarão 100% bloqueados na vitrine durante a
-                    vigência.
-                  </span>
-                </div>
-              ) : (
-                <>
-                  <div>
-                    <Label className="text-xs font-bold text-slate-600 mb-2 block">
-                      {form.contract_type === "monthly_exclusive" &&
-                      form.allow_sublease
-                        ? "Selecione os dias da semana que o Co-Anfitrião quer deixar ABERTOS para sublocar:"
-                        : "Dias da Semana Reservados para este Contrato Fixo:"}
-                    </Label>
-                    <div className="flex flex-wrap gap-2">
-                      {WEEK_DAYS.map((d) => {
-                        const active = form.daysOfWeek.includes(d.id);
-                        return (
-                          <button
-                            type="button"
-                            key={d.id}
-                            onClick={() => toggleDayOfWeek(d.id)}
-                            className={`px-3.5 py-2 rounded-xl text-xs font-black border transition-all ${
-                              active
-                                ? "bg-[#BF4B24] text-white border-[#BF4B24] shadow-xs"
-                                : "bg-white text-slate-600 border-slate-200 hover:border-orange-300"
-                            }`}
-                          >
-                            {d.full}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <div className="md:col-span-1">
-                      <Label className="text-xs font-bold text-slate-600">
-                        Turno Padrão
-                      </Label>
-                      <select
-                        value={form.selectedShift}
-                        onChange={(e) =>
-                          handleShiftChange(e.target.value as any)
-                        }
-                        className="mt-1 w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-800"
-                      >
-                        {SHIFT_OPTIONS.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <Label className="text-xs font-bold text-slate-600">
-                        Hora de Início
-                      </Label>
-                      <Input
-                        type="number"
-                        min="6"
-                        max="22"
-                        value={form.startHour}
-                        onChange={(e) =>
-                          setForm({
-                            ...form,
-                            startHour: Number(e.target.value),
-                          })
-                        }
-                        className="mt-1 bg-white font-bold"
-                      />
-                    </div>
-
-                    <div>
-                      <Label className="text-xs font-bold text-slate-600">
-                        Hora de Término
-                      </Label>
-                      <Input
-                        type="number"
-                        min="7"
-                        max="23"
-                        value={form.endHour}
-                        onChange={(e) =>
-                          setForm({
-                            ...form,
-                            endHour: Number(e.target.value),
-                          })
-                        }
-                        className="mt-1 bg-white font-bold"
-                      />
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-
-            {/* 5. VALORES FINANCEIROS, ENCARGOS DE ATRASO (ASAAS) E REPASSE */}
-            <div className="p-4 rounded-2xl bg-slate-900 text-white space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <Label className="text-xs font-black uppercase tracking-wider text-orange-400 flex items-center gap-1.5">
-                  <Wallet className="w-4 h-4" />
-                  {parentCohostForModalRoom
-                    ? `Valor do Subcontrato, Multa/Juros e Divisão de Repasses`
-                    : "Valor do Aluguel Fixo, Multa/Juros Asaas e Repasse"}
-                </Label>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={handleAddPricingTier}
-                  className="h-8 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black text-xs rounded-lg"
-                >
-                  <Layers className="w-3.5 h-3.5 mr-1.5" />
-                  {pricingTiers.length === 0
-                    ? "Configurar Valores Diferentes por Período (+)"
-                    : "Adicionar Outro Período de Valor (+)"}
-                </Button>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-                <div>
-                  <Label className="text-xs font-bold text-slate-300">
-                    Ciclo de Faturamento
-                  </Label>
-                  <select
-                    value={form.billing_cycle}
-                    onChange={(e) =>
-                      setForm({ ...form, billing_cycle: e.target.value as any })
-                    }
-                    className="mt-1 w-full h-10 rounded-md border border-slate-700 bg-slate-800 px-3 text-sm font-bold text-white"
-                  >
-                    <option value="monthly">Valor Mensal (Recorrente)</option>
-                    <option value="upfront">Valor Total do Contrato</option>
-                    <option value="weekly">Valor Semanal</option>
-                  </select>
-                </div>
-
-                <div>
-                  <Label className="text-xs font-bold text-orange-300">
-                    Dia Limite Pagamento *
-                  </Label>
-                  <div className="relative mt-1">
-                    <Input
-                      type="number"
-                      min="1"
-                      max="31"
-                      placeholder="Ex: 8"
-                      value={form.due_day}
-                      onChange={(e) =>
-                        setForm({ ...form, due_day: e.target.value })
-                      }
-                      className="font-black bg-slate-800 border-slate-700 text-white"
-                    />
-                    <span className="text-[10px] font-bold text-slate-400 absolute right-3 top-1/2 -translate-y-1/2">
-                      do mês
-                    </span>
-                  </div>
-                </div>
-
-                <div>
-                  <Label className="text-xs font-bold text-slate-300">
-                    {pricingTiers.length > 0
-                      ? "Valor Base Referência (R$)"
-                      : "Valor do Contrato (R$) *"}
-                  </Label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    placeholder="Ex: 1200.00"
-                    value={form.contract_value}
-                    onChange={(e) =>
-                      setForm({ ...form, contract_value: e.target.value })
-                    }
-                    className="mt-1 font-black bg-slate-800 border-slate-700 text-white"
-                  />
-                </div>
-
-                <div>
-                  <Label className="text-xs font-bold text-slate-300">
-                    Valor por Diária/Turno (R$)
-                  </Label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    placeholder={`Auto: R$ ${getComputedSessionValue().toFixed(2)}`}
-                    value={form.session_value}
-                    onChange={(e) =>
-                      setForm({ ...form, session_value: e.target.value })
-                    }
-                    className="mt-1 font-bold bg-slate-800 border-slate-700 text-emerald-400"
-                  />
-                </div>
-              </div>
-
-              {/* MULTA E JUROS POR ATRASO (PADRÃO ASAAS) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-800">
-                <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700">
-                  <Label className="text-xs font-bold text-amber-300 flex items-center justify-between">
-                    <span>Multa por Atraso (%) — Asaas</span>
-                    <span className="text-slate-300 font-mono">
-                      + R${" "}
-                      {((previewContractVal * previewFinePct) / 100).toFixed(2)}
-                    </span>
-                  </Label>
-                  <div className="relative mt-1.5">
-                    <Input
-                      type="number"
-                      step="0.1"
-                      min="0"
-                      max="20"
-                      value={form.fine_pct}
-                      onChange={(e) =>
-                        setForm({ ...form, fine_pct: e.target.value })
-                      }
-                      placeholder="Ex: 2"
-                      className="bg-slate-900 border-slate-700 font-black text-white pr-8 h-9"
-                    />
-                    <Percent className="w-3.5 h-3.5 text-amber-400 absolute right-3 top-1/2 -translate-y-1/2" />
-                  </div>
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    Aplicada automaticamente se pagar após o dia{" "}
-                    {form.due_day || 8}.
-                  </p>
-                </div>
-
-                <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700">
-                  <Label className="text-xs font-bold text-amber-300 flex items-center justify-between">
-                    <span>Juros ao Mês (% a.m.) — Asaas</span>
-                    <span className="text-slate-300 font-mono">
-                      R${" "}
-                      {(
-                        (previewContractVal * (previewInterestPct / 100)) /
-                        30
-                      ).toFixed(2)}
-                      /dia
-                    </span>
-                  </Label>
-                  <div className="relative mt-1.5">
-                    <Input
-                      type="number"
-                      step="0.1"
-                      min="0"
-                      max="10"
-                      value={form.interest_pct}
-                      onChange={(e) =>
-                        setForm({ ...form, interest_pct: e.target.value })
-                      }
-                      placeholder="Ex: 1"
-                      className="bg-slate-900 border-slate-700 font-black text-white pr-8 h-9"
-                    />
-                    <Percent className="w-3.5 h-3.5 text-amber-400 absolute right-3 top-1/2 -translate-y-1/2" />
-                  </div>
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    Calculado pro-rata por cada dia corrido de atraso.
-                  </p>
-                </div>
-              </div>
-
-              {pricingTiers.length > 0 && (
-                <div className="p-3.5 rounded-xl bg-slate-800/80 border border-orange-500/30 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs font-black text-orange-300 flex items-center gap-1.5">
-                      <Layers className="w-4 h-4" />
-                      Escalonamento de Valores por Período
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => setPricingTiers([])}
-                      className="text-[11px] font-bold text-slate-400 hover:text-red-400 underline"
-                    >
-                      Remover escalonamento
-                    </button>
-                  </div>
-
-                  <div className="space-y-2.5">
-                    {pricingTiers.map((tier, idx) => {
-                      const autoSession = getComputedSessionValueForAmount(
-                        Number(tier.contract_value) || 0,
-                        Number(tier.session_value) || 0,
-                      );
-                      return (
-                        <div
-                          key={tier.id}
-                          className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end bg-slate-900/90 p-3 rounded-xl border border-slate-700"
-                        >
-                          <div className="md:col-span-3">
-                            <Label className="text-[10px] font-bold text-orange-300 uppercase">
-                              {idx + 1}º Período: Início
-                            </Label>
-                            <Input
-                              type="date"
-                              value={tier.start_date}
-                              onChange={(e) =>
-                                handleUpdatePricingTier(
-                                  tier.id,
-                                  "start_date",
-                                  e.target.value,
-                                )
-                              }
-                              className="mt-1 h-9 bg-slate-800 border-slate-700 text-white text-xs font-bold"
-                            />
-                          </div>
-
-                          <div className="md:col-span-3">
-                            <Label className="text-[10px] font-bold text-orange-300 uppercase">
-                              Até a Data
-                            </Label>
-                            <Input
-                              type="date"
-                              value={tier.end_date}
-                              onChange={(e) =>
-                                handleUpdatePricingTier(
-                                  tier.id,
-                                  "end_date",
-                                  e.target.value,
-                                )
-                              }
-                              className="mt-1 h-9 bg-slate-800 border-slate-700 text-white text-xs font-bold"
-                            />
-                          </div>
-
-                          <div className="md:col-span-3">
-                            <Label className="text-[10px] font-bold text-white uppercase">
-                              Valor neste Período (R$) *
-                            </Label>
-                            <Input
-                              type="number"
-                              step="0.01"
-                              placeholder="Ex: 1000.00"
-                              value={tier.contract_value}
-                              onChange={(e) =>
-                                handleUpdatePricingTier(
-                                  tier.id,
-                                  "contract_value",
-                                  e.target.value,
-                                )
-                              }
-                              className="mt-1 h-9 bg-slate-800 border-orange-500/50 text-white text-xs font-black"
-                            />
-                          </div>
-
-                          <div className="md:col-span-2">
-                            <Label className="text-[10px] font-bold text-emerald-400 uppercase">
-                              Valor/Diária (R$)
-                            </Label>
-                            <Input
-                              type="number"
-                              step="0.01"
-                              placeholder={`Auto: ${autoSession.toFixed(2)}`}
-                              value={tier.session_value}
-                              onChange={(e) =>
-                                handleUpdatePricingTier(
-                                  tier.id,
-                                  "session_value",
-                                  e.target.value,
-                                )
-                              }
-                              className="mt-1 h-9 bg-slate-800 border-slate-700 text-emerald-300 text-xs font-bold"
-                            />
-                          </div>
-
-                          <div className="md:col-span-1 flex justify-end">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleRemovePricingTier(tier.id)}
-                              className="h-9 w-9 text-slate-400 hover:text-red-400 hover:bg-red-500/10"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-slate-800">
-                <div className="bg-slate-800/90 p-3.5 rounded-xl border border-slate-700">
-                  <Label className="text-xs font-black text-orange-400 uppercase flex items-center justify-between">
-                    <span>Taxa Fusion (%)</span>
-                    <span className="text-white">
-                      R${" "}
-                      {((previewContractVal * previewFusionPct) / 100).toFixed(
-                        2,
-                      )}
-                    </span>
-                  </Label>
-                  <div className="relative mt-2">
-                    <Input
-                      type="number"
-                      step="0.5"
-                      min="0"
-                      max="100"
-                      value={form.platform_fee_pct}
-                      onChange={(e) => handleFusionPctChange(e.target.value)}
-                      className="bg-slate-900 border-orange-500/40 font-black text-white pr-8"
-                    />
-                    <Percent className="w-4 h-4 text-orange-400 absolute right-3 top-1/2 -translate-y-1/2" />
-                  </div>
-                </div>
-
-                <div className="bg-slate-800/90 p-3.5 rounded-xl border border-slate-700">
-                  <Label className="text-xs font-black text-emerald-400 uppercase flex items-center justify-between">
-                    <span>
-                      {parentCohostForModalRoom
-                        ? `Repasse Co-Host (${parentCohostForModalRoom.specialist_name.split(" ")[0]}) (%)`
-                        : "Repasse do Anfitrião Dono (%)"}
-                    </span>
-                    <span className="text-white">
-                      R${" "}
-                      {((previewContractVal * previewHostPct) / 100).toFixed(2)}
-                    </span>
-                  </Label>
-                  <div className="relative mt-2">
-                    <Input
-                      type="number"
-                      step="0.5"
-                      min="0"
-                      max="100"
-                      value={form.host_split_pct}
-                      onChange={(e) => handleHostPctChange(e.target.value)}
-                      className="bg-slate-900 border-emerald-500/40 font-black text-white pr-8"
-                    />
-                    <Percent className="w-4 h-4 text-emerald-400 absolute right-3 top-1/2 -translate-y-1/2" />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* 6. ANEXO DO CONTRATO ASSINADO (PDF) + OBSERVAÇÕES */}
-            <div className="space-y-4">
-              <div className="p-4 rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/60 flex flex-col md:flex-row items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-[#BF4B24] shrink-0">
-                    <UploadCloud className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-black text-slate-900">
-                      Anexar Contrato Assinado (PDF)
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      {pdfFile
-                        ? `Selecionado: ${pdfFile.name}`
-                        : editingContract?.pdf_filename
-                          ? `Arquivo atual: ${editingContract.pdf_filename}`
-                          : "Salve o PDF assinado pelas duas partes para consulta do Admin e do Anfitrião."}
-                    </p>
-                  </div>
-                </div>
-                <label className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer shrink-0 transition-colors">
-                  Escolher Arquivo PDF
-                  <input
-                    type="file"
-                    accept="application/pdf"
-                    className="hidden"
-                    onChange={(e) => setPdfFile(e.target.files?.[0] || null)}
-                  />
-                </label>
-              </div>
-
-              <div>
-                <Label className="text-xs font-bold text-slate-600">
-                  Observações Internas do Contrato (Opcional)
-                </Label>
-                <Input
-                  value={form.notes}
-                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                  placeholder="Ex: Reajuste acordado após o 3º mês / Cláusula específica"
-                  className="mt-1 bg-white"
-                />
-              </div>
-            </div>
-          </div>
-
-          <DialogFooter className="mt-4 gap-2">
-            <Button
-              variant="ghost"
-              onClick={() => setIsModalOpen(false)}
-              className="font-bold text-slate-500"
-            >
-              Cancelar
-            </Button>
-            <Button
-              onClick={handleSaveContract}
-              disabled={saving}
-              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black px-6 rounded-xl"
-            >
-              {saving ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Sincronizando Contrato...
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 className="w-4 h-4 mr-2" />
-                  Salvar Contrato e Sincronizar Agenda
-                </>
-              )}
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

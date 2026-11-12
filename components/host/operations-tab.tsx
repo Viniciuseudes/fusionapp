@@ -1,6 +1,7 @@
+// components/host/operations-tab.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { createClient } from "@/utils/supabase/client";
 import {
   Package,
@@ -16,17 +17,32 @@ import {
   Edit3,
   Building2,
   TrendingDown,
+  TrendingUp,
   Loader2,
   FileSpreadsheet,
-  RefreshCw,
-  ArrowUpRight,
-  ArrowDownRight,
-  ShieldAlert,
-  Sparkles,
-  Phone,
   Calendar as CalendarIcon,
   Wallet,
+  Camera,
+  Mic,
+  Square,
+  ExternalLink,
+  DoorOpen,
+  X,
+  UploadCloud,
+  FileCheck2,
 } from "lucide-react";
+import {
+  ComposedChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as RechartsTooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+} from "recharts";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -41,7 +57,6 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { format, parseISO } from "date-fns";
-import { ptBR } from "date-fns/locale";
 
 interface InventoryItem {
   id: string;
@@ -75,16 +90,26 @@ interface MaintenanceOrder {
   room_name?: string;
 }
 
+interface CustomFieldItem {
+  key: string;
+  value: string;
+}
+
 interface ClinicExpense {
   id: string;
   host_id: string;
   room_id: string | null;
   title: string;
+  vendor?: string | null;
   category: string;
+  cost_type?: "fixed" | "variable";
   amount: number;
   expense_date: string;
   payment_status: "paid" | "pending";
   reference_type: string | null;
+  receipt_url?: string | null;
+  receipt_filename?: string | null;
+  custom_fields?: CustomFieldItem[];
   notes: string | null;
   room_name?: string;
 }
@@ -106,39 +131,171 @@ const MAINTENANCE_CATEGORIES: Record<string, string> = {
   pintura: "Pintura, Paredes & Acabamento",
 };
 
-const EXPENSE_CATEGORIES: Record<string, string> = {
-  insumos: "Reposição de Estoque / Insumos",
-  manutencao: "Manutenção & Reparos",
+const DEFAULT_EXPENSE_CATEGORIES: Record<string, string> = {
+  aluguel_condominio: "Aluguel, Condomínio & IPTU",
   energia: "Energia Elétrica",
   agua: "Água & Saneamento",
   internet: "Internet & Sistemas",
   limpeza: "Serviços de Limpeza / Diarista",
-  aluguel_condominio: "Aluguel, Condomínio & IPTU",
+  manutencao: "Manutenção & Reparos",
+  insumos: "Reposição de Estoque / Insumos",
   outros: "Outras Despesas Operacionais",
 };
 
+const FIXED_CATEGORY_KEYS = new Set([
+  "aluguel_condominio",
+  "energia",
+  "agua",
+  "internet",
+  "limpeza",
+]);
+
+const CHART_COLORS = [
+  "#0F172A",
+  "#BF4B24",
+  "#10B981",
+  "#D97706",
+  "#475569",
+  "#6366F1",
+  "#0284C7",
+  "#94A3B8",
+];
+
+const formatBRL = (val: number) =>
+  val.toLocaleString("pt-BR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
+function calculateSlotUnits(startIso: string, endIso: string): number {
+  const diffMinutes =
+    (new Date(endIso).getTime() - new Date(startIso).getTime()) / (1000 * 60);
+  if (diffMinutes <= 0) return 1;
+  if (diffMinutes >= 45 && diffMinutes <= 65) return 1;
+  return Math.max(1, Math.round(diffMinutes / 55));
+}
+
+function slugifyCategory(label: string): string {
+  return label
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "");
+}
+
+function parseVoiceCommandLocally(
+  transcript: string,
+  categoriesMap: Record<string, string>,
+  roomsList: any[],
+) {
+  const clean = transcript.trim();
+  const lower = clean.toLowerCase();
+
+  let detectedAmount: number | null = null;
+  const amountMatches = clean.match(
+    /(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})|\d+(?:[.,]\d{1,2})?)\s*(?:reais|real|brl)?/gi,
+  );
+  if (amountMatches && amountMatches.length > 0) {
+    const lastMatch = amountMatches[amountMatches.length - 1];
+    const numStr = lastMatch
+      .replace(/[^\d,.]/g, "")
+      .replace(/\./g, "")
+      .replace(",", ".");
+    const parsed = parseFloat(numStr);
+    if (!isNaN(parsed) && parsed > 0) detectedAmount = parsed;
+  }
+
+  let matchedRoomId = "";
+  for (const r of roomsList) {
+    if (r.name && lower.includes(r.name.toLowerCase())) {
+      matchedRoomId = r.id;
+      break;
+    }
+  }
+
+  let matchedCatKey = "";
+  for (const [key, label] of Object.entries(categoriesMap)) {
+    const firstWord = label.split(/[ &/]/)[0].toLowerCase();
+    if (
+      lower.includes(label.toLowerCase()) ||
+      lower.includes(key.toLowerCase()) ||
+      (firstWord.length > 3 && lower.includes(firstWord))
+    ) {
+      matchedCatKey = key;
+      break;
+    }
+  }
+
+  let newCatLabel = "";
+  if (!matchedCatKey) {
+    const catMatch = clean.match(
+      /(?:despesa\s+de|como\s+despesa\s+de|na\s+categoria|categoria)\s+([a-záàâãéêíóôõúç\s]{3,25}?)(?:\s+no\s+valor|\s+de\s+\d|\s+na\s+sala|$)/i,
+    );
+    if (catMatch?.[1]) {
+      const raw = catMatch[1].trim();
+      newCatLabel = raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+    }
+  }
+
+  return {
+    title: clean.charAt(0).toUpperCase() + clean.slice(1),
+    amount: detectedAmount,
+    room_id: matchedRoomId,
+    category_key: matchedCatKey,
+    new_category_label: newCatLabel,
+  };
+}
+
 export function HostOperationsTab() {
-  const supabase = createClient();
+  const [supabase] = useState(() => createClient());
   const { toast } = useToast();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [aiProcessing, setAiProcessing] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string>("");
 
   const [activeSubTab, setActiveSubTab] = useState<
-    "inventory" | "maintenance" | "expenses"
-  >("inventory");
+    "expenses" | "inventory" | "maintenance"
+  >("expenses");
 
-  // Filtro de Competência Mensal (ex: 2026-10)
   const [selectedMonth, setSelectedMonth] = useState(
     format(new Date(), "yyyy-MM"),
   );
   const [search, setSearch] = useState("");
   const [onlyCriticalStock, setOnlyCriticalStock] = useState(false);
+  const [expenseRoomFilter, setExpenseRoomFilter] = useState<string>("all");
+  const [expenseCategoryFilter, setExpenseCategoryFilter] =
+    useState<string>("all");
+  const [allocationMethod, setAllocationMethod] = useState<
+    "equal" | "revenue_share"
+  >("equal");
 
   const [rooms, setRooms] = useState<any[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [maintenances, setMaintenances] = useState<MaintenanceOrder[]>([]);
   const [expenses, setExpenses] = useState<ClinicExpense[]>([]);
+  const [roomRevenuesMap, setRoomRevenuesMap] = useState<
+    Record<string, { grossBrl: number; hostNetBrl: number; hours: number }>
+  >({});
+
+  // Categorias personalizadas criadas pelo anfitrião
+  const [customCategoriesMap, setCustomCategoriesMap] = useState<
+    Record<string, string>
+  >({});
+  const [isNewCategoryModalOpen, setIsNewCategoryModalOpen] = useState(false);
+  const [newCategoryLabel, setNewCategoryLabel] = useState("");
+  const [newCategoryCostType, setNewCategoryCostType] = useState<
+    "fixed" | "variable"
+  >("variable");
+
+  const expenseCategoriesMap = useMemo(() => {
+    return {
+      ...DEFAULT_EXPENSE_CATEGORIES,
+      ...customCategoriesMap,
+    };
+  }, [customCategoriesMap]);
 
   // --- MODAIS DE ESTOQUE ---
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
@@ -155,7 +312,6 @@ export function HostOperationsTab() {
     recordInitialExpense: false,
   });
 
-  // Modal de Reposição / Baixa Rápida de Estoque
   const [isRestockModalOpen, setIsRestockModalOpen] = useState(false);
   const [restockTarget, setRestockTarget] = useState<InventoryItem | null>(
     null,
@@ -184,19 +340,34 @@ export function HostOperationsTab() {
     recordExpenseNow: true,
   });
 
-  // --- MODAL DE DESPESA AVULSA ---
+  // --- MODAL DE DESPESA COM FOTO (OCR), VOZ E CAMPOS PERSONALIZADOS ---
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<ClinicExpense | null>(
     null,
   );
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [receiptPreviewUrl, setReceiptPreviewUrl] = useState<string | null>(
+    null,
+  );
+  const [isRecording, setIsRecording] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState("");
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const speechRecognitionRef = useRef<any>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+
   const [expenseForm, setExpenseForm] = useState({
     title: "",
+    vendor: "",
     category: "energia",
+    cost_type: "fixed" as "fixed" | "variable",
     room_id: "",
     amount: "",
     expense_date: format(new Date(), "yyyy-MM-dd"),
     payment_status: "paid" as "paid" | "pending",
     notes: "",
+    custom_fields: [] as CustomFieldItem[],
   });
 
   useEffect(() => {
@@ -210,8 +381,8 @@ export function HostOperationsTab() {
         data: { user },
       } = await supabase.auth.getUser();
       if (!user) return;
+      setCurrentUserId(user.id);
 
-      // Calcula início e fim do mês selecionado para as despesas
       const [yearStr, monthStr] = selectedMonth.split("-");
       const year = Number(yearStr);
       const month = Number(monthStr);
@@ -219,10 +390,29 @@ export function HostOperationsTab() {
       const lastDay = new Date(year, month, 0).getDate();
       const endOfMonthStr = `${selectedMonth}-${String(lastDay).padStart(2, "0")}`;
 
+      // Carrega categorias personalizadas salvas no banco ou localmente
+      const customCats: Record<string, string> = {};
+      try {
+        const localCats = localStorage.getItem(
+          `fusion_custom_exp_cats_${user.id}`,
+        );
+        if (localCats) Object.assign(customCats, JSON.parse(localCats));
+      } catch {}
+
+      const { data: dbCustomCats } = await supabase
+        .from("host_expense_categories")
+        .select("slug, name")
+        .eq("host_id", user.id);
+
+      (dbCustomCats || []).forEach((c: any) => {
+        if (c.slug && c.name) customCats[c.slug] = c.name;
+      });
+      setCustomCategoriesMap(customCats);
+
       const [roomsRes, invRes, maintRes, expRes] = await Promise.all([
         supabase
           .from("rooms")
-          .select("id, name")
+          .select("id, name, address_details")
           .eq("host_id", user.id)
           .order("name"),
         supabase
@@ -257,8 +447,8 @@ export function HostOperationsTab() {
           min_quantity: Number(item.min_quantity || 0),
           unit_cost: Number(item.unit_cost || 0),
           room_name: item.room_id
-            ? roomNameMap.get(item.room_id) || "Uso Geral da Clínica"
-            : "Uso Geral da Clínica",
+            ? roomNameMap.get(item.room_id) || "Uso Geral do Hub"
+            : "Uso Geral do Hub",
         })),
       );
 
@@ -267,35 +457,563 @@ export function HostOperationsTab() {
           ...m,
           cost: Number(m.cost || 0),
           room_name: m.room_id
-            ? roomNameMap.get(m.room_id) || "Área Comum / Clínica"
-            : "Área Comum / Clínica",
+            ? roomNameMap.get(m.room_id) || "Área Comum / Hub"
+            : "Área Comum / Hub",
         })),
       );
 
-      setExpenses(
-        (expRes.data || []).map((e: any) => ({
-          ...e,
-          amount: Number(e.amount || 0),
-          room_name: e.room_id
-            ? roomNameMap.get(e.room_id) || "Custo Geral"
-            : "Custo Geral",
-        })),
+      const parsedExpenses: ClinicExpense[] = (expRes.data || []).map(
+        (e: any) => {
+          // Caso haja categorias novas salvas diretamente na coluna category
+          if (
+            e.category &&
+            !DEFAULT_EXPENSE_CATEGORIES[e.category] &&
+            !customCats[e.category]
+          ) {
+            customCats[e.category] =
+              e.category.charAt(0).toUpperCase() +
+              e.category.slice(1).replace(/_/g, " ");
+          }
+
+          return {
+            ...e,
+            amount: Number(e.amount || 0),
+            cost_type:
+              e.cost_type ||
+              (FIXED_CATEGORY_KEYS.has(e.category) ? "fixed" : "variable"),
+            custom_fields: Array.isArray(e.custom_fields)
+              ? e.custom_fields
+              : [],
+            room_name: e.room_id
+              ? roomNameMap.get(e.room_id) || "Rateio Geral do Hub"
+              : "Rateio Geral do Hub",
+          };
+        },
       );
+      setCustomCategoriesMap({ ...customCats });
+      setExpenses(parsedExpenses);
+
+      // Calcula o Repasse Líquido recebido por cada sala no mês para comparar com os custos
+      const revMap: Record<
+        string,
+        { grossBrl: number; hostNetBrl: number; hours: number }
+      > = {};
+      hostRooms.forEach((r: any) => {
+        revMap[r.id] = { grossBrl: 0, hostNetBrl: 0, hours: 0 };
+      });
+
+      const roomIds = hostRooms.map((r: any) => r.id);
+      if (roomIds.length > 0) {
+        const [bookingsRes, contractsRes] = await Promise.all([
+          supabase
+            .from("bookings")
+            .select(
+              "id, room_id, start_time, end_time, total_cost, agreed_value_brl, status, contract_id",
+            )
+            .in("room_id", roomIds)
+            .in("status", ["confirmed", "completed", "in_progress"])
+            .gte("start_time", `${startOfMonthStr}T00:00:00`)
+            .lte("start_time", `${endOfMonthStr}T23:59:59`),
+          supabase
+            .from("room_contracts")
+            .select("*")
+            .in("room_id", roomIds)
+            .eq("status", "active"),
+        ]);
+
+        (bookingsRes.data || []).forEach((b: any) => {
+          if (b.contract_id) return;
+          const rObj = hostRooms.find((x: any) => x.id === b.room_id);
+          if (!rObj) return;
+
+          const slots = calculateSlotUnits(b.start_time, b.end_time);
+          let hourlyRate = 40;
+          try {
+            const addr =
+              typeof rObj.address_details === "string"
+                ? JSON.parse(rObj.address_details)
+                : rObj.address_details;
+            if (Number(addr?.pricing?.hourly) > 0) {
+              hourlyRate = Number(addr.pricing.hourly);
+            }
+          } catch {}
+
+          const gross =
+            Number(b.agreed_value_brl) > 0
+              ? Number(b.agreed_value_brl)
+              : Number(b.total_cost) >= slots * 20
+                ? Number(b.total_cost)
+                : slots * hourlyRate;
+
+          if (revMap[b.room_id]) {
+            revMap[b.room_id].grossBrl += gross;
+            revMap[b.room_id].hostNetBrl += gross * 0.8;
+            revMap[b.room_id].hours += slots;
+          }
+        });
+
+        (contractsRes.data || []).forEach((c: any) => {
+          const isPaidInMonth =
+            c.last_paid_competence === selectedMonth ||
+            Boolean(c.schedule_config?.paid_dates?.[selectedMonth]);
+          if (isPaidInMonth && revMap[c.room_id]) {
+            const cVal = Number(c.contract_value || 0);
+            const hostPct = Number(c.host_split_pct ?? 85) / 100;
+            revMap[c.room_id].grossBrl += cVal;
+            revMap[c.room_id].hostNetBrl += cVal * hostPct;
+          }
+        });
+      }
+
+      setRoomRevenuesMap(revMap);
     } catch (err: any) {
       console.error("Erro ao carregar Controle Interno:", err);
-      toast({
-        variant: "destructive",
-        title: "Aviso ao carregar dados",
-        description:
-          "Certifique-se de ter executado o script SQL de criação das tabelas de Controle Interno no Supabase.",
-      });
     } finally {
       setLoading(false);
     }
   };
 
   // ============================================================================
-  // AÇÕES DE ESTOQUE & INSUMOS
+  // INTELIGÊNCIA MULTIMODAL: FOTO DA NOTA (OCR) + COMANDO DE VOZ
+  // ============================================================================
+  const processReceiptAndVoiceWithAI = async (
+    imgFile: File | null,
+    audioBlob: Blob | null,
+    spokenText: string,
+  ) => {
+    setAiProcessing(true);
+    try {
+      // 1. Aplica interpretação local imediata se houver comando de voz
+      if (spokenText.trim()) {
+        const local = parseVoiceCommandLocally(
+          spokenText,
+          expenseCategoriesMap,
+          rooms,
+        );
+
+        let targetCategoryKey = local.category_key;
+        if (!targetCategoryKey && local.new_category_label) {
+          const slug = slugifyCategory(local.new_category_label);
+          targetCategoryKey = slug;
+          setCustomCategoriesMap((prev) => ({
+            ...prev,
+            [slug]: local.new_category_label,
+          }));
+        }
+
+        setExpenseForm((prev) => ({
+          ...prev,
+          title: prev.title || local.title,
+          amount: local.amount !== null ? String(local.amount) : prev.amount,
+          room_id: local.room_id || prev.room_id,
+          category: targetCategoryKey || prev.category,
+        }));
+      }
+
+      // 2. Chama a rota de IA para ler a foto da nota fiscal e cruzar com o áudio
+      const fd = new FormData();
+      if (imgFile) fd.append("image", imgFile);
+      if (audioBlob) {
+        fd.append(
+          "audio",
+          new File([audioBlob], "voice.webm", { type: "audio/webm" }),
+        );
+      }
+      fd.append("transcript", spokenText);
+      fd.append("categories", JSON.stringify(expenseCategoriesMap));
+      fd.append(
+        "rooms",
+        JSON.stringify(rooms.map((r) => ({ id: r.id, name: r.name }))),
+      );
+
+      const res = await fetch("/api/host/parse-expense", {
+        method: "POST",
+        body: fd,
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        const d = json.data;
+        if (d) {
+          let resolvedCategoryKey = d.category_key || "";
+          if (
+            resolvedCategoryKey &&
+            !expenseCategoriesMap[resolvedCategoryKey]
+          ) {
+            const label =
+              d.category_label ||
+              resolvedCategoryKey.charAt(0).toUpperCase() +
+                resolvedCategoryKey.slice(1).replace(/_/g, " ");
+            const slug = slugifyCategory(label);
+            resolvedCategoryKey = slug;
+            setCustomCategoriesMap((prev) => ({ ...prev, [slug]: label }));
+          }
+
+          setExpenseForm((prev) => ({
+            ...prev,
+            title: d.title || prev.title || "Despesa Operacional",
+            vendor: d.vendor || prev.vendor,
+            amount: Number(d.amount) > 0 ? String(d.amount) : prev.amount,
+            expense_date: d.expense_date || prev.expense_date,
+            category: resolvedCategoryKey || prev.category,
+            cost_type: d.cost_type === "fixed" ? "fixed" : prev.cost_type,
+            room_id: d.room_id || prev.room_id,
+            payment_status: d.payment_status === "pending" ? "pending" : "paid",
+            notes: d.notes || prev.notes,
+          }));
+
+          toast({
+            title: "Nota / comando lido automaticamente",
+            description: `${d.title || "Despesa"}${
+              Number(d.amount) > 0 ? ` — R$ ${formatBRL(Number(d.amount))}` : ""
+            }. Confira os dados e clique em salvar.`,
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("Leitura auxiliar concluída:", e);
+    } finally {
+      setAiProcessing(false);
+    }
+  };
+
+  const handleSelectReceiptPhoto = async (file: File | undefined) => {
+    if (!file) return;
+    setReceiptFile(file);
+    setReceiptPreviewUrl(URL.createObjectURL(file));
+
+    if (!isExpenseModalOpen) {
+      setEditingExpense(null);
+      setExpenseForm({
+        title: "",
+        vendor: "",
+        category: "manutencao",
+        cost_type: "variable",
+        room_id: "",
+        amount: "",
+        expense_date: format(new Date(), "yyyy-MM-dd"),
+        payment_status: "paid",
+        notes: "",
+        custom_fields: [],
+      });
+      setIsExpenseModalOpen(true);
+    }
+
+    await processReceiptAndVoiceWithAI(file, null, voiceTranscript);
+  };
+
+  const startVoiceRecording = async () => {
+    try {
+      setVoiceTranscript("");
+      audioChunksRef.current = [];
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (ev) => {
+        if (ev.data.size > 0) audioChunksRef.current.push(ev.data);
+      };
+
+      const SpeechRec =
+        (window as any).SpeechRecognition ||
+        (window as any).webkitSpeechRecognition;
+
+      let liveTranscript = "";
+      if (SpeechRec) {
+        const rec = new SpeechRec();
+        rec.lang = "pt-BR";
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.onresult = (event: any) => {
+          let txt = "";
+          for (let i = 0; i < event.results.length; i++) {
+            txt += event.results[i][0].transcript + " ";
+          }
+          liveTranscript = txt.trim();
+          setVoiceTranscript(liveTranscript);
+        };
+        try {
+          rec.start();
+          speechRecognitionRef.current = rec;
+        } catch {}
+      }
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        if (speechRecognitionRef.current) {
+          try {
+            speechRecognitionRef.current.stop();
+          } catch {}
+        }
+
+        const audioBlob = new Blob(audioChunksRef.current, {
+          type: "audio/webm",
+        });
+
+        if (!isExpenseModalOpen) {
+          setEditingExpense(null);
+          setIsExpenseModalOpen(true);
+        }
+
+        await processReceiptAndVoiceWithAI(
+          receiptFile,
+          audioBlob,
+          liveTranscript,
+        );
+      };
+
+      recorder.start();
+      setIsRecording(true);
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Acesso ao microfone negado",
+        description:
+          "Permita o uso do microfone no navegador para lançar despesas por voz.",
+      });
+    }
+  };
+
+  const stopVoiceRecording = () => {
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
+      mediaRecorderRef.current.stop();
+    }
+    setIsRecording(false);
+  };
+
+  const handleCreateCustomCategory = async () => {
+    if (!newCategoryLabel.trim()) return;
+    const label = newCategoryLabel.trim();
+    const slug = slugifyCategory(label);
+
+    const nextMap = { ...customCategoriesMap, [slug]: label };
+    setCustomCategoriesMap(nextMap);
+
+    if (currentUserId) {
+      try {
+        localStorage.setItem(
+          `fusion_custom_exp_cats_${currentUserId}`,
+          JSON.stringify(nextMap),
+        );
+      } catch {}
+
+      await supabase.from("host_expense_categories").insert({
+        host_id: currentUserId,
+        slug,
+        name: label,
+        cost_type: newCategoryCostType,
+      });
+    }
+
+    setExpenseForm((prev) => ({
+      ...prev,
+      category: slug,
+      cost_type: newCategoryCostType,
+    }));
+    setNewCategoryLabel("");
+    setIsNewCategoryModalOpen(false);
+
+    toast({
+      title: `Categoria "${label}" adicionada`,
+      description: "Já selecionada para este lançamento.",
+    });
+  };
+
+  // ============================================================================
+  // AÇÕES DE DESPESAS MENSAIS E UPLOAD DE COMPROVANTE
+  // ============================================================================
+  const openNewExpenseModal = () => {
+    setEditingExpense(null);
+    setReceiptFile(null);
+    setReceiptPreviewUrl(null);
+    setVoiceTranscript("");
+    setExpenseForm({
+      title: "",
+      vendor: "",
+      category: "energia",
+      cost_type: "fixed",
+      room_id: "",
+      amount: "",
+      expense_date: format(new Date(), "yyyy-MM-dd"),
+      payment_status: "paid",
+      notes: "",
+      custom_fields: [],
+    });
+    setIsExpenseModalOpen(true);
+  };
+
+  const openEditExpenseModal = (exp: ClinicExpense) => {
+    setEditingExpense(exp);
+    setReceiptFile(null);
+    setReceiptPreviewUrl(exp.receipt_url || null);
+    setVoiceTranscript("");
+    setExpenseForm({
+      title: exp.title,
+      vendor: exp.vendor || "",
+      category: exp.category,
+      cost_type:
+        exp.cost_type ||
+        (FIXED_CATEGORY_KEYS.has(exp.category) ? "fixed" : "variable"),
+      room_id: exp.room_id || "",
+      amount: String(exp.amount),
+      expense_date: exp.expense_date,
+      payment_status: exp.payment_status,
+      notes: exp.notes || "",
+      custom_fields: Array.isArray(exp.custom_fields) ? exp.custom_fields : [],
+    });
+    setIsExpenseModalOpen(true);
+  };
+
+  const handleSaveExpense = async () => {
+    const numericAmount = Math.max(
+      0,
+      Number(String(expenseForm.amount).replace(",", ".")) || 0,
+    );
+    if (!expenseForm.title.trim() || numericAmount <= 0) {
+      return toast({
+        variant: "destructive",
+        title: "Informe a descrição e o valor da despesa.",
+      });
+    }
+
+    setSaving(true);
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("Não autenticado.");
+
+      let uploadedReceiptUrl = editingExpense?.receipt_url || null;
+      let uploadedReceiptFilename = editingExpense?.receipt_filename || null;
+
+      if (receiptFile) {
+        const cleanName = receiptFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const filePath = `receipts/${user.id}/${Date.now()}_${cleanName}`;
+        const { error: upErr } = await supabase.storage
+          .from("contracts")
+          .upload(filePath, receiptFile, { upsert: true });
+
+        if (!upErr) {
+          const { data: pubData } = supabase.storage
+            .from("contracts")
+            .getPublicUrl(filePath);
+          uploadedReceiptUrl = pubData.publicUrl;
+          uploadedReceiptFilename = receiptFile.name;
+        }
+      }
+
+      const validCustomFields = expenseForm.custom_fields.filter(
+        (cf) => cf.key.trim() !== "" && cf.value.trim() !== "",
+      );
+
+      const extendedPayload: Record<string, any> = {
+        host_id: user.id,
+        room_id: expenseForm.room_id || null,
+        title: expenseForm.title.trim(),
+        vendor: expenseForm.vendor.trim() || null,
+        category: expenseForm.category,
+        cost_type: expenseForm.cost_type,
+        amount: numericAmount,
+        expense_date: expenseForm.expense_date,
+        payment_status: expenseForm.payment_status,
+        notes: expenseForm.notes.trim() || null,
+        receipt_url: uploadedReceiptUrl,
+        receipt_filename: uploadedReceiptFilename,
+        custom_fields: validCustomFields,
+        reference_type: editingExpense?.reference_type || "manual",
+      };
+
+      const basePayload: Record<string, any> = {
+        host_id: user.id,
+        room_id: expenseForm.room_id || null,
+        title: expenseForm.title.trim(),
+        category: expenseForm.category,
+        amount: numericAmount,
+        expense_date: expenseForm.expense_date,
+        payment_status: expenseForm.payment_status,
+        notes: [
+          expenseForm.vendor.trim()
+            ? `Fornecedor: ${expenseForm.vendor.trim()}`
+            : "",
+          expenseForm.notes.trim(),
+          validCustomFields.map((f) => `${f.key}: ${f.value}`).join(" | "),
+        ]
+          .filter(Boolean)
+          .join(" • "),
+        reference_type: editingExpense?.reference_type || "manual",
+      };
+
+      if (editingExpense) {
+        const { error } = await supabase
+          .from("clinic_expenses")
+          .update(extendedPayload)
+          .eq("id", editingExpense.id);
+
+        if (error) {
+          const { error: fallbackErr } = await supabase
+            .from("clinic_expenses")
+            .update(basePayload)
+            .eq("id", editingExpense.id);
+          if (fallbackErr) throw fallbackErr;
+        }
+      } else {
+        const { error } = await supabase
+          .from("clinic_expenses")
+          .insert(extendedPayload);
+
+        if (error) {
+          const { error: fallbackErr } = await supabase
+            .from("clinic_expenses")
+            .insert(basePayload);
+          if (fallbackErr) throw fallbackErr;
+        }
+      }
+
+      const expMonth = expenseForm.expense_date.slice(0, 7);
+      if (expMonth && expMonth !== selectedMonth) {
+        setSelectedMonth(expMonth);
+      }
+
+      toast({
+        title: editingExpense
+          ? "Despesa atualizada"
+          : "Despesa registada na Central de Custos",
+      });
+      setIsExpenseModalOpen(false);
+      loadOperationsData();
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro ao salvar despesa",
+        description: err.message,
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleToggleExpensePaid = async (exp: ClinicExpense) => {
+    const nextStatus = exp.payment_status === "paid" ? "pending" : "paid";
+    await supabase
+      .from("clinic_expenses")
+      .update({ payment_status: nextStatus })
+      .eq("id", exp.id);
+    loadOperationsData();
+  };
+
+  const handleDeleteExpense = async (exp: ClinicExpense) => {
+    if (!confirm(`Deseja excluir a despesa "${exp.title}"?`)) return;
+    await supabase.from("clinic_expenses").delete().eq("id", exp.id);
+    toast({ title: "Despesa removida." });
+    loadOperationsData();
+  };
+
+  // ============================================================================
+  // AÇÕES DE ESTOQUE & INSUMOS (INTACTAS)
   // ============================================================================
   const openNewItemModal = () => {
     setEditingItem(null);
@@ -480,10 +1198,6 @@ export function HostOperationsTab() {
           restockMode === "in"
             ? "Estoque reposto com sucesso!"
             : "Baixa de consumo registrada!",
-        description:
-          restockMode === "in" && restockAutoExpense && totalPurchaseCost > 0
-            ? `Novo saldo: ${updatedQty} ${restockTarget.unit}. Despesa de R$ ${totalPurchaseCost.toFixed(2)} lançada no mês.`
-            : `Novo saldo de ${restockTarget.name}: ${updatedQty} ${restockTarget.unit}.`,
       });
 
       setIsRestockModalOpen(false);
@@ -507,7 +1221,7 @@ export function HostOperationsTab() {
   };
 
   // ============================================================================
-  // AÇÕES DE MANUTENÇÃO & INFRAESTRUTURA
+  // AÇÕES DE MANUTENÇÃO (INTACTAS)
   // ============================================================================
   const openNewMaintModal = () => {
     setEditingMaint(null);
@@ -666,111 +1380,6 @@ export function HostOperationsTab() {
     loadOperationsData();
   };
 
-  // ============================================================================
-  // AÇÕES DE DESPESAS MENSAIS
-  // ============================================================================
-  const openNewExpenseModal = () => {
-    setEditingExpense(null);
-    setExpenseForm({
-      title: "",
-      category: "energia",
-      room_id: "",
-      amount: "",
-      expense_date: format(new Date(), "yyyy-MM-dd"),
-      payment_status: "paid",
-      notes: "",
-    });
-    setIsExpenseModalOpen(true);
-  };
-
-  const openEditExpenseModal = (exp: ClinicExpense) => {
-    setEditingExpense(exp);
-    setExpenseForm({
-      title: exp.title,
-      category: exp.category,
-      room_id: exp.room_id || "",
-      amount: String(exp.amount),
-      expense_date: exp.expense_date,
-      payment_status: exp.payment_status,
-      notes: exp.notes || "",
-    });
-    setIsExpenseModalOpen(true);
-  };
-
-  const handleSaveExpense = async () => {
-    if (!expenseForm.title.trim() || !expenseForm.amount) {
-      return toast({
-        variant: "destructive",
-        title: "Informe a descrição e o valor da despesa.",
-      });
-    }
-
-    setSaving(true);
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) throw new Error("Não autenticado.");
-
-      const payload = {
-        host_id: user.id,
-        room_id: expenseForm.room_id || null,
-        title: expenseForm.title.trim(),
-        category: expenseForm.category,
-        amount: Math.max(0, Number(expenseForm.amount) || 0),
-        expense_date: expenseForm.expense_date,
-        payment_status: expenseForm.payment_status,
-        notes: expenseForm.notes.trim() || null,
-        reference_type: editingExpense?.reference_type || "manual",
-      };
-
-      if (editingExpense) {
-        const { error } = await supabase
-          .from("clinic_expenses")
-          .update(payload)
-          .eq("id", editingExpense.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase
-          .from("clinic_expenses")
-          .insert(payload);
-        if (error) throw error;
-      }
-
-      toast({
-        title: editingExpense
-          ? "Despesa atualizada!"
-          : "Despesa lançada no controle mensal!",
-      });
-      setIsExpenseModalOpen(false);
-      loadOperationsData();
-    } catch (err: any) {
-      toast({
-        variant: "destructive",
-        title: "Erro ao salvar despesa",
-        description: err.message,
-      });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleToggleExpensePaid = async (exp: ClinicExpense) => {
-    const nextStatus = exp.payment_status === "paid" ? "pending" : "paid";
-    await supabase
-      .from("clinic_expenses")
-      .update({ payment_status: nextStatus })
-      .eq("id", exp.id);
-    loadOperationsData();
-  };
-
-  const handleDeleteExpense = async (exp: ClinicExpense) => {
-    if (!confirm(`Deseja excluir a despesa "${exp.title}"?`)) return;
-    await supabase.from("clinic_expenses").delete().eq("id", exp.id);
-    toast({ title: "Despesa removida." });
-    loadOperationsData();
-  };
-
   const handleExportExpensesCSV = () => {
     if (expenses.length === 0) {
       return toast({ title: "Sem despesas registradas neste mês." });
@@ -778,19 +1387,23 @@ export function HostOperationsTab() {
     const headers = [
       "Data",
       "Descrição",
+      "Fornecedor",
       "Categoria",
       "Sala / Alocação",
       "Status",
       "Valor (R$)",
+      "Comprovante",
       "Observações",
     ];
     const rows = expenses.map((e) => [
       format(parseISO(e.expense_date), "dd/MM/yyyy"),
       e.title,
-      EXPENSE_CATEGORIES[e.category] || e.category,
-      e.room_name || "Custo Geral",
+      e.vendor || "",
+      expenseCategoriesMap[e.category] || e.category,
+      e.room_name || "Rateio Geral do Hub",
       e.payment_status === "paid" ? "Pago" : "Pendente",
       e.amount.toFixed(2).replace(".", ","),
+      e.receipt_url || "",
       e.notes || "",
     ]);
 
@@ -807,14 +1420,14 @@ export function HostOperationsTab() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.setAttribute("download", `Despesas_Clinica_${selectedMonth}.csv`);
+    link.setAttribute("download", `Custos_Hub_${selectedMonth}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
   // ============================================================================
-  // CÁLCULO DE KPIS OPERACIONAIS DO MÊS
+  // KPIS OPERACIONAIS, GRÁFICOS E RATEIO DO HUB POR SALA
   // ============================================================================
   const criticalItems = inventory.filter(
     (i) => i.current_quantity <= i.min_quantity,
@@ -846,6 +1459,86 @@ export function HostOperationsTab() {
     .filter((e) => e.payment_status === "pending")
     .reduce((acc, curr) => acc + curr.amount, 0);
 
+  // Cálculos de Rateio do Hub e Gráficos por Categoria
+  const hubCostAnalytics = useMemo(() => {
+    const totalHostRevenueNet = Object.values(roomRevenuesMap).reduce(
+      (acc, r) => acc + r.hostNetBrl,
+      0,
+    );
+
+    let sharedHubExpenses = 0;
+    let directRoomExpenses = 0;
+    const byCategoryMap = new Map<string, number>();
+    const directByRoomMap = new Map<string, number>();
+
+    expenses.forEach((e) => {
+      const val = Number(e.amount || 0);
+      if (e.room_id) {
+        directRoomExpenses += val;
+        directByRoomMap.set(
+          e.room_id,
+          (directByRoomMap.get(e.room_id) || 0) + val,
+        );
+      } else {
+        sharedHubExpenses += val;
+      }
+
+      const catLabel = expenseCategoriesMap[e.category] || e.category;
+      byCategoryMap.set(catLabel, (byCategoryMap.get(catLabel) || 0) + val);
+    });
+
+    const categoryChartData = Array.from(byCategoryMap.entries())
+      .map(([name, amount], idx) => ({
+        name,
+        amount,
+        pct:
+          totalMonthExpenses > 0
+            ? Math.round((amount / totalMonthExpenses) * 100)
+            : 0,
+        color: CHART_COLORS[idx % CHART_COLORS.length],
+      }))
+      .sort((a, b) => b.amount - a.amount);
+
+    const activeRoomsCount = Math.max(1, rooms.length);
+    const roomDistribution = rooms.map((r) => {
+      const hostNetRevenue = roomRevenuesMap[r.id]?.hostNetBrl || 0;
+      const directCost = directByRoomMap.get(r.id) || 0;
+      const allocatedSharedCost =
+        allocationMethod === "revenue_share" && totalHostRevenueNet > 0
+          ? sharedHubExpenses * (hostNetRevenue / totalHostRevenueNet)
+          : sharedHubExpenses / activeRoomsCount;
+
+      const totalRoomCost = directCost + allocatedSharedCost;
+      const netProfit = hostNetRevenue - totalRoomCost;
+
+      return {
+        roomId: r.id,
+        roomName: r.name,
+        hostNetRevenue,
+        directCost,
+        allocatedSharedCost,
+        totalRoomCost,
+        netProfit,
+      };
+    });
+
+    return {
+      totalHostRevenueNet,
+      sharedHubExpenses,
+      directRoomExpenses,
+      netHubProfit: totalHostRevenueNet - totalMonthExpenses,
+      categoryChartData,
+      roomDistribution,
+    };
+  }, [
+    expenses,
+    roomRevenuesMap,
+    rooms,
+    expenseCategoriesMap,
+    totalMonthExpenses,
+    allocationMethod,
+  ]);
+
   // Filtros de busca
   const q = search.toLowerCase();
   const filteredInventory = inventory.filter((i) => {
@@ -864,12 +1557,30 @@ export function HostOperationsTab() {
       (m.room_name || "").toLowerCase().includes(q),
   );
 
-  const filteredExpenses = expenses.filter(
-    (e) =>
+  const filteredExpenses = expenses.filter((e) => {
+    if (expenseRoomFilter === "hub_shared" && e.room_id !== null) return false;
+    if (
+      expenseRoomFilter !== "all" &&
+      expenseRoomFilter !== "hub_shared" &&
+      e.room_id !== expenseRoomFilter
+    ) {
+      return false;
+    }
+    if (
+      expenseCategoryFilter !== "all" &&
+      e.category !== expenseCategoryFilter
+    ) {
+      return false;
+    }
+    return (
       e.title.toLowerCase().includes(q) ||
-      (EXPENSE_CATEGORIES[e.category] || "").toLowerCase().includes(q) ||
-      (e.room_name || "").toLowerCase().includes(q),
-  );
+      (e.vendor || "").toLowerCase().includes(q) ||
+      (expenseCategoriesMap[e.category] || e.category)
+        .toLowerCase()
+        .includes(q) ||
+      (e.room_name || "").toLowerCase().includes(q)
+    );
+  });
 
   if (loading) {
     return (
@@ -880,22 +1591,24 @@ export function HostOperationsTab() {
   }
 
   return (
-    <div className="p-4 lg:p-8 animate-in fade-in duration-500 max-w-7xl mx-auto w-full pb-32 font-sans">
+    <div className="p-4 lg:p-8 animate-in fade-in duration-300 max-w-7xl mx-auto w-full pb-32 font-sans">
       {/* HEADER E SELETOR DE COMPETÊNCIA MENSAL */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
         <div>
-          <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-2.5">
-            <Package className="w-8 h-8 text-[#BF4B24]" />
-            Controle Interno, Estoque & Manutenção
+          <span className="text-[11px] font-bold uppercase tracking-widest text-[#BF4B24]">
+            Gestão Operacional do Anfitrião
+          </span>
+          <h1 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight mt-0.5">
+            Central de Custos, Rateio do Hub & Operações
           </h1>
-          <p className="text-sm text-slate-500 font-medium mt-1">
-            Gerencie insumos das salas, alertas de reposição crítica, ordens de
-            manutenção e despesas operacionais do mês.
+          <p className="text-sm text-slate-500 mt-1">
+            Fotografe notas fiscais, grave despesas por voz, distribua os custos
+            do Hub por sala e controle o estoque e manutenções.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs">
             <CalendarIcon className="w-4 h-4 text-[#BF4B24] mr-2" />
             <span className="text-xs font-bold text-slate-500 mr-2 uppercase">
               Mês:
@@ -904,41 +1617,126 @@ export function HostOperationsTab() {
               type="month"
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(e.target.value)}
-              className="text-sm font-black text-slate-900 outline-none bg-transparent"
+              className="text-sm font-bold text-slate-900 outline-none bg-transparent"
             />
           </div>
         </div>
       </div>
 
-      {/* BANNER AUTOMÁTICO DE ALERTA DE ESTOQUE CRÍTICO */}
+      {/* ==================================================================== */}
+      {/* BARRA DE CAPTURA INTELIGENTE (FOTO DA NOTA + COMANDO DE VOZ)         */}
+      {/* ==================================================================== */}
+      <div className="mb-6 bg-[#FAF7F4] border border-stone-200/90 rounded-2xl p-5 shadow-2xs">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="space-y-1 max-w-xl">
+            <h2 className="text-sm sm:text-base font-bold text-slate-900">
+              Lançamento Instantâneo por Foto ou Comando de Voz
+            </h2>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Tire a foto de uma nota/recibo para preenchimento automático do
+              valor ou fale no microfone:{" "}
+              <strong className="text-slate-800">
+                “Salve isso como despesa de manutenção no valor de 180 reais”
+              </strong>
+              .
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,application/pdf"
+              capture="environment"
+              className="hidden"
+              onChange={(e) => handleSelectReceiptPhoto(e.target.files?.[0])}
+            />
+
+            <Button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={aiProcessing}
+              className="h-10 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs cursor-pointer"
+            >
+              {aiProcessing ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Camera className="w-4 h-4 mr-2 text-[#BF4B24]" />
+              )}
+              Fotografar / Ler Nota
+            </Button>
+
+            {!isRecording ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={startVoiceRecording}
+                disabled={aiProcessing}
+                className="h-10 px-4 rounded-xl border-stone-300 bg-white hover:bg-stone-50 text-slate-900 font-semibold text-xs cursor-pointer"
+              >
+                <Mic className="w-4 h-4 mr-2 text-[#BF4B24]" />
+                Gravar Despesa por Voz
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                onClick={stopVoiceRecording}
+                className="h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs animate-pulse cursor-pointer"
+              >
+                <Square className="w-3.5 h-3.5 mr-2 fill-white" />
+                Parar Gravação
+              </Button>
+            )}
+
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsNewCategoryModalOpen(true)}
+              className="h-10 px-3.5 rounded-xl border-stone-200 bg-white text-slate-700 font-semibold text-xs cursor-pointer"
+            >
+              + Criar Categoria
+            </Button>
+          </div>
+        </div>
+
+        {isRecording && (
+          <div className="mt-3.5 p-3 rounded-xl bg-white border border-red-200 flex items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-ping" />
+              <span className="font-bold text-slate-900">Ouvindo:</span>
+              <span className="text-slate-600 italic">
+                {voiceTranscript ||
+                  "Diga a despesa, categoria, sala e valor..."}
+              </span>
+            </div>
+            <span className="text-[11px] font-semibold text-red-600">
+              Clique em Parar para concluir
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* BANNER DE ALERTA DE ESTOQUE CRÍTICO */}
       {criticalItems.length > 0 && (
-        <div className="mb-6 p-4 rounded-2xl bg-red-50 border-2 border-red-200 flex flex-col md:flex-row md:items-center justify-between gap-4 animate-in fade-in">
+        <div className="mb-6 p-4 rounded-2xl bg-red-50 border border-red-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-xl bg-red-600 text-white flex items-center justify-center shrink-0 mt-0.5">
-              <AlertTriangle className="w-5 h-5" />
+            <div className="w-9 h-9 rounded-xl bg-red-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+              <AlertTriangle className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-sm font-black text-red-950 uppercase tracking-wide">
-                Atenção: {criticalItems.length} item(ns) em Estoque Crítico de
-                Reposição!
+              <h3 className="text-xs font-bold text-red-950 uppercase tracking-wide">
+                {criticalItems.length} item(ns) em Estoque Crítico de Reposição
               </h3>
-              <p className="text-xs font-medium text-red-800 mt-0.5">
-                Itens precisando de compra imediata:{" "}
+              <p className="text-xs text-red-800 mt-0.5">
+                Itens:{" "}
                 <strong>
                   {criticalItems
                     .slice(0, 5)
                     .map((i) => `${i.name} (${i.current_quantity} ${i.unit})`)
                     .join(", ")}
                 </strong>
-                {criticalItems.length > 5 ? "..." : ""}. Custo estimado de
-                reposição:{" "}
-                <strong>
-                  R${" "}
-                  {estimatedRestockBudget.toLocaleString("pt-BR", {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
-                </strong>
+                . Orçamento estimado de reposição:{" "}
+                <strong>R$ {formatBRL(estimatedRestockBudget)}</strong>
               </p>
             </div>
           </div>
@@ -947,120 +1745,124 @@ export function HostOperationsTab() {
               setActiveSubTab("inventory");
               setOnlyCriticalStock(true);
             }}
-            className="bg-red-600 hover:bg-red-700 text-white font-black text-xs h-10 px-4 rounded-xl shrink-0"
+            className="bg-red-600 hover:bg-red-700 text-white font-semibold text-xs h-9 px-4 rounded-xl shrink-0"
           >
-            Filtrar Itens Críticos
+            Ver Itens Críticos
           </Button>
         </div>
       )}
 
-      {/* 4 KPIS OPERACIONAIS */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        {/* KPI 1: Gasto Total da Clínica no Mês */}
-        <div className="bg-slate-900 text-white p-5 rounded-2xl shadow-lg relative overflow-hidden">
+      {/* 4 KPIS OPERACIONAIS E DE RATEIO */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 tabular-nums">
+        <div className="bg-slate-900 text-white p-5 rounded-2xl">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-400 uppercase">
-              Gasto da Clínica no Mês
+            <span className="text-xs font-medium text-slate-400">
+              Custos Totais do Hub no Mês
             </span>
-            <TrendingDown className="w-5 h-5 text-orange-400" />
+            <TrendingDown className="w-4 h-4 text-orange-400" />
           </div>
-          <p className="text-2xl font-black text-white">
-            R${" "}
-            {totalMonthExpenses.toLocaleString("pt-BR", {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}
+          <p className="text-2xl font-bold text-white">
+            R$ {formatBRL(totalMonthExpenses)}
           </p>
-          <div className="flex items-center gap-2 mt-1.5 text-[11px] font-bold">
-            <span className="text-emerald-400">
-              Pago: R$ {paidMonthExpenses.toFixed(0)}
+          <div className="flex items-center gap-2 mt-1.5 text-[11px]">
+            <span className="text-emerald-400 font-semibold">
+              Pago: R$ {formatBRL(paidMonthExpenses)}
             </span>
             <span className="text-slate-600">•</span>
-            <span className="text-amber-300">
-              A Pagar: R$ {pendingMonthExpenses.toFixed(0)}
+            <span className="text-amber-300 font-semibold">
+              Pendente: R$ {formatBRL(pendingMonthExpenses)}
             </span>
           </div>
         </div>
 
-        {/* KPI 2: Itens em Estoque Crítico */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/90">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-400 uppercase">
-              Estoque Crítico
+            <span className="text-xs font-semibold text-slate-500">
+              Rateio Médio por Sala ({rooms.length} salas)
             </span>
-            <AlertTriangle
-              className={`w-5 h-5 ${
-                criticalItems.length > 0 ? "text-red-500" : "text-emerald-500"
-              }`}
-            />
+            <Building2 className="w-4 h-4 text-slate-400" />
           </div>
-          <p
-            className={`text-2xl font-black ${
-              criticalItems.length > 0 ? "text-red-600" : "text-slate-900"
-            }`}
-          >
-            {criticalItems.length}{" "}
-            <span className="text-sm font-bold text-slate-400">
-              / {inventory.length} itens
-            </span>
+          <p className="text-2xl font-bold text-slate-900">
+            R${" "}
+            {formatBRL(
+              rooms.length > 0 ? totalMonthExpenses / rooms.length : 0,
+            )}
+            <span className="text-xs font-normal text-slate-400">/sala</span>
           </p>
-          <p className="text-[11px] font-medium text-slate-400 mt-1">
-            Abaixo da quantidade mínima de segurança
+          <p className="text-xs text-slate-500 mt-1">
+            Resultado Líquido do Hub:{" "}
+            <strong
+              className={
+                hubCostAnalytics.netHubProfit >= 0
+                  ? "text-emerald-700"
+                  : "text-red-600"
+              }
+            >
+              R$ {formatBRL(hubCostAnalytics.netHubProfit)}
+            </strong>
           </p>
         </div>
 
-        {/* KPI 3: Manutenções em Aberto */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/90">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-400 uppercase">
+            <span className="text-xs font-semibold text-slate-500">
+              Estoque de Insumos
+            </span>
+            <Package className="w-4 h-4 text-emerald-600" />
+          </div>
+          <p className="text-2xl font-bold text-slate-900">
+            R$ {formatBRL(totalStockValue)}
+          </p>
+          <p className="text-xs text-slate-500 mt-1">
+            {criticalItems.length > 0
+              ? `${criticalItems.length} item(ns) abaixo do mínimo`
+              : `${inventory.length} itens abastecidos`}
+          </p>
+        </div>
+
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/90">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-semibold text-slate-500">
               Manutenções Abertas
             </span>
-            <Wrench className="w-5 h-5 text-blue-600" />
+            <Wrench className="w-4 h-4 text-[#BF4B24]" />
           </div>
-          <p className="text-2xl font-black text-slate-900">
+          <p className="text-2xl font-bold text-slate-900">
             {openMaintenances.length}
           </p>
-          <p className="text-[11px] font-bold text-amber-600 mt-1">
+          <p className="text-xs text-slate-500 mt-1">
             {urgentMaintenances.length > 0
               ? `${urgentMaintenances.length} de prioridade alta/urgente`
               : "Nenhuma urgência pendente"}
           </p>
         </div>
-
-        {/* KPI 4: Valor Imobilizado em Estoque */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-400 uppercase">
-              Valor em Estoque Atual
-            </span>
-            <Package className="w-5 h-5 text-emerald-600" />
-          </div>
-          <p className="text-2xl font-black text-slate-900">
-            R${" "}
-            {totalStockValue.toLocaleString("pt-BR", {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}
-          </p>
-          <p className="text-[11px] font-medium text-slate-400 mt-1">
-            Soma dos insumos disponíveis na clínica
-          </p>
-        </div>
       </div>
 
       {/* BARRA DE NAVEGAÇÃO INTERNA DAS 3 SUB-ABAS */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-3 mb-6 shadow-sm flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-3 mb-6 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
         <div className="flex bg-slate-100 p-1 rounded-xl overflow-x-auto">
           <button
-            onClick={() => setActiveSubTab("inventory")}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs sm:text-sm font-black whitespace-nowrap transition-all ${
-              activeSubTab === "inventory"
-                ? "bg-white text-[#BF4B24] shadow-sm"
+            onClick={() => setActiveSubTab("expenses")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+              activeSubTab === "expenses"
+                ? "bg-white text-slate-900 shadow-2xs"
                 : "text-slate-600 hover:text-slate-900"
             }`}
           >
-            <Package className="w-4 h-4" />
-            Estoque & Reposição ({inventory.length})
+            <Receipt className="w-4 h-4 text-[#BF4B24]" />
+            Despesas & Rateio do Hub ({expenses.length})
+          </button>
+
+          <button
+            onClick={() => setActiveSubTab("inventory")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+              activeSubTab === "inventory"
+                ? "bg-white text-slate-900 shadow-2xs"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            <Package className="w-4 h-4 text-[#BF4B24]" />
+            Estoque & Insumos ({inventory.length})
             {criticalItems.length > 0 && (
               <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-red-600 text-white">
                 {criticalItems.length}
@@ -1070,44 +1872,32 @@ export function HostOperationsTab() {
 
           <button
             onClick={() => setActiveSubTab("maintenance")}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs sm:text-sm font-black whitespace-nowrap transition-all ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
               activeSubTab === "maintenance"
-                ? "bg-white text-[#BF4B24] shadow-sm"
+                ? "bg-white text-slate-900 shadow-2xs"
                 : "text-slate-600 hover:text-slate-900"
             }`}
           >
-            <Wrench className="w-4 h-4" />
+            <Wrench className="w-4 h-4 text-[#BF4B24]" />
             Manutenção das Salas ({maintenances.length})
-          </button>
-
-          <button
-            onClick={() => setActiveSubTab("expenses")}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs sm:text-sm font-black whitespace-nowrap transition-all ${
-              activeSubTab === "expenses"
-                ? "bg-white text-[#BF4B24] shadow-sm"
-                : "text-slate-600 hover:text-slate-900"
-            }`}
-          >
-            <Receipt className="w-4 h-4" />
-            Despesas do Mês ({expenses.length})
           </button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative flex-1 sm:w-64">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <div className="relative flex-1 sm:w-60">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <Input
-              placeholder="Buscar insumo, reparo ou conta..."
+              placeholder="Buscar registro..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="pl-9 h-10 rounded-xl border-slate-200"
+              className="pl-8 h-9 text-xs rounded-xl border-slate-200"
             />
           </div>
 
           {activeSubTab === "inventory" && (
             <Button
               onClick={openNewItemModal}
-              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black h-10 rounded-xl"
+              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs h-9 rounded-xl cursor-pointer"
             >
               <Plus className="w-4 h-4 mr-1.5" /> Novo Insumo
             </Button>
@@ -1116,7 +1906,7 @@ export function HostOperationsTab() {
           {activeSubTab === "maintenance" && (
             <Button
               onClick={openNewMaintModal}
-              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black h-10 rounded-xl"
+              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs h-9 rounded-xl cursor-pointer"
             >
               <Plus className="w-4 h-4 mr-1.5" /> Nova Manutenção
             </Button>
@@ -1127,14 +1917,14 @@ export function HostOperationsTab() {
               <Button
                 variant="outline"
                 onClick={handleExportExpensesCSV}
-                className="h-10 rounded-xl font-bold border-slate-200 text-slate-700"
+                className="h-9 rounded-xl font-semibold text-xs border-slate-200 text-slate-700 cursor-pointer"
               >
-                <FileSpreadsheet className="w-4 h-4 mr-1.5 text-emerald-600" />
-                Exportar CSV
+                <FileSpreadsheet className="w-3.5 h-3.5 mr-1.5 text-emerald-600" />
+                CSV
               </Button>
               <Button
                 onClick={openNewExpenseModal}
-                className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black h-10 rounded-xl"
+                className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs h-9 rounded-xl cursor-pointer"
               >
                 <Plus className="w-4 h-4 mr-1.5" /> Lançar Despesa
               </Button>
@@ -1144,12 +1934,405 @@ export function HostOperationsTab() {
       </div>
 
       {/* ==================================================================== */}
-      {/* SUB-ABA 1: ESTOQUE & REPOSIÇÃO CRÍTICA */}
+      {/* SUB-ABA 1: DESPESAS DO MÊS, GRÁFICOS E RATEIO DO HUB POR SALA        */}
+      {/* ==================================================================== */}
+      {activeSubTab === "expenses" && (
+        <div className="space-y-6">
+          {/* GRÁFICOS VISUAIS E TABELA DE RATEIO DO HUB POR SALA */}
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            {/* Gráfico 1: Rateio de Custos por Sala */}
+            <div className="xl:col-span-2 bg-white p-6 rounded-2xl border border-slate-200/90 flex flex-col justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">
+                    Distribuição de Custos do Hub por Sala (Rateio Mensal)
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    Compare o repasse líquido de cada sala com seus custos
+                    diretos mais a fração dos custos gerais do Hub.
+                  </p>
+                </div>
+
+                <div className="flex items-center bg-slate-100 p-1 rounded-xl self-start">
+                  <button
+                    type="button"
+                    onClick={() => setAllocationMethod("equal")}
+                    className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                      allocationMethod === "equal"
+                        ? "bg-white text-slate-900 shadow-2xs"
+                        : "text-slate-600"
+                    }`}
+                  >
+                    Rateio Igualitário
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAllocationMethod("revenue_share")}
+                    className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                      allocationMethod === "revenue_share"
+                        ? "bg-white text-slate-900 shadow-2xs"
+                        : "text-slate-600"
+                    }`}
+                  >
+                    Proporcional à Receita
+                  </button>
+                </div>
+              </div>
+
+              {rooms.length > 0 ? (
+                <>
+                  <div className="h-[220px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart
+                        data={hubCostAnalytics.roomDistribution}
+                        margin={{ top: 10, right: 10, left: -15, bottom: 0 }}
+                      >
+                        <CartesianGrid
+                          strokeDasharray="3 3"
+                          vertical={false}
+                          stroke="#F1F5F9"
+                        />
+                        <XAxis
+                          dataKey="roomName"
+                          axisLine={false}
+                          tickLine={false}
+                          tick={{
+                            fontSize: 11,
+                            fill: "#64748B",
+                            fontWeight: 600,
+                          }}
+                        />
+                        <YAxis
+                          axisLine={false}
+                          tickLine={false}
+                          tick={{ fontSize: 11, fill: "#64748B" }}
+                          tickFormatter={(v) => `R$${v}`}
+                        />
+                        <RechartsTooltip
+                          formatter={(value: any, name: any) => [
+                            `R$ ${formatBRL(Number(value || 0))}`,
+                            name === "hostNetRevenue"
+                              ? "Repasse Líquido da Sala"
+                              : "Custo Total (Direto + Rateio)",
+                          ]}
+                        />
+                        <Bar
+                          dataKey="hostNetRevenue"
+                          name="hostNetRevenue"
+                          fill="#0F172A"
+                          radius={[6, 6, 0, 0]}
+                          maxBarSize={34}
+                        />
+                        <Bar
+                          dataKey="totalRoomCost"
+                          name="totalRoomCost"
+                          fill="#BF4B24"
+                          radius={[6, 6, 0, 0]}
+                          maxBarSize={34}
+                        />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="mt-4 pt-4 border-t border-slate-100 overflow-x-auto">
+                    <table className="w-full text-left text-xs whitespace-nowrap tabular-nums">
+                      <thead className="text-slate-400 font-semibold text-[11px]">
+                        <tr>
+                          <th className="pb-2">Sala</th>
+                          <th className="pb-2 text-right">Repasse no Mês</th>
+                          <th className="pb-2 text-right">Custo Direto</th>
+                          <th className="pb-2 text-right">Rateio do Hub</th>
+                          <th className="pb-2 text-right">Lucro Real</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {hubCostAnalytics.roomDistribution.map((rm) => (
+                          <tr key={rm.roomId}>
+                            <td className="py-2 font-bold text-slate-900">
+                              {rm.roomName}
+                            </td>
+                            <td className="py-2 text-right text-slate-700">
+                              R$ {formatBRL(rm.hostNetRevenue)}
+                            </td>
+                            <td className="py-2 text-right text-slate-600">
+                              - R$ {formatBRL(rm.directCost)}
+                            </td>
+                            <td className="py-2 text-right text-slate-500">
+                              - R$ {formatBRL(rm.allocatedSharedCost)}
+                            </td>
+                            <td
+                              className={`py-2 text-right font-bold ${
+                                rm.netProfit >= 0
+                                  ? "text-emerald-700"
+                                  : "text-red-600"
+                              }`}
+                            >
+                              R$ {formatBRL(rm.netProfit)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : (
+                <p className="text-xs text-slate-400 py-12 text-center">
+                  Nenhuma sala vinculada para cálculo de rateio.
+                </p>
+              )}
+            </div>
+
+            {/* Gráfico 2: Divisão por Categoria de Gasto */}
+            <div className="bg-white p-6 rounded-2xl border border-slate-200/90 flex flex-col justify-between">
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">
+                    Despesas por Categoria
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    Composição dos custos em {selectedMonth}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsNewCategoryModalOpen(true)}
+                  className="text-xs font-bold text-[#BF4B24] hover:underline cursor-pointer"
+                >
+                  + Categoria
+                </button>
+              </div>
+
+              <div className="flex-1 flex items-center justify-center my-2">
+                {hubCostAnalytics.categoryChartData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={185}>
+                    <PieChart>
+                      <Pie
+                        data={hubCostAnalytics.categoryChartData}
+                        innerRadius={50}
+                        outerRadius={74}
+                        paddingAngle={3}
+                        dataKey="amount"
+                      >
+                        {hubCostAnalytics.categoryChartData.map((entry, i) => (
+                          <Cell key={`c-${i}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <RechartsTooltip
+                        formatter={(val: any, _n: any, props: any) => [
+                          `R$ ${formatBRL(Number(val))} (${props.payload.pct}%)`,
+                          props.payload.name,
+                        ]}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <p className="text-xs text-slate-400 py-12">
+                    Sem despesas neste mês.
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-2 max-h-[165px] overflow-y-auto pr-1 tabular-nums">
+                {hubCostAnalytics.categoryChartData.map((cat) => (
+                  <div
+                    key={cat.name}
+                    className="flex items-center justify-between text-xs"
+                  >
+                    <div className="flex items-center gap-2 truncate">
+                      <span
+                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                        style={{ backgroundColor: cat.color }}
+                      />
+                      <span className="font-medium text-slate-700 truncate">
+                        {cat.name}
+                      </span>
+                    </div>
+                    <span className="font-bold text-slate-900">
+                      R$ {formatBRL(cat.amount)} ({cat.pct}%)
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* TABELA DE DESPESAS E NOTAS ANEXADAS */}
+          <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden">
+            <div className="p-4 sm:px-6 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-slate-50/50">
+              <span className="text-xs font-bold text-slate-700">
+                Relatório de Despesas e Comprovantes ({filteredExpenses.length})
+              </span>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={expenseRoomFilter}
+                  onChange={(e) => setExpenseRoomFilter(e.target.value)}
+                  className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 outline-none"
+                >
+                  <option value="all">Todas as Alocações</option>
+                  <option value="hub_shared">Rateio Geral do Hub</option>
+                  {rooms.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      Apenas {r.name}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={expenseCategoryFilter}
+                  onChange={(e) => setExpenseCategoryFilter(e.target.value)}
+                  className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 outline-none"
+                >
+                  <option value="all">Todas as Categorias</option>
+                  {Object.entries(expenseCategoriesMap).map(([k, v]) => (
+                    <option key={k} value={k}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {filteredExpenses.length === 0 ? (
+              <div className="py-16 text-center px-4">
+                <Receipt className="w-10 h-10 text-slate-200 mx-auto mb-3" />
+                <p className="font-bold text-slate-700 text-sm">
+                  Nenhuma despesa registada na competência {selectedMonth}.
+                </p>
+                <p className="text-xs text-slate-400 mt-1">
+                  Fotografe uma nota fiscal ou grave um comando de voz acima
+                  para lançar rapidamente.
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs whitespace-nowrap tabular-nums">
+                  <thead className="bg-slate-50 text-slate-500 font-semibold text-[11px] border-b border-slate-200">
+                    <tr>
+                      <th className="px-6 py-3.5">Data</th>
+                      <th className="px-6 py-3.5">Descrição & Detalhes</th>
+                      <th className="px-6 py-3.5">Categoria</th>
+                      <th className="px-6 py-3.5">Alocação / Sala</th>
+                      <th className="px-6 py-3.5 text-center">Nota / Anexo</th>
+                      <th className="px-6 py-3.5 text-center">Status</th>
+                      <th className="px-6 py-3.5 text-right">Valor (R$)</th>
+                      <th className="px-6 py-3.5 text-center">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredExpenses.map((exp) => (
+                      <tr key={exp.id} className="hover:bg-slate-50">
+                        <td className="px-6 py-4 font-semibold text-slate-600">
+                          {format(parseISO(exp.expense_date), "dd/MM/yyyy")}
+                        </td>
+                        <td className="px-6 py-4">
+                          <p className="font-bold text-slate-900">
+                            {exp.title}
+                          </p>
+                          {(exp.vendor || exp.notes) && (
+                            <p className="text-[11px] text-slate-400 mt-0.5">
+                              {[exp.vendor, exp.notes]
+                                .filter(Boolean)
+                                .join(" • ")}
+                            </p>
+                          )}
+                          {Array.isArray(exp.custom_fields) &&
+                            exp.custom_fields.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {exp.custom_fields.map((cf, idx) => (
+                                  <span
+                                    key={idx}
+                                    className="text-[10px] bg-stone-100 text-stone-700 px-1.5 py-0.5 rounded"
+                                  >
+                                    {cf.key}: <strong>{cf.value}</strong>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                        </td>
+                        <td className="px-6 py-4">
+                          <Badge className="bg-slate-100 text-slate-700 border-0 font-semibold text-[11px]">
+                            {expenseCategoriesMap[exp.category] || exp.category}
+                          </Badge>
+                        </td>
+                        <td className="px-6 py-4 font-semibold text-slate-600">
+                          {exp.room_name}
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          {exp.receipt_url ? (
+                            <a
+                              href={exp.receipt_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 font-semibold text-[11px] hover:bg-emerald-100"
+                            >
+                              <FileCheck2 className="w-3.5 h-3.5" />
+                              Ver Nota
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          ) : (
+                            <span className="text-slate-300 text-[11px]">
+                              —
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleExpensePaid(exp)}
+                            title="Alternar entre Pago e Pendente"
+                          >
+                            {exp.payment_status === "paid" ? (
+                              <Badge className="bg-emerald-50 text-emerald-700 border-0 font-semibold cursor-pointer">
+                                <CheckCircle2 className="w-3 h-3 mr-1" /> Pago
+                              </Badge>
+                            ) : (
+                              <Badge className="bg-amber-50 text-amber-800 border-0 font-semibold cursor-pointer">
+                                <Clock className="w-3 h-3 mr-1" /> Pendente
+                              </Badge>
+                            )}
+                          </button>
+                        </td>
+                        <td className="px-6 py-4 text-right font-bold text-slate-900">
+                          R$ {formatBRL(exp.amount)}
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => openEditExpenseModal(exp)}
+                              className="h-8 w-8 text-slate-500 hover:text-slate-900"
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleDeleteExpense(exp)}
+                              className="h-8 w-8 text-slate-400 hover:text-red-600"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ==================================================================== */}
+      {/* SUB-ABA 2: ESTOQUE & REPOSIÇÃO CRÍTICA                               */}
       {/* ==================================================================== */}
       {activeSubTab === "inventory" && (
-        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+        <div className="bg-white border border-slate-200 rounded-2xl shadow-2xs overflow-hidden">
           <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-            <p className="text-xs font-bold text-slate-500">
+            <p className="text-xs font-semibold text-slate-500">
               Use os botões <strong>Repor (+)</strong> e{" "}
               <strong>Baixa (-)</strong> para atualizar rapidamente o estoque
               diário da clínica.
@@ -1171,15 +2354,11 @@ export function HostOperationsTab() {
               <p className="font-bold text-slate-600">
                 Nenhum item de estoque encontrado.
               </p>
-              <p className="text-xs text-slate-400 mt-1">
-                Cadastre luvas, lençol de maca, álcool, café, copos e materiais
-                para ser avisado antes de acabarem.
-              </p>
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm whitespace-nowrap">
-                <thead className="bg-slate-50 text-slate-500 font-bold text-[10px] uppercase tracking-wider border-b border-slate-100">
+              <table className="w-full text-left text-xs whitespace-nowrap tabular-nums">
+                <thead className="bg-slate-50 text-slate-500 font-semibold text-[11px] border-b border-slate-200">
                   <tr>
                     <th className="px-6 py-4">Insumo / Material</th>
                     <th className="px-6 py-4">Sala / Local</th>
@@ -1210,10 +2389,10 @@ export function HostOperationsTab() {
                         }`}
                       >
                         <td className="px-6 py-4">
-                          <p className="font-black text-slate-900">
+                          <p className="font-bold text-slate-900">
                             {item.name}
                           </p>
-                          <p className="text-[11px] font-bold text-slate-400">
+                          <p className="text-[11px] text-slate-400">
                             {INVENTORY_CATEGORIES[item.category] ||
                               item.category}
                             {item.supplier ? ` • Forn: ${item.supplier}` : ""}
@@ -1221,7 +2400,7 @@ export function HostOperationsTab() {
                         </td>
 
                         <td className="px-6 py-4">
-                          <span className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                          <span className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">
                             <Building2 className="w-3.5 h-3.5 text-slate-400" />
                             {item.room_name}
                           </span>
@@ -1229,50 +2408,41 @@ export function HostOperationsTab() {
 
                         <td className="px-6 py-4 text-center">
                           <span
-                            className={`text-base font-black ${
+                            className={`text-sm font-bold ${
                               isCritical ? "text-red-600" : "text-slate-900"
                             }`}
                           >
                             {item.current_quantity} {item.unit}
                           </span>
-                          <span className="text-xs font-bold text-slate-400 block">
-                            Mínimo ideal: {item.min_quantity} {item.unit}
+                          <span className="text-[11px] text-slate-400 block">
+                            Mínimo: {item.min_quantity} {item.unit}
                           </span>
                         </td>
 
                         <td className="px-6 py-4 text-center">
                           {isZero ? (
-                            <Badge className="bg-red-600 text-white border-0 font-black">
-                              Esgotado!
+                            <Badge className="bg-red-600 text-white border-0 font-bold">
+                              Esgotado
                             </Badge>
                           ) : isCritical ? (
-                            <Badge className="bg-red-100 text-red-800 border-0 font-black">
+                            <Badge className="bg-red-100 text-red-800 border-0 font-bold">
                               <AlertTriangle className="w-3 h-3 mr-1" />
                               Reposição Crítica
                             </Badge>
                           ) : (
-                            <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold">
-                              Estoque Normal
+                            <Badge className="bg-emerald-50 text-emerald-700 border-0 font-semibold">
+                              Normal
                             </Badge>
                           )}
                         </td>
 
                         <td className="px-6 py-4 text-right">
                           <p className="font-bold text-slate-800">
-                            R${" "}
-                            {item.unit_cost.toLocaleString("pt-BR", {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}
+                            R$ {formatBRL(item.unit_cost)}
                           </p>
-                          <p className="text-[10px] font-bold text-slate-400">
+                          <p className="text-[10px] text-slate-400">
                             Total: R${" "}
-                            {(
-                              item.current_quantity * item.unit_cost
-                            ).toLocaleString("pt-BR", {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}
+                            {formatBRL(item.current_quantity * item.unit_cost)}
                           </p>
                         </td>
 
@@ -1284,14 +2454,14 @@ export function HostOperationsTab() {
                               onClick={() =>
                                 openStockMovementModal(item, "out")
                               }
-                              className="h-8 px-2.5 border-slate-200 text-slate-700 font-bold hover:bg-slate-100"
+                              className="h-8 px-2.5 border-slate-200 text-slate-700 font-semibold text-xs"
                             >
                               <Minus className="w-3.5 h-3.5 mr-1" /> Baixa
                             </Button>
                             <Button
                               size="sm"
                               onClick={() => openStockMovementModal(item, "in")}
-                              className="h-8 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+                              className="h-8 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs"
                             >
                               <Plus className="w-3.5 h-3.5 mr-1" /> Repor
                             </Button>
@@ -1329,7 +2499,7 @@ export function HostOperationsTab() {
       )}
 
       {/* ==================================================================== */}
-      {/* SUB-ABA 2: MANUTENÇÃO & INFRAESTRUTURA DAS SALAS */}
+      {/* SUB-ABA 3: MANUTENÇÃO & INFRAESTRUTURA DAS SALAS                     */}
       {/* ==================================================================== */}
       {activeSubTab === "maintenance" && (
         <div className="space-y-4">
@@ -1339,87 +2509,67 @@ export function HostOperationsTab() {
               <p className="font-bold text-slate-600">
                 Nenhuma ordem de manutenção registrada.
               </p>
-              <p className="text-xs text-slate-400 mt-1">
-                Registre revisões de ar-condicionado, reparos elétricos ou
-                consertos de mobiliário para manter o padrão das salas.
-              </p>
             </div>
           ) : (
             filteredMaintenances.map((m) => (
               <div
                 key={m.id}
-                className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-[#BF4B24]/30 transition-colors"
+                className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col md:flex-row md:items-center justify-between gap-4"
               >
                 <div className="space-y-1.5">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-base font-black text-slate-900">
+                    <h3 className="text-sm font-bold text-slate-900">
                       {m.title}
                     </h3>
-                    <Badge className="bg-slate-100 text-slate-700 border-0 text-[10px] font-bold">
+                    <Badge className="bg-slate-100 text-slate-700 border-0 text-[10px] font-semibold">
                       {m.room_name}
                     </Badge>
                     {m.priority === "urgent" && (
-                      <Badge className="bg-red-600 text-white border-0 text-[10px] font-black">
+                      <Badge className="bg-red-600 text-white border-0 text-[10px] font-bold">
                         Urgente
                       </Badge>
                     )}
-                    {m.priority === "high" && (
-                      <Badge className="bg-amber-100 text-amber-800 border-0 text-[10px] font-black">
-                        Alta Prioridade
-                      </Badge>
-                    )}
                     {m.status === "completed" ? (
-                      <Badge className="bg-emerald-100 text-emerald-800 border-0 text-[10px] font-bold">
+                      <Badge className="bg-emerald-50 text-emerald-700 border-0 text-[10px] font-semibold">
                         <CheckCircle2 className="w-3 h-3 mr-1" /> Concluída
                       </Badge>
-                    ) : m.status === "in_progress" ? (
-                      <Badge className="bg-blue-100 text-blue-800 border-0 text-[10px] font-bold">
-                        Em Execução
-                      </Badge>
                     ) : (
-                      <Badge className="bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-bold">
+                      <Badge className="bg-amber-50 text-amber-800 border-0 text-[10px] font-semibold">
                         Pendente
                       </Badge>
                     )}
                   </div>
 
                   {m.description && (
-                    <p className="text-xs text-slate-600 font-medium">
-                      {m.description}
-                    </p>
+                    <p className="text-xs text-slate-600">{m.description}</p>
                   )}
 
-                  <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400 font-bold pt-1">
+                  <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400 pt-1">
                     <span>
                       Categoria:{" "}
                       {MAINTENANCE_CATEGORIES[m.category] || m.category}
                     </span>
                     {m.provider_name && (
                       <span>
-                        Técnico/Empresa: {m.provider_name}{" "}
+                        Prestador: {m.provider_name}{" "}
                         {m.provider_phone ? `(${m.provider_phone})` : ""}
                       </span>
                     )}
                     {m.scheduled_date && (
                       <span>
-                        Data prevista:{" "}
-                        {format(parseISO(m.scheduled_date), "dd/MM/yyyy")}
+                        Data: {format(parseISO(m.scheduled_date), "dd/MM/yyyy")}
                       </span>
                     )}
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between md:justify-end gap-4 border-t md:border-t-0 pt-3 md:pt-0 border-slate-100">
+                <div className="flex items-center justify-between md:justify-end gap-4 border-t md:border-t-0 pt-3 md:pt-0 border-slate-100 tabular-nums">
                   <div className="text-left md:text-right">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase block">
-                      Custo do Serviço
+                    <span className="text-[10px] text-slate-400 uppercase block">
+                      Custo
                     </span>
-                    <span className="text-lg font-black text-slate-900">
-                      R${" "}
-                      {m.cost.toLocaleString("pt-BR", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}
+                    <span className="text-base font-bold text-slate-900">
+                      R$ {formatBRL(m.cost)}
                     </span>
                   </div>
 
@@ -1428,9 +2578,9 @@ export function HostOperationsTab() {
                       <Button
                         size="sm"
                         onClick={() => handleMarkMaintCompleted(m)}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold h-9 rounded-xl"
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs h-9 rounded-xl"
                       >
-                        <CheckCircle2 className="w-4 h-4 mr-1" /> Concluir
+                        <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Concluir
                       </Button>
                     )}
                     <Button
@@ -1458,130 +2608,398 @@ export function HostOperationsTab() {
       )}
 
       {/* ==================================================================== */}
-      {/* SUB-ABA 3: DESPESAS OPERACIONAIS DO MÊS */}
+      {/* MODAL DE DESPESA (COM LEITURA DE FOTO DA NOTA, VOZ E CAMPOS EXTRAS)  */}
       {/* ==================================================================== */}
-      {activeSubTab === "expenses" && (
-        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-          {filteredExpenses.length === 0 ? (
-            <div className="py-16 text-center px-4">
-              <Receipt className="w-12 h-12 text-slate-200 mx-auto mb-3" />
-              <p className="font-bold text-slate-600">
-                Nenhuma despesa registrada na competência {selectedMonth}.
-              </p>
-              <p className="text-xs text-slate-400 mt-1">
-                Lance contas de energia, condomínio, limpeza ou reposições de
-                estoque para acompanhar o custo mensal real da clínica.
-              </p>
+      <Dialog open={isExpenseModalOpen} onOpenChange={setIsExpenseModalOpen}>
+        <DialogContent className="sm:max-w-xl max-h-[92vh] overflow-y-auto bg-white rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-slate-900">
+              {editingExpense
+                ? "Editar Despesa do Hub"
+                : "Lançar Despesa Operacional"}
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Tire foto da nota fiscal, grave por voz ou preencha os dados para
+              rateio no Hub.
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Barra rápida de Foto + Voz dentro do Modal */}
+          <div className="p-3 rounded-xl bg-[#FAF7F4] border border-stone-200/90 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={aiProcessing}
+                className="h-9 rounded-lg bg-slate-900 text-white text-xs font-semibold cursor-pointer"
+              >
+                <Camera className="w-3.5 h-3.5 mr-1.5 text-[#BF4B24]" />
+                {receiptFile || receiptPreviewUrl
+                  ? "Trocar Nota / Anexo"
+                  : "Fotografar Nota"}
+              </Button>
+
+              {!isRecording ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={startVoiceRecording}
+                  disabled={aiProcessing}
+                  className="h-9 rounded-lg border-stone-300 bg-white text-slate-800 text-xs font-semibold cursor-pointer"
+                >
+                  <Mic className="w-3.5 h-3.5 mr-1.5 text-[#BF4B24]" />
+                  Falar Comando
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={stopVoiceRecording}
+                  className="h-9 rounded-lg bg-red-600 text-white text-xs font-bold animate-pulse cursor-pointer"
+                >
+                  <Square className="w-3 h-3 mr-1.5 fill-white" />
+                  Parar Áudio
+                </Button>
+              )}
             </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm whitespace-nowrap">
-                <thead className="bg-slate-50 text-slate-500 font-bold text-[10px] uppercase tracking-wider border-b border-slate-100">
-                  <tr>
-                    <th className="px-6 py-4">Data</th>
-                    <th className="px-6 py-4">Descrição da Despesa</th>
-                    <th className="px-6 py-4">Categoria</th>
-                    <th className="px-6 py-4">Alocação / Sala</th>
-                    <th className="px-6 py-4 text-center">Status</th>
-                    <th className="px-6 py-4 text-right">Valor (R$)</th>
-                    <th className="px-6 py-4 text-center">Ações</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredExpenses.map((exp) => (
-                    <tr key={exp.id} className="hover:bg-slate-50">
-                      <td className="px-6 py-4 font-bold text-slate-600">
-                        {format(parseISO(exp.expense_date), "dd/MM/yyyy")}
-                      </td>
-                      <td className="px-6 py-4">
-                        <p className="font-black text-slate-900">{exp.title}</p>
-                        {exp.notes && (
-                          <p className="text-[11px] font-medium text-slate-400">
-                            {exp.notes}
-                          </p>
-                        )}
-                      </td>
-                      <td className="px-6 py-4">
-                        <Badge className="bg-slate-100 text-slate-700 border-0 font-bold">
-                          {EXPENSE_CATEGORIES[exp.category] || exp.category}
-                        </Badge>
-                      </td>
-                      <td className="px-6 py-4 text-xs font-bold text-slate-600">
-                        {exp.room_name}
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleExpensePaid(exp)}
-                          title="Clique para alternar entre Pago e Pendente"
-                        >
-                          {exp.payment_status === "paid" ? (
-                            <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold cursor-pointer">
-                              <CheckCircle2 className="w-3 h-3 mr-1" /> Pago
-                            </Badge>
-                          ) : (
-                            <Badge className="bg-amber-100 text-amber-800 border-0 font-bold cursor-pointer">
-                              <Clock className="w-3 h-3 mr-1" /> Pendente
-                            </Badge>
-                          )}
-                        </button>
-                      </td>
-                      <td className="px-6 py-4 text-right font-black text-slate-900">
-                        R${" "}
-                        {exp.amount.toLocaleString("pt-BR", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <div className="flex items-center justify-center gap-1">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => openEditExpenseModal(exp)}
-                            className="h-8 w-8 text-slate-500 hover:text-slate-900"
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleDeleteExpense(exp)}
-                            className="h-8 w-8 text-slate-400 hover:text-red-600"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+
+            {aiProcessing && (
+              <span className="text-xs font-semibold text-[#BF4B24] flex items-center gap-1.5">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Extraindo dados...
+              </span>
+            )}
+          </div>
+
+          {receiptPreviewUrl && (
+            <div className="relative h-36 w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
+              <img
+                src={receiptPreviewUrl}
+                alt="Nota fiscal anexada"
+                className="w-full h-full object-contain"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setReceiptFile(null);
+                  setReceiptPreviewUrl(null);
+                }}
+                className="absolute top-2 right-2 p-1 rounded-full bg-slate-900/80 text-white hover:bg-slate-900"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
             </div>
           )}
-        </div>
-      )}
 
-      {/* ==================================================================== */}
-      {/* MODAL 1: CRIAR / EDITAR ITEM DE ESTOQUE */}
-      {/* ==================================================================== */}
-      <Dialog open={isItemModalOpen} onOpenChange={setIsItemModalOpen}>
-        <DialogContent className="sm:max-w-lg bg-white">
+          <div className="space-y-4 py-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="sm:col-span-2">
+                <Label className="text-xs font-semibold text-slate-700">
+                  Descrição da Despesa *
+                </Label>
+                <Input
+                  value={expenseForm.title}
+                  onChange={(e) =>
+                    setExpenseForm({ ...expenseForm, title: e.target.value })
+                  }
+                  placeholder="Ex: Conta de Energia Cosern / Manutenção Ar"
+                  className="mt-1 h-10 text-xs rounded-xl"
+                />
+              </div>
+
+              <div>
+                <Label className="text-xs font-semibold text-slate-700">
+                  Valor (R$) *
+                </Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={expenseForm.amount}
+                  onChange={(e) =>
+                    setExpenseForm({ ...expenseForm, amount: e.target.value })
+                  }
+                  placeholder="0.00"
+                  className="mt-1 h-10 font-bold text-sm rounded-xl"
+                />
+              </div>
+
+              <div>
+                <Label className="text-xs font-semibold text-slate-700">
+                  Data da Despesa
+                </Label>
+                <Input
+                  type="date"
+                  value={expenseForm.expense_date}
+                  onChange={(e) =>
+                    setExpenseForm({
+                      ...expenseForm,
+                      expense_date: e.target.value,
+                    })
+                  }
+                  className="mt-1 h-10 text-xs font-semibold rounded-xl"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Categoria
+                  </Label>
+                  <button
+                    type="button"
+                    onClick={() => setIsNewCategoryModalOpen(true)}
+                    className="text-[11px] font-bold text-[#BF4B24] hover:underline"
+                  >
+                    + Nova categoria
+                  </button>
+                </div>
+                <select
+                  value={expenseForm.category}
+                  onChange={(e) =>
+                    setExpenseForm({
+                      ...expenseForm,
+                      category: e.target.value,
+                    })
+                  }
+                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none"
+                >
+                  {Object.entries(expenseCategoriesMap).map(([k, v]) => (
+                    <option key={k} value={k}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <Label className="text-xs font-semibold text-slate-700">
+                  Alocação (Rateio Hub ou Sala)
+                </Label>
+                <select
+                  value={expenseForm.room_id}
+                  onChange={(e) =>
+                    setExpenseForm({ ...expenseForm, room_id: e.target.value })
+                  }
+                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none"
+                >
+                  <option value="">Rateio Geral do Hub (Todas as Salas)</option>
+                  {rooms.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      Exclusivo: {r.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <Label className="text-xs font-semibold text-slate-700">
+                  Fornecedor / Prestador (Opcional)
+                </Label>
+                <Input
+                  value={expenseForm.vendor}
+                  onChange={(e) =>
+                    setExpenseForm({ ...expenseForm, vendor: e.target.value })
+                  }
+                  placeholder="Ex: Cosern, Kalunga..."
+                  className="mt-1 h-10 text-xs rounded-xl"
+                />
+              </div>
+
+              <div>
+                <Label className="text-xs font-semibold text-slate-700">
+                  Situação do Pagamento
+                </Label>
+                <select
+                  value={expenseForm.payment_status}
+                  onChange={(e) =>
+                    setExpenseForm({
+                      ...expenseForm,
+                      payment_status: e.target.value as "paid" | "pending",
+                    })
+                  }
+                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none"
+                >
+                  <option value="paid">Pago</option>
+                  <option value="pending">Pendente (A Pagar)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Campos Personalizados */}
+            <div className="pt-2 border-t border-slate-100 space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold text-slate-700">
+                  Campos Personalizados (Opcional)
+                </Label>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExpenseForm((prev) => ({
+                      ...prev,
+                      custom_fields: [
+                        ...prev.custom_fields,
+                        { key: "", value: "" },
+                      ],
+                    }))
+                  }
+                  className="text-xs font-bold text-[#BF4B24] hover:underline"
+                >
+                  + Adicionar campo
+                </button>
+              </div>
+
+              {expenseForm.custom_fields.map((cf, index) => (
+                <div key={index} className="flex items-center gap-2">
+                  <Input
+                    placeholder="Campo (ex: Nº Nota, Garantia)"
+                    value={cf.key}
+                    onChange={(e) => {
+                      const next = [...expenseForm.custom_fields];
+                      next[index].key = e.target.value;
+                      setExpenseForm({ ...expenseForm, custom_fields: next });
+                    }}
+                    className="h-9 text-xs flex-1"
+                  />
+                  <Input
+                    placeholder="Informação"
+                    value={cf.value}
+                    onChange={(e) => {
+                      const next = [...expenseForm.custom_fields];
+                      next[index].value = e.target.value;
+                      setExpenseForm({ ...expenseForm, custom_fields: next });
+                    }}
+                    className="h-9 text-xs flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() =>
+                      setExpenseForm({
+                        ...expenseForm,
+                        custom_fields: expenseForm.custom_fields.filter(
+                          (_, i) => i !== index,
+                        ),
+                      })
+                    }
+                    className="h-9 w-9 text-slate-400 hover:text-red-600"
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+
+            <div>
+              <Label className="text-xs font-semibold text-slate-700">
+                Observações (Opcional)
+              </Label>
+              <Input
+                value={expenseForm.notes}
+                onChange={(e) =>
+                  setExpenseForm({ ...expenseForm, notes: e.target.value })
+                }
+                placeholder="Ex: Pago via PIX CNPJ"
+                className="mt-1 h-10 text-xs rounded-xl"
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setIsExpenseModalOpen(false)}
+              className="font-semibold text-xs"
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={handleSaveExpense}
+              disabled={saving}
+              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs rounded-xl px-5 cursor-pointer"
+            >
+              {saving ? "Salvando..." : "Salvar Despesa"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL PARA CRIAR NOVA CATEGORIA PERSONALIZADA */}
+      <Dialog
+        open={isNewCategoryModalOpen}
+        onOpenChange={setIsNewCategoryModalOpen}
+      >
+        <DialogContent className="sm:max-w-sm bg-white rounded-2xl">
           <DialogHeader>
-            <DialogTitle className="text-xl font-black text-slate-900">
+            <DialogTitle className="text-base font-bold text-slate-900">
+              Criar Categoria de Despesa
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Adicione um novo tipo de custo para classificar suas notas e
+              despesas do Hub.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <Label className="text-xs font-semibold text-slate-700">
+                Nome da Categoria
+              </Label>
+              <Input
+                placeholder="Ex: Café & Recepção, Contabilidade, Marketing..."
+                value={newCategoryLabel}
+                onChange={(e) => setNewCategoryLabel(e.target.value)}
+                className="mt-1 h-10 text-xs rounded-xl"
+              />
+            </div>
+
+            <div>
+              <Label className="text-xs font-semibold text-slate-700">
+                Tipo de Custo
+              </Label>
+              <select
+                value={newCategoryCostType}
+                onChange={(e) =>
+                  setNewCategoryCostType(e.target.value as "fixed" | "variable")
+                }
+                className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none"
+              >
+                <option value="variable">Custo Variável</option>
+                <option value="fixed">Custo Fixo Recorrente</option>
+              </select>
+            </div>
+
+            <Button
+              type="button"
+              onClick={handleCreateCustomCategory}
+              className="w-full h-10 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs cursor-pointer"
+            >
+              Salvar Categoria
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAIS DE ESTOQUE E MANUTENÇÃO MANTIDOS */}
+      <Dialog open={isItemModalOpen} onOpenChange={setIsItemModalOpen}>
+        <DialogContent className="sm:max-w-lg bg-white rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-slate-900">
               {editingItem
                 ? "Editar Item do Estoque"
                 : "Cadastrar Insumo no Estoque"}
             </DialogTitle>
-            <DialogDescription>
-              Defina a quantidade mínima de segurança para receber alertas
-              automáticos de reposição.
+            <DialogDescription className="text-xs text-slate-500">
+              Defina a quantidade mínima de segurança para receber alertas de
+              reposição.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-2">
             <div>
-              <Label className="text-xs font-bold text-slate-600">
+              <Label className="text-xs font-semibold text-slate-700">
                 Nome do Insumo / Material *
               </Label>
               <Input
@@ -1589,14 +3007,14 @@ export function HostOperationsTab() {
                 onChange={(e) =>
                   setItemForm({ ...itemForm, name: e.target.value })
                 }
-                placeholder="Ex: Rolo de Lençol Descartável 70x50m / Luva Nitrílica M"
-                className="mt-1"
+                placeholder="Ex: Rolo de Lençol Descartável / Luva Nitrílica"
+                className="mt-1 h-10 text-xs rounded-xl"
               />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="text-xs font-bold text-slate-600">
+                <Label className="text-xs font-semibold text-slate-700">
                   Categoria
                 </Label>
                 <select
@@ -1604,7 +3022,7 @@ export function HostOperationsTab() {
                   onChange={(e) =>
                     setItemForm({ ...itemForm, category: e.target.value })
                   }
-                  className="mt-1 w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700"
+                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
                 >
                   {Object.entries(INVENTORY_CATEGORIES).map(([k, v]) => (
                     <option key={k} value={k}>
@@ -1615,7 +3033,7 @@ export function HostOperationsTab() {
               </div>
 
               <div>
-                <Label className="text-xs font-bold text-slate-600">
+                <Label className="text-xs font-semibold text-slate-700">
                   Sala Vinculada (Opcional)
                 </Label>
                 <select
@@ -1623,9 +3041,9 @@ export function HostOperationsTab() {
                   onChange={(e) =>
                     setItemForm({ ...itemForm, room_id: e.target.value })
                   }
-                  className="mt-1 w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700"
+                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
                 >
-                  <option value="">Uso Geral da Clínica</option>
+                  <option value="">Uso Geral do Hub</option>
                   {rooms.map((r) => (
                     <option key={r.id} value={r.id}>
                       {r.name}
@@ -1637,7 +3055,7 @@ export function HostOperationsTab() {
 
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <Label className="text-xs font-bold text-slate-600">
+                <Label className="text-xs font-semibold text-slate-700">
                   Qtd. Atual *
                 </Label>
                 <Input
@@ -1649,12 +3067,12 @@ export function HostOperationsTab() {
                       current_quantity: e.target.value,
                     })
                   }
-                  className="mt-1 font-black"
+                  className="mt-1 h-10 font-bold text-xs rounded-xl"
                 />
               </div>
 
               <div>
-                <Label className="text-xs font-bold text-red-600">
+                <Label className="text-xs font-semibold text-red-600">
                   Estoque Mínimo *
                 </Label>
                 <Input
@@ -1663,12 +3081,12 @@ export function HostOperationsTab() {
                   onChange={(e) =>
                     setItemForm({ ...itemForm, min_quantity: e.target.value })
                   }
-                  className="mt-1 font-black border-red-200"
+                  className="mt-1 h-10 font-bold text-xs border-red-200 rounded-xl"
                 />
               </div>
 
               <div>
-                <Label className="text-xs font-bold text-slate-600">
+                <Label className="text-xs font-semibold text-slate-700">
                   Unidade
                 </Label>
                 <select
@@ -1676,7 +3094,7 @@ export function HostOperationsTab() {
                   onChange={(e) =>
                     setItemForm({ ...itemForm, unit: e.target.value })
                   }
-                  className="mt-1 w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700"
+                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
                 >
                   <option value="un">Unidade (un)</option>
                   <option value="cx">Caixa (cx)</option>
@@ -1689,8 +3107,8 @@ export function HostOperationsTab() {
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="text-xs font-bold text-slate-600">
-                  Custo Unitário de Compra (R$)
+                <Label className="text-xs font-semibold text-slate-700">
+                  Custo Unitário (R$)
                 </Label>
                 <Input
                   type="number"
@@ -1700,12 +3118,12 @@ export function HostOperationsTab() {
                     setItemForm({ ...itemForm, unit_cost: e.target.value })
                   }
                   placeholder="Ex: 18.50"
-                  className="mt-1"
+                  className="mt-1 h-10 text-xs rounded-xl"
                 />
               </div>
 
               <div>
-                <Label className="text-xs font-bold text-slate-600">
+                <Label className="text-xs font-semibold text-slate-700">
                   Fornecedor (Opcional)
                 </Label>
                 <Input
@@ -1713,14 +3131,14 @@ export function HostOperationsTab() {
                   onChange={(e) =>
                     setItemForm({ ...itemForm, supplier: e.target.value })
                   }
-                  placeholder="Ex: Dental Cremer / Atacadão"
-                  className="mt-1"
+                  placeholder="Ex: Dental Cremer"
+                  className="mt-1 h-10 text-xs rounded-xl"
                 />
               </div>
             </div>
 
             {!editingItem && (
-              <label className="flex items-center gap-2 p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-700 cursor-pointer">
+              <label className="flex items-center gap-2 p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-700 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={itemForm.recordInitialExpense}
@@ -1741,14 +3159,14 @@ export function HostOperationsTab() {
             <Button
               variant="ghost"
               onClick={() => setIsItemModalOpen(false)}
-              className="font-bold"
+              className="font-semibold text-xs"
             >
               Cancelar
             </Button>
             <Button
               onClick={handleSaveInventoryItem}
               disabled={saving}
-              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black"
+              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs rounded-xl"
             >
               {saving ? "Salvando..." : "Salvar Insumo"}
             </Button>
@@ -1756,27 +3174,23 @@ export function HostOperationsTab() {
         </DialogContent>
       </Dialog>
 
-      {/* ==================================================================== */}
-      {/* MODAL 2: REPOSIÇÃO (+) OU BAIXA (-) DE ESTOQUE */}
-      {/* ==================================================================== */}
       <Dialog open={isRestockModalOpen} onOpenChange={setIsRestockModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white">
+        <DialogContent className="sm:max-w-md bg-white rounded-2xl">
           <DialogHeader>
-            <DialogTitle className="text-xl font-black text-slate-900">
+            <DialogTitle className="text-lg font-bold text-slate-900">
               {restockMode === "in"
                 ? `Repor Estoque: ${restockTarget?.name}`
-                : `Registrar Consumo / Baixa: ${restockTarget?.name}`}
+                : `Registrar Baixa: ${restockTarget?.name}`}
             </DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="text-xs text-slate-500">
               Saldo atual: <strong>{restockTarget?.current_quantity}</strong>{" "}
-              {restockTarget?.unit} (Mínimo: {restockTarget?.min_quantity}{" "}
-              {restockTarget?.unit})
+              {restockTarget?.unit}
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-2">
             <div>
-              <Label className="text-xs font-bold text-slate-600">
+              <Label className="text-xs font-semibold text-slate-700">
                 Quantidade a{" "}
                 {restockMode === "in" ? "Adicionar (+)" : "Retirar (-)"} *
               </Label>
@@ -1785,14 +3199,14 @@ export function HostOperationsTab() {
                 min="1"
                 value={restockQty}
                 onChange={(e) => setRestockQty(e.target.value)}
-                className="mt-1 font-black text-lg"
+                className="mt-1 font-bold text-base h-10 rounded-xl"
               />
             </div>
 
             {restockMode === "in" && (
               <>
                 <div>
-                  <Label className="text-xs font-bold text-slate-600">
+                  <Label className="text-xs font-semibold text-slate-700">
                     Custo Unitário desta Compra (R$)
                   </Label>
                   <Input
@@ -1800,11 +3214,11 @@ export function HostOperationsTab() {
                     step="0.01"
                     value={restockUnitCost}
                     onChange={(e) => setRestockUnitCost(e.target.value)}
-                    className="mt-1 font-bold"
+                    className="mt-1 font-semibold h-10 text-xs rounded-xl"
                   />
                 </div>
 
-                <label className="flex items-center gap-2.5 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-bold text-emerald-900 cursor-pointer">
+                <label className="flex items-center gap-2.5 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-900 cursor-pointer">
                   <input
                     type="checkbox"
                     checked={restockAutoExpense}
@@ -1815,10 +3229,10 @@ export function HostOperationsTab() {
                     Lançar automaticamente{" "}
                     <strong>
                       R${" "}
-                      {(
+                      {formatBRL(
                         (Number(restockQty) || 0) *
-                        (Number(restockUnitCost) || 0)
-                      ).toFixed(2)}
+                          (Number(restockUnitCost) || 0),
+                      )}
                     </strong>{" "}
                     nas Despesas do Mês
                   </span>
@@ -1831,7 +3245,7 @@ export function HostOperationsTab() {
             <Button
               variant="ghost"
               onClick={() => setIsRestockModalOpen(false)}
-              className="font-bold"
+              className="font-semibold text-xs"
             >
               Cancelar
             </Button>
@@ -1840,8 +3254,8 @@ export function HostOperationsTab() {
               disabled={saving}
               className={
                 restockMode === "in"
-                  ? "bg-emerald-600 hover:bg-emerald-700 text-white font-black"
-                  : "bg-slate-900 hover:bg-slate-800 text-white font-black"
+                  ? "bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl"
+                  : "bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs rounded-xl"
               }
             >
               {saving
@@ -1854,26 +3268,22 @@ export function HostOperationsTab() {
         </DialogContent>
       </Dialog>
 
-      {/* ==================================================================== */}
-      {/* MODAL 3: CRIAR / EDITAR ORDEM DE MANUTENÇÃO */}
-      {/* ==================================================================== */}
       <Dialog open={isMaintModalOpen} onOpenChange={setIsMaintModalOpen}>
-        <DialogContent className="sm:max-w-lg bg-white">
+        <DialogContent className="sm:max-w-lg bg-white rounded-2xl">
           <DialogHeader>
-            <DialogTitle className="text-xl font-black text-slate-900">
+            <DialogTitle className="text-lg font-bold text-slate-900">
               {editingMaint
                 ? "Editar Ordem de Manutenção"
                 : "Nova Ordem de Manutenção / Reparo"}
             </DialogTitle>
-            <DialogDescription>
-              Registre manutenções preventivas ou corretivas das salas e
-              controle os gastos com prestadores.
+            <DialogDescription className="text-xs text-slate-500">
+              Registre manutenções preventivas ou corretivas das salas.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-2">
             <div>
-              <Label className="text-xs font-bold text-slate-600">
+              <Label className="text-xs font-semibold text-slate-700">
                 Título do Serviço / Reparo *
               </Label>
               <Input
@@ -1881,14 +3291,14 @@ export function HostOperationsTab() {
                 onChange={(e) =>
                   setMaintForm({ ...maintForm, title: e.target.value })
                 }
-                placeholder="Ex: Higienização e recarga de gás do Ar-Condicionado"
-                className="mt-1"
+                placeholder="Ex: Higienização do Ar-Condicionado"
+                className="mt-1 h-10 text-xs rounded-xl"
               />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="text-xs font-bold text-slate-600">
+                <Label className="text-xs font-semibold text-slate-700">
                   Sala / Espaço
                 </Label>
                 <select
@@ -1896,9 +3306,9 @@ export function HostOperationsTab() {
                   onChange={(e) =>
                     setMaintForm({ ...maintForm, room_id: e.target.value })
                   }
-                  className="mt-1 w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700"
+                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
                 >
-                  <option value="">Área Comum / Clínica Geral</option>
+                  <option value="">Área Comum / Hub Geral</option>
                   {rooms.map((r) => (
                     <option key={r.id} value={r.id}>
                       {r.name}
@@ -1908,7 +3318,7 @@ export function HostOperationsTab() {
               </div>
 
               <div>
-                <Label className="text-xs font-bold text-slate-600">
+                <Label className="text-xs font-semibold text-slate-700">
                   Tipo de Manutenção
                 </Label>
                 <select
@@ -1916,7 +3326,7 @@ export function HostOperationsTab() {
                   onChange={(e) =>
                     setMaintForm({ ...maintForm, category: e.target.value })
                   }
-                  className="mt-1 w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700"
+                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
                 >
                   {Object.entries(MAINTENANCE_CATEGORIES).map(([k, v]) => (
                     <option key={k} value={k}>
@@ -1929,7 +3339,7 @@ export function HostOperationsTab() {
 
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <Label className="text-xs font-bold text-slate-600">
+                <Label className="text-xs font-semibold text-slate-700">
                   Prioridade
                 </Label>
                 <select
@@ -1940,7 +3350,7 @@ export function HostOperationsTab() {
                       priority: e.target.value as any,
                     })
                   }
-                  className="mt-1 w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700"
+                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
                 >
                   <option value="low">Baixa</option>
                   <option value="normal">Normal</option>
@@ -1950,7 +3360,7 @@ export function HostOperationsTab() {
               </div>
 
               <div>
-                <Label className="text-xs font-bold text-slate-600">
+                <Label className="text-xs font-semibold text-slate-700">
                   Status
                 </Label>
                 <select
@@ -1961,7 +3371,7 @@ export function HostOperationsTab() {
                       status: e.target.value as any,
                     })
                   }
-                  className="mt-1 w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700"
+                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
                 >
                   <option value="pending">Pendente</option>
                   <option value="in_progress">Em Execução</option>
@@ -1970,7 +3380,7 @@ export function HostOperationsTab() {
               </div>
 
               <div>
-                <Label className="text-xs font-bold text-slate-600">
+                <Label className="text-xs font-semibold text-slate-700">
                   Data Prevista
                 </Label>
                 <Input
@@ -1982,14 +3392,14 @@ export function HostOperationsTab() {
                       scheduled_date: e.target.value,
                     })
                   }
-                  className="mt-1"
+                  className="mt-1 h-10 text-xs rounded-xl"
                 />
               </div>
             </div>
 
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <Label className="text-xs font-bold text-slate-600">
+                <Label className="text-xs font-semibold text-slate-700">
                   Prestador / Técnico
                 </Label>
                 <Input
@@ -2000,14 +3410,14 @@ export function HostOperationsTab() {
                       provider_name: e.target.value,
                     })
                   }
-                  placeholder="Nome do técnico"
-                  className="mt-1"
+                  placeholder="Nome"
+                  className="mt-1 h-10 text-xs rounded-xl"
                 />
               </div>
 
               <div>
-                <Label className="text-xs font-bold text-slate-600">
-                  WhatsApp Técnico
+                <Label className="text-xs font-semibold text-slate-700">
+                  WhatsApp
                 </Label>
                 <Input
                   value={maintForm.provider_phone}
@@ -2018,13 +3428,13 @@ export function HostOperationsTab() {
                     })
                   }
                   placeholder="(84) 99999-9999"
-                  className="mt-1"
+                  className="mt-1 h-10 text-xs rounded-xl"
                 />
               </div>
 
               <div>
-                <Label className="text-xs font-bold text-slate-600">
-                  Orçamento / Custo (R$)
+                <Label className="text-xs font-semibold text-slate-700">
+                  Custo (R$)
                 </Label>
                 <Input
                   type="number"
@@ -2034,13 +3444,13 @@ export function HostOperationsTab() {
                     setMaintForm({ ...maintForm, cost: e.target.value })
                   }
                   placeholder="Ex: 250.00"
-                  className="mt-1 font-black"
+                  className="mt-1 h-10 font-bold text-xs rounded-xl"
                 />
               </div>
             </div>
 
             <div>
-              <Label className="text-xs font-bold text-slate-600">
+              <Label className="text-xs font-semibold text-slate-700">
                 Detalhes do Serviço (Opcional)
               </Label>
               <Input
@@ -2048,13 +3458,13 @@ export function HostOperationsTab() {
                 onChange={(e) =>
                   setMaintForm({ ...maintForm, description: e.target.value })
                 }
-                placeholder="Peças trocadas, garantia do serviço, etc."
-                className="mt-1"
+                placeholder="Peças trocadas, garantia do serviço..."
+                className="mt-1 h-10 text-xs rounded-xl"
               />
             </div>
 
             {!editingMaint && Number(maintForm.cost) > 0 && (
-              <label className="flex items-center gap-2 p-3 rounded-xl bg-orange-50 border border-orange-200 text-xs font-bold text-orange-950 cursor-pointer">
+              <label className="flex items-center gap-2 p-3 rounded-xl bg-orange-50 border border-orange-200 text-xs font-semibold text-orange-950 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={maintForm.recordExpenseNow}
@@ -2066,7 +3476,7 @@ export function HostOperationsTab() {
                   }
                   className="rounded accent-[#BF4B24]"
                 />
-                Lançar este custo de R$ {Number(maintForm.cost).toFixed(2)}{" "}
+                Lançar este custo de R$ {formatBRL(Number(maintForm.cost))}{" "}
                 automaticamente nas Despesas do Mês
               </label>
             )}
@@ -2076,173 +3486,16 @@ export function HostOperationsTab() {
             <Button
               variant="ghost"
               onClick={() => setIsMaintModalOpen(false)}
-              className="font-bold"
+              className="font-semibold text-xs"
             >
               Cancelar
             </Button>
             <Button
               onClick={handleSaveMaintenance}
               disabled={saving}
-              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black"
+              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs rounded-xl"
             >
               {saving ? "Salvando..." : "Salvar Manutenção"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ==================================================================== */}
-      {/* MODAL 4: LANÇAR / EDITAR DESPESA DO MÊS */}
-      {/* ==================================================================== */}
-      <Dialog open={isExpenseModalOpen} onOpenChange={setIsExpenseModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-black text-slate-900">
-              {editingExpense ? "Editar Despesa" : "Lançar Despesa Operacional"}
-            </DialogTitle>
-            <DialogDescription>
-              Registre contas fixas e variáveis para acompanhar o custo real de
-              operação da clínica no mês.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 py-2">
-            <div>
-              <Label className="text-xs font-bold text-slate-600">
-                Descrição da Despesa *
-              </Label>
-              <Input
-                value={expenseForm.title}
-                onChange={(e) =>
-                  setExpenseForm({ ...expenseForm, title: e.target.value })
-                }
-                placeholder="Ex: Conta de Energia Cosern / Diarista Semanal"
-                className="mt-1"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs font-bold text-slate-600">
-                  Categoria
-                </Label>
-                <select
-                  value={expenseForm.category}
-                  onChange={(e) =>
-                    setExpenseForm({ ...expenseForm, category: e.target.value })
-                  }
-                  className="mt-1 w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700"
-                >
-                  {Object.entries(EXPENSE_CATEGORIES).map(([k, v]) => (
-                    <option key={k} value={k}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <Label className="text-xs font-bold text-slate-600">
-                  Sala (Opcional)
-                </Label>
-                <select
-                  value={expenseForm.room_id}
-                  onChange={(e) =>
-                    setExpenseForm({ ...expenseForm, room_id: e.target.value })
-                  }
-                  className="mt-1 w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700"
-                >
-                  <option value="">Custo Geral da Clínica</option>
-                  {rooms.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <Label className="text-xs font-bold text-slate-600">
-                  Valor (R$) *
-                </Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={expenseForm.amount}
-                  onChange={(e) =>
-                    setExpenseForm({ ...expenseForm, amount: e.target.value })
-                  }
-                  placeholder="0.00"
-                  className="mt-1 font-black"
-                />
-              </div>
-
-              <div>
-                <Label className="text-xs font-bold text-slate-600">Data</Label>
-                <Input
-                  type="date"
-                  value={expenseForm.expense_date}
-                  onChange={(e) =>
-                    setExpenseForm({
-                      ...expenseForm,
-                      expense_date: e.target.value,
-                    })
-                  }
-                  className="mt-1"
-                />
-              </div>
-
-              <div>
-                <Label className="text-xs font-bold text-slate-600">
-                  Situação
-                </Label>
-                <select
-                  value={expenseForm.payment_status}
-                  onChange={(e) =>
-                    setExpenseForm({
-                      ...expenseForm,
-                      payment_status: e.target.value as any,
-                    })
-                  }
-                  className="mt-1 w-full h-10 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700"
-                >
-                  <option value="paid">Pago</option>
-                  <option value="pending">Pendente</option>
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <Label className="text-xs font-bold text-slate-600">
-                Observações (Opcional)
-              </Label>
-              <Input
-                value={expenseForm.notes}
-                onChange={(e) =>
-                  setExpenseForm({ ...expenseForm, notes: e.target.value })
-                }
-                placeholder="Ex: Pago via Pix CNPJ"
-                className="mt-1"
-              />
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              onClick={() => setIsExpenseModalOpen(false)}
-              className="font-bold"
-            >
-              Cancelar
-            </Button>
-            <Button
-              onClick={handleSaveExpense}
-              disabled={saving}
-              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-black"
-            >
-              {saving ? "Salvando..." : "Salvar Despesa"}
             </Button>
           </DialogFooter>
         </DialogContent>

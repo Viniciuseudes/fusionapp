@@ -66,6 +66,7 @@ import {
   CalendarClock,
   ArrowLeftRight,
   Sparkles,
+  Flame,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -176,6 +177,9 @@ export function RoomDetail(props: RoomDetailProps) {
     startOfMonth(initialTargetDate),
   );
 
+  // Campanhas visuais de desconto ativas para esta sala
+  const [roomCampaigns, setRoomCampaigns] = useState<any[]>([]);
+
   const hasAppliedPreselectedSlotRef = useRef<boolean>(false);
   const bookingConfirmedRef = useRef<boolean>(false);
   const bookingSectionRef = useRef<HTMLDivElement>(null);
@@ -275,7 +279,6 @@ export function RoomDetail(props: RoomDetailProps) {
         .select("id, status, asaas_payment_id")
         .in("id", lockIds);
 
-      // APENAS CANCELA SE NÃO TIVER GERADO PIX/CARTÃO (asaas_payment_id nulo)
       const pendingIds =
         checkBookings
           ?.filter(
@@ -291,20 +294,11 @@ export function RoomDetail(props: RoomDetailProps) {
       }
     }
 
-    // Se ele fechou o modal no meio do PIX (que tem asaas_payment_id),
-    // mantemos selectedSlots, pixQr e activeBookingId para caso ele reabra ou pague depois
     setCheckoutSummary(null);
     await fetchRoomBookings();
   }, [fetchRoomBookings]);
 
-  // ====================================================================
-  // REGRAS DE VOLTAR DO MOBILE BEM DEFINIDAS AGORA
-  // ====================================================================
-  useMobileBack(
-    isCheckoutOpen,
-    handleCheckoutClose, // <- Alterado com sucesso!
-    "checkout-modal",
-  );
+  useMobileBack(isCheckoutOpen, handleCheckoutClose, "checkout-modal");
   useMobileBack(
     isAllPhotosOpen,
     () => setIsAllPhotosOpen(false),
@@ -337,6 +331,139 @@ export function RoomDetail(props: RoomDetailProps) {
     }, 15000);
     return () => clearInterval(interval);
   }, []);
+
+  // ====================================================================
+  // CARREGA CAMPANHAS DE CUPOM VISUAIS ATIVAS PARA ESTA SALA
+  // ====================================================================
+  const fetchRoomCampaigns = useCallback(async () => {
+    if (!targetRoomId) return;
+    try {
+      const { data } = await supabase
+        .from("coupons")
+        .select("*")
+        .eq("is_active", true);
+
+      if (!data) return;
+
+      const now = new Date();
+      const validCampaigns = data.filter((c: any) => {
+        if (c.valid_until && new Date(c.valid_until) < now) return false;
+        if (c.max_uses && Number(c.current_uses || 0) >= Number(c.max_uses))
+          return false;
+
+        if (
+          Array.isArray(c.valid_room_ids) &&
+          c.valid_room_ids.length > 0 &&
+          !c.valid_room_ids.includes(targetRoomId)
+        ) {
+          return false;
+        }
+
+        let rules = c.schedule_rules;
+        if (typeof rules === "string") {
+          try {
+            rules = JSON.parse(rules);
+          } catch {
+            rules = null;
+          }
+        }
+
+        const showOnCal =
+          typeof c.show_on_calendar === "boolean"
+            ? c.show_on_calendar
+            : Boolean(rules?.show_on_calendar);
+
+        return showOnCal;
+      });
+
+      setRoomCampaigns(validCampaigns);
+    } catch (e) {
+      console.error("Erro ao buscar campanhas da sala:", e);
+    }
+  }, [targetRoomId, supabase]);
+
+  useEffect(() => {
+    fetchRoomCampaigns();
+  }, [fetchRoomCampaigns]);
+
+  // Verifica se uma data + horário específico tem promoção ativa
+  const getCampaignForDateAndHour = useCallback(
+    (dateObj: Date, hourNum?: number) => {
+      if (roomCampaigns.length === 0) return null;
+
+      const dateIso = format(dateObj, "yyyy-MM-dd");
+      const dow = dateObj.getDay();
+
+      for (const camp of roomCampaigns) {
+        if (
+          camp.valid_until &&
+          dateIso > String(camp.valid_until).slice(0, 10)
+        ) {
+          continue;
+        }
+
+        let rules = camp.schedule_rules;
+        if (typeof rules === "string") {
+          try {
+            rules = JSON.parse(rules);
+          } catch {
+            rules = null;
+          }
+        }
+
+        if (
+          rules?.start_date &&
+          dateIso < String(rules.start_date).slice(0, 10)
+        ) {
+          continue;
+        }
+
+        if (rules?.enabled) {
+          if (
+            Array.isArray(rules.days_of_week) &&
+            rules.days_of_week.length > 0 &&
+            !rules.days_of_week.map(Number).includes(dow)
+          ) {
+            continue;
+          }
+
+          if (
+            hourNum !== undefined &&
+            Array.isArray(rules.allowed_hours) &&
+            rules.allowed_hours.length > 0 &&
+            !rules.allowed_hours.map(Number).includes(hourNum)
+          ) {
+            continue;
+          }
+        }
+
+        const discountVal = Number(camp.discount_value || 0);
+        const badgeText =
+          camp.type === "percentage"
+            ? `-${discountVal}%`
+            : camp.type === "fixed"
+              ? `-R$${discountVal}`
+              : "BOGO";
+
+        return {
+          coupon: camp,
+          campaignName:
+            camp.campaign_name || rules?.campaign_name || `Cupom ${camp.code}`,
+          code: camp.code,
+          type: camp.type,
+          discountValue: discountVal,
+          badgeText,
+          autoApply:
+            typeof camp.auto_apply === "boolean"
+              ? camp.auto_apply
+              : rules?.auto_apply !== false,
+        };
+      }
+
+      return null;
+    },
+    [roomCampaigns],
+  );
 
   const isSlotBooked = useCallback(
     (slotKey: string) => {
@@ -397,7 +524,6 @@ export function RoomDetail(props: RoomDetailProps) {
     [currentTime],
   );
 
-  // FONTE ÚNICA DA VERDADE DA AGENDA DA SALA (NUNCA INJETA HORÁRIOS FECHADOS)
   const availableSlots = useMemo<string[]>(() => {
     if (!roomData || activeTab !== "hora") return [];
 
@@ -660,7 +786,6 @@ export function RoomDetail(props: RoomDetailProps) {
     checkFavoriteStatus();
   }, [targetRoomId, supabase]);
 
-  // Aplica o horário pré-selecionado SOMENTE SE ele existir em `availableSlots` e estiver livre
   useEffect(() => {
     if (
       loading ||
@@ -676,7 +801,6 @@ export function RoomDetail(props: RoomDetailProps) {
     const normalizedPreSlot = normalizeSlotLabel(preselectedSlotStr);
     if (!normalizedPreSlot) return;
 
-    // Verifica se o horário realmente faz parte da grade aberta da sala
     if (!availableSlots.includes(normalizedPreSlot)) return;
 
     const dateStr = format(initialTargetDate, "yyyy-MM-dd");
@@ -738,7 +862,7 @@ export function RoomDetail(props: RoomDetailProps) {
   }
 
   // ====================================================================
-  // 3. FUNÇÕES AUXILIARES PURAS E HANDLERS
+  // 3. FUNÇÕES AUXILIARES PURAS E PRECIFICAÇÃO DINÂMICA POR SLOT
   // ====================================================================
   let address = roomData.address_details || {};
   if (typeof address === "string") {
@@ -755,7 +879,7 @@ export function RoomDetail(props: RoomDetailProps) {
     return Number(pricingData.hourly || 45);
   };
 
-  const getSlotPrice = (slotKey: string) => {
+  const getSlotBasePrice = (slotKey: string) => {
     const commercialRate = Number(pricingData.hourly || 45);
     const afterHoursRate = pricingData.afterHours
       ? Number(pricingData.afterHours)
@@ -776,6 +900,47 @@ export function RoomDetail(props: RoomDetailProps) {
     if (isWeekend) return weekendRate;
     if (isAfterHours) return afterHoursRate;
     return commercialRate;
+  };
+
+  // Calcula preço com campanha de horário (se elegível)
+  const getSlotPricingDetails = (slotKey: string) => {
+    const basePrice = getSlotBasePrice(slotKey);
+    if (!slotKey.includes("|")) {
+      return {
+        basePrice,
+        finalPrice: basePrice,
+        discountAmount: 0,
+        campaign: null,
+      };
+    }
+
+    const [dateStr, slotTime] = slotKey.split("|");
+    const dateObj = new Date(`${dateStr}T12:00:00`);
+    const startHour = parseInt(slotTime.substring(0, 2), 10);
+
+    const campaign = getCampaignForDateAndHour(dateObj, startHour);
+    if (!campaign) {
+      return {
+        basePrice,
+        finalPrice: basePrice,
+        discountAmount: 0,
+        campaign: null,
+      };
+    }
+
+    let finalPrice = basePrice;
+    if (campaign.type === "percentage") {
+      finalPrice = Math.max(0, basePrice * (1 - campaign.discountValue / 100));
+    } else if (campaign.type === "fixed") {
+      finalPrice = Math.max(0, basePrice - campaign.discountValue);
+    }
+
+    return {
+      basePrice,
+      finalPrice: Number(finalPrice.toFixed(2)),
+      discountAmount: Number((basePrice - finalPrice).toFixed(2)),
+      campaign,
+    };
   };
 
   const scrollToBookingSection = () => {
@@ -837,10 +1002,29 @@ export function RoomDetail(props: RoomDetailProps) {
     }
   };
 
-  const totalHourlyCost = selectedSlots.reduce(
-    (acc: number, slotKey: string) => acc + getSlotPrice(slotKey),
+  // Totais dos slots selecionados (com e sem desconto de campanha de horário)
+  const selectedSlotsBreakdown = selectedSlots.map((slotKey) =>
+    getSlotPricingDetails(slotKey),
+  );
+
+  const totalBaseHourlyCost = selectedSlotsBreakdown.reduce(
+    (acc, item) => acc + item.basePrice,
     0,
   );
+
+  const totalHourlyCost = selectedSlotsBreakdown.reduce(
+    (acc, item) => acc + item.finalPrice,
+    0,
+  );
+
+  const totalCampaignDiscountBRL = Math.max(
+    0,
+    Number((totalBaseHourlyCost - totalHourlyCost).toFixed(2)),
+  );
+
+  const matchedAutoCampaign =
+    selectedSlotsBreakdown.find((item) => item.campaign?.autoApply)?.campaign ||
+    null;
 
   const shiftPrice = selectedShift
     ? Number(pricingData[selectedShift] || 0)
@@ -924,13 +1108,15 @@ export function RoomDetail(props: RoomDetailProps) {
 
           const startTime = parseSlotDateHelper(dateStr, startSlotStr);
           const endTime = parseSlotDateHelper(dateStr, endSlotStr);
+          const slotPricing = getSlotPricingDetails(slotKey);
 
           return {
             user_id: user.id,
             room_id: roomData.id,
             start_time: startTime.toISOString(),
             end_time: endTime.toISOString(),
-            total_cost: 0,
+            total_cost: slotPricing.finalPrice,
+            agreed_value_brl: slotPricing.finalPrice,
             status: "pending_payment",
           };
         });
@@ -1085,9 +1271,10 @@ export function RoomDetail(props: RoomDetailProps) {
       const lockIds: string[] = (checkoutSummary as any).lockIds || [];
 
       let finalCreditsRequired = checkoutSummary.creditsRequired;
-      let finalHourlyCost = totalHourlyCost;
+      let finalHourlyCost = totalHourlyCost; // Já contempla o desconto proporcional dos slots em campanha!
 
-      if (appliedCoupon) {
+      // Se o usuário digitou outro cupom manualmente no modal e ainda não tinha campanha auto-aplicada
+      if (appliedCoupon && totalCampaignDiscountBRL === 0) {
         if (appliedCoupon.type === "percentage") {
           finalCreditsRequired -=
             finalCreditsRequired * (appliedCoupon.discount_value / 100);
@@ -1105,6 +1292,9 @@ export function RoomDetail(props: RoomDetailProps) {
         finalCreditsRequired = Math.max(0, finalCreditsRequired);
         finalHourlyCost = Math.max(0, finalHourlyCost);
       }
+
+      const effectiveCouponRecord =
+        appliedCoupon || matchedAutoCampaign?.coupon || null;
 
       if (method === "wallet") {
         const creditCostPerHour = finalCreditsRequired / selectedSlots.length;
@@ -1165,13 +1355,15 @@ export function RoomDetail(props: RoomDetailProps) {
           });
         if (walletError) throw walletError;
 
-        if (appliedCoupon) {
+        if (effectiveCouponRecord && appliedCoupon) {
           await supabase
             .from("coupons")
-            .update({ current_uses: appliedCoupon.current_uses + 1 })
-            .eq("id", appliedCoupon.id);
+            .update({
+              current_uses: Number(effectiveCouponRecord.current_uses || 0) + 1,
+            })
+            .eq("id", effectiveCouponRecord.id);
           await supabase.from("coupon_uses").insert({
-            coupon_id: appliedCoupon.id,
+            coupon_id: effectiveCouponRecord.id,
             user_id: user.id,
             booking_id: lockIds[0],
             discount_applied:
@@ -1212,17 +1404,27 @@ export function RoomDetail(props: RoomDetailProps) {
 
         if (updateError) throw updateError;
 
-        if (appliedCoupon) {
-          await supabase
-            .from("coupons")
-            .update({ current_uses: appliedCoupon.current_uses + 1 })
-            .eq("id", appliedCoupon.id);
-          await supabase.from("coupon_uses").insert({
-            coupon_id: appliedCoupon.id,
-            user_id: user.id,
-            booking_id: lockIds[0],
-            discount_applied: totalHourlyCost - finalHourlyCost,
-          });
+        if (effectiveCouponRecord) {
+          const appliedDiscountValue =
+            totalCampaignDiscountBRL > 0
+              ? totalCampaignDiscountBRL
+              : Math.max(0, totalBaseHourlyCost - finalHourlyCost);
+
+          if (appliedDiscountValue > 0) {
+            await supabase
+              .from("coupons")
+              .update({
+                current_uses:
+                  Number(effectiveCouponRecord.current_uses || 0) + 1,
+              })
+              .eq("id", effectiveCouponRecord.id);
+            await supabase.from("coupon_uses").insert({
+              coupon_id: effectiveCouponRecord.id,
+              user_id: user.id,
+              booking_id: lockIds[0],
+              discount_applied: appliedDiscountValue,
+            });
+          }
         }
 
         let formattedCard = undefined;
@@ -1556,6 +1758,10 @@ export function RoomDetail(props: RoomDetailProps) {
         ? "VIP"
         : "Basic";
 
+  const primaryCampaign = roomCampaigns[0]
+    ? getCampaignForDateAndHour(selectedDate)
+    : null;
+
   return (
     <div className="fixed inset-0 z-[100] bg-white flex flex-col animate-in slide-in-from-bottom-4 duration-300">
       {/* TOP BAR LIMPA */}
@@ -1703,18 +1909,33 @@ export function RoomDetail(props: RoomDetailProps) {
                   .map((slotTime: string) => {
                     const slotKey = `${format(selectedDate, "yyyy-MM-dd")}|${slotTime}`;
                     const isSelected = selectedSlots.includes(slotKey);
+                    const pricing = getSlotPricingDetails(slotKey);
+
                     return (
                       <button
                         key={slotKey}
                         type="button"
                         onClick={() => toggleSlot(slotKey)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap border transition-colors shrink-0 ${
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap border transition-colors shrink-0 flex items-center gap-1 ${
                           isSelected
                             ? "bg-[#BF4B24] text-white border-[#BF4B24]"
-                            : "bg-white text-slate-700 border-stone-200 hover:border-stone-300"
+                            : pricing.campaign
+                              ? "bg-emerald-50 text-emerald-900 border-emerald-300"
+                              : "bg-white text-slate-700 border-stone-200 hover:border-stone-300"
                         }`}
                       >
-                        {slotTime.split(" - ")[0]}
+                        <span>{slotTime.split(" - ")[0]}</span>
+                        {pricing.campaign && (
+                          <span
+                            className={`text-[9px] font-black px-1 rounded ${
+                              isSelected
+                                ? "bg-black/20 text-white"
+                                : "bg-emerald-600 text-white"
+                            }`}
+                          >
+                            {pricing.campaign.badgeText}
+                          </span>
+                        )}
                       </button>
                     );
                   })}
@@ -2069,7 +2290,7 @@ export function RoomDetail(props: RoomDetailProps) {
             </section>
           </div>
 
-          {/* COLUNA DE AGENDAMENTO (CALENDÁRIO DE RESERVAS) */}
+          {/* COLUNA DE AGENDAMENTO (CALENDÁRIO DE RESERVAS COM DESTAQUE DE CAMPANHAS) */}
           <div
             ref={bookingSectionRef}
             className="order-2 lg:order-2 lg:col-span-5 flex flex-col gap-6 scroll-mt-20"
@@ -2143,6 +2364,30 @@ export function RoomDetail(props: RoomDetailProps) {
                     </div>
                   </div>
 
+                  {/* BANNER DE CAMPANHA PROMOCIONAL DE HORÁRIOS FRIOS */}
+                  {roomCampaigns.length > 0 && (
+                    <div className="mb-3 px-3.5 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Flame className="w-4 h-4 text-emerald-600 fill-emerald-600 shrink-0" />
+                        <div>
+                          <span className="text-[11px] font-black text-emerald-950 block">
+                            {primaryCampaign?.campaignName ||
+                              "Horários com Desconto Especial"}
+                          </span>
+                          <span className="text-[10px] font-medium text-emerald-800 block">
+                            Dias e horários sinalizados em verde estão mais
+                            baratos!
+                          </span>
+                        </div>
+                      </div>
+                      {primaryCampaign && (
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-black shrink-0">
+                          {primaryCampaign.badgeText} OFF
+                        </span>
+                      )}
+                    </div>
+                  )}
+
                   {preselectedSlotStr && selectedSlots.length > 0 && (
                     <div className="mb-3 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200/80 flex items-center justify-between gap-2">
                       <span className="text-[11px] font-bold text-emerald-800 flex items-center gap-1.5">
@@ -2177,6 +2422,7 @@ export function RoomDetail(props: RoomDetailProps) {
                     </button>
                   )}
 
+                  {/* CALENDÁRIO COM INDICADOR DE DIAS MAIS BARATOS */}
                   <div className="w-full bg-stone-50/60 rounded-xl border border-stone-200/80 p-3.5 mb-5">
                     <div className="flex items-center justify-between mb-3">
                       <button
@@ -2230,6 +2476,11 @@ export function RoomDetail(props: RoomDetailProps) {
                           (slotKey: string) => slotKey.startsWith(dateStr),
                         );
 
+                        const dayCampaign =
+                          !isPast && isCurrentMonth
+                            ? getCampaignForDateAndHour(day)
+                            : null;
+
                         return (
                           <button
                             key={day.toISOString()}
@@ -2237,37 +2488,58 @@ export function RoomDetail(props: RoomDetailProps) {
                               if (!isPast) setSelectedDate(day);
                             }}
                             disabled={isPast || !isCurrentMonth}
-                            className={`relative h-9 w-full rounded-lg text-xs font-semibold flex flex-col items-center justify-center transition-colors ${
+                            className={`relative h-10 w-full rounded-lg text-xs font-semibold flex flex-col items-center justify-center transition-colors ${
                               !isCurrentMonth ? "invisible" : ""
                             } ${
                               isPast ? "text-slate-300 cursor-not-allowed" : ""
                             } ${
                               isSelected
                                 ? "bg-slate-900 text-white font-bold"
-                                : ""
+                                : dayCampaign
+                                  ? "bg-emerald-50/90 text-emerald-950 border border-emerald-200 hover:bg-emerald-100/80"
+                                  : ""
                             } ${
-                              !isSelected && !isPast && isCurrentMonth
+                              !isSelected &&
+                              !dayCampaign &&
+                              !isPast &&
+                              isCurrentMonth
                                 ? "text-slate-700 hover:bg-stone-200/60"
                                 : ""
                             }`}
                           >
-                            <span className="relative z-10">
+                            <span className="relative z-10 leading-none">
                               {format(day, "d")}
                             </span>
-                            {hasSelection && (
+
+                            {dayCampaign && !hasSelection && (
                               <span
-                                className={`absolute bottom-1 w-1.5 h-1.5 rounded-full ${
-                                  isSelected ? "bg-[#BF4B24]" : "bg-[#BF4B24]"
+                                className={`text-[8px] font-black leading-none mt-0.5 ${
+                                  isSelected
+                                    ? "text-emerald-400"
+                                    : "text-emerald-700"
                                 }`}
-                              />
+                              >
+                                {dayCampaign.badgeText}
+                              </span>
+                            )}
+
+                            {hasSelection && (
+                              <span className="absolute bottom-1 w-1.5 h-1.5 rounded-full bg-[#BF4B24]" />
                             )}
                           </button>
                         );
                       })}
                     </div>
+
+                    {roomCampaigns.length > 0 && (
+                      <div className="mt-2.5 pt-2 border-t border-stone-200/70 flex items-center justify-center gap-2 text-[10px] font-bold text-emerald-800">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                        Dias em verde possuem horários com desconto exclusivo
+                      </div>
+                    )}
                   </div>
 
-                  {/* GRADE DE HORÁRIOS */}
+                  {/* GRADE DE HORÁRIOS COM DESCONTO POR SLOT */}
                   <div className="flex items-center justify-between mb-2.5">
                     <h3 className="text-xs font-bold text-slate-800">
                       Horários em{" "}
@@ -2293,14 +2565,16 @@ export function RoomDetail(props: RoomDetailProps) {
                       </p>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-2 gap-2 max-h-[240px] overflow-y-auto pr-1 scrollbar-hide">
+                    <div className="grid grid-cols-2 gap-2 max-h-[250px] overflow-y-auto pr-1 scrollbar-hide">
                       {availableSlots.map((slotTime: string) => {
                         const slotKey = `${format(selectedDate, "yyyy-MM-dd")}|${slotTime}`;
                         const isBooked = isSlotBooked(slotKey);
                         const isPastSlot = isSlotPast(slotKey);
                         const isUnavailable = isBooked || isPastSlot;
                         const isSelected = selectedSlots.includes(slotKey);
-                        const slotPrice = getSlotPrice(slotKey);
+                        const pricing = getSlotPricingDetails(slotKey);
+                        const hasPromo =
+                          !isUnavailable && Boolean(pricing.campaign);
 
                         return (
                           <button
@@ -2310,14 +2584,22 @@ export function RoomDetail(props: RoomDetailProps) {
                               !isUnavailable && toggleSlot(slotKey)
                             }
                             disabled={isUnavailable}
-                            className={`h-13 rounded-xl flex flex-col items-center justify-center transition-all border ${
+                            className={`relative h-14 rounded-xl flex flex-col items-center justify-center transition-all border ${
                               isUnavailable
                                 ? "border-slate-100 bg-slate-50 opacity-45 cursor-not-allowed"
                                 : isSelected
-                                  ? "border-[#BF4B24] bg-[#BF4B24]/8 ring-1 ring-[#BF4B24]"
-                                  : "border-slate-200 bg-white hover:border-slate-300"
+                                  ? "border-[#BF4B24] bg-[#BF4B24]/10 ring-1 ring-[#BF4B24]"
+                                  : hasPromo
+                                    ? "border-emerald-300 bg-emerald-50/60 hover:bg-emerald-50"
+                                    : "border-slate-200 bg-white hover:border-slate-300"
                             }`}
                           >
+                            {hasPromo && (
+                              <span className="absolute -top-2 right-2 px-1.5 py-0.2 rounded-full bg-emerald-600 text-white text-[9px] font-black shadow-2xs">
+                                {pricing.campaign?.badgeText} OFF
+                              </span>
+                            )}
+
                             <span
                               className={`text-xs font-bold ${
                                 isUnavailable
@@ -2329,19 +2611,40 @@ export function RoomDetail(props: RoomDetailProps) {
                             >
                               {slotTime}
                             </span>
-                            <span
-                              className={`text-[10px] font-medium mt-0.5 ${
-                                isUnavailable
-                                  ? "text-slate-400"
-                                  : isSelected
+
+                            {isUnavailable ? (
+                              <span className="text-[10px] font-medium text-slate-400 mt-0.5">
+                                Ocupado
+                              </span>
+                            ) : hasPromo ? (
+                              <div className="flex items-center gap-1 mt-0.5">
+                                <span className="text-[9px] text-slate-400 line-through">
+                                  R${" "}
+                                  {pricing.basePrice
+                                    .toFixed(2)
+                                    .replace(".", ",")}
+                                </span>
+                                <span className="text-[10px] font-black text-emerald-700">
+                                  R${" "}
+                                  {pricing.finalPrice
+                                    .toFixed(2)
+                                    .replace(".", ",")}
+                                </span>
+                              </div>
+                            ) : (
+                              <span
+                                className={`text-[10px] font-medium mt-0.5 ${
+                                  isSelected
                                     ? "text-[#BF4B24]"
                                     : "text-slate-500"
-                              }`}
-                            >
-                              {isUnavailable
-                                ? "Ocupado"
-                                : `R$ ${slotPrice.toFixed(2).replace(".", ",")}`}
-                            </span>
+                                }`}
+                              >
+                                R${" "}
+                                {pricing.finalPrice
+                                  .toFixed(2)
+                                  .replace(".", ",")}
+                              </span>
+                            )}
                           </button>
                         );
                       })}
@@ -2350,14 +2653,43 @@ export function RoomDetail(props: RoomDetailProps) {
 
                   <div className="hidden md:block pt-5 border-t border-slate-100 mt-5">
                     {selectedSlots.length > 0 && (
-                      <div className="flex items-center justify-between mb-3 text-sm">
-                        <span className="font-medium text-slate-600">
-                          Total ({selectedSlots.length}{" "}
-                          {selectedSlots.length === 1 ? "horário" : "horários"})
-                        </span>
-                        <span className="text-lg font-bold text-slate-900">
-                          R$ {totalHourlyCost.toFixed(2).replace(".", ",")}
-                        </span>
+                      <div className="space-y-1.5 mb-3">
+                        {totalCampaignDiscountBRL > 0 && (
+                          <div className="flex items-center justify-between text-xs bg-emerald-50 text-emerald-800 px-3 py-1.5 rounded-lg border border-emerald-200/80 font-bold">
+                            <span>
+                              Tarifa promocional aplicada (
+                              {matchedAutoCampaign?.campaignName})
+                            </span>
+                            <span>
+                              - R${" "}
+                              {totalCampaignDiscountBRL
+                                .toFixed(2)
+                                .replace(".", ",")}
+                            </span>
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="font-medium text-slate-600">
+                            Total ({selectedSlots.length}{" "}
+                            {selectedSlots.length === 1
+                              ? "horário"
+                              : "horários"}
+                            )
+                          </span>
+                          <div className="text-right">
+                            {totalCampaignDiscountBRL > 0 && (
+                              <span className="text-xs text-slate-400 line-through mr-2">
+                                R${" "}
+                                {totalBaseHourlyCost
+                                  .toFixed(2)
+                                  .replace(".", ",")}
+                              </span>
+                            )}
+                            <span className="text-lg font-bold text-slate-900">
+                              R$ {totalHourlyCost.toFixed(2).replace(".", ",")}
+                            </span>
+                          </div>
+                        </div>
                       </div>
                     )}
                     <Button
@@ -2683,12 +3015,17 @@ export function RoomDetail(props: RoomDetailProps) {
                 ? "Estimativa semanal"
                 : "Contrato mensal"}
           </p>
-          <div className="flex items-baseline gap-1">
+          <div className="flex items-baseline gap-1.5">
+            {activeTab === "hora" && totalCampaignDiscountBRL > 0 && (
+              <span className="text-xs text-slate-400 line-through">
+                R$ {totalBaseHourlyCost.toFixed(2).replace(".", ",")}
+              </span>
+            )}
             <span className="text-xl font-bold text-slate-900">
               R${" "}
               {activeTab === "hora"
                 ? selectedSlots.length > 0
-                  ? totalHourlyCost
+                  ? totalHourlyCost.toFixed(2).replace(".", ",")
                   : getBasePrice()
                 : activeTab === "turno"
                   ? totalShiftCost
@@ -2698,11 +3035,19 @@ export function RoomDetail(props: RoomDetailProps) {
               <span className="text-xs font-medium text-slate-500">/hora</span>
             )}
           </div>
-          {activeTab === "hora" && selectedSlots.length === 0 && (
-            <span className="text-[11px] font-semibold text-[#BF4B24] underline underline-offset-2 block">
-              No Pass+ sai a R${" "}
-              {bestHourlyRateInPass.toFixed(2).replace(".", ",")}/h
+          {activeTab === "hora" && totalCampaignDiscountBRL > 0 ? (
+            <span className="text-[11px] font-bold text-emerald-700 block">
+              Economia de R${" "}
+              {totalCampaignDiscountBRL.toFixed(2).replace(".", ",")} aplicada
             </span>
+          ) : (
+            activeTab === "hora" &&
+            selectedSlots.length === 0 && (
+              <span className="text-[11px] font-semibold text-[#BF4B24] underline underline-offset-2 block">
+                No Pass+ sai a R${" "}
+                {bestHourlyRateInPass.toFixed(2).replace(".", ",")}/h
+              </span>
+            )
           )}
         </div>
 

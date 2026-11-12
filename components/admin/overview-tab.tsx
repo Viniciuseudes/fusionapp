@@ -2,6 +2,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { AdminThermalStrategyPanel } from "@/components/admin/thermal-strategy-panel";
 import { createClient } from "@/utils/supabase/client";
 import {
   calculatePackageBookingArbitrage,
@@ -4901,74 +4902,9 @@ export function AdminOverviewTab({
       </div>
 
       {/* ==================================================================== */}
-      {/* LINHA 5: MAPA DE CALOR GLOBAL                                        */}
+      {/* LINHA 5: MAPA DE CALOR INTELIGENTE (GERAL, CLÍNICA E SALA)           */}
       {/* ==================================================================== */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 p-6 mb-8 overflow-hidden print:break-inside-avoid">
-        <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-              <Flame className="w-5 h-5 text-[#BF4B24]" /> Zonas Quentes e Frias
-              por Turno
-            </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Concentração de ocupação somando horas avulsas, pacotes e
-              contratos fixos.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Badge
-              variant="outline"
-              className="bg-slate-50 text-slate-600 border-slate-200 font-medium"
-            >
-              <Snowflake className="w-3 h-3 mr-1" /> Baixa Demanda
-            </Badge>
-            <Badge
-              variant="outline"
-              className="bg-orange-50 text-[#BF4B24] border-orange-200 font-medium"
-            >
-              <Flame className="w-3 h-3 mr-1" /> Alta Demanda
-            </Badge>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto pb-2">
-          <div className="min-w-[600px]">
-            <div className="grid grid-cols-5 gap-2 mb-2">
-              <div className="col-span-1" />
-              {shiftLabels.map((label) => (
-                <div
-                  key={label}
-                  className="col-span-1 text-center text-[10px] font-semibold text-slate-500 uppercase"
-                >
-                  {label}
-                </div>
-              ))}
-            </div>
-
-            <div className="flex flex-col gap-2">
-              {heatmapData.map((row) => (
-                <div
-                  key={row.day}
-                  className="grid grid-cols-5 gap-2 items-center"
-                >
-                  <div className="col-span-1 text-xs font-bold text-slate-700 text-right pr-4">
-                    {row.day}
-                  </div>
-                  {row.shifts.map((intensity: number, idx: number) => (
-                    <div
-                      key={idx}
-                      className={`col-span-1 h-10 rounded-xl border flex items-center justify-center text-xs tabular-nums transition-all ${getHeatmapColor(intensity)}`}
-                      title={`${row.day} - ${shiftLabels[idx]}: ${intensity} turno(s) ocupado(s)`}
-                    >
-                      {intensity > 0 ? `${intensity} loc.` : "–"}
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
+      <AdminThermalStrategyPanel />
 
       {/* ==================================================================== */}
       {/* LINHA 6: RANKING TOP 10 SALAS (ABERTURA NOS 3 SUBGRUPOS)             */}
