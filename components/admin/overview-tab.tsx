@@ -1,7 +1,7 @@
 // components/admin/overview-tab.tsx
 "use client";
 
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { createClient } from "@/utils/supabase/client";
 import {
   calculatePackageBookingArbitrage,
@@ -45,6 +45,14 @@ import {
   VolumeX,
   CheckCircle2,
   ChevronRight,
+  User,
+  Mail,
+  Phone,
+  Award,
+  MapPin,
+  Hash,
+  ShieldCheck,
+  ArrowDownRight,
 } from "lucide-react";
 import {
   ComposedChart,
@@ -176,6 +184,76 @@ interface RoomCapacityMetric {
   future_open_opportunity_revenue: number;
 }
 
+function normalizeTier(tier?: string | null): "start" | "vip" | "master" {
+  const t = (tier || "start").toLowerCase().trim();
+  if (t.includes("master") || t.includes("premium")) return "master";
+  if (t.includes("vip")) return "vip";
+  return "start";
+}
+
+function formatTierLabel(tier: "start" | "vip" | "master"): string {
+  if (tier === "master") return "Premium";
+  if (tier === "vip") return "VIP";
+  return "Basic";
+}
+
+function extractRoomModalitiesHourlyRate(
+  modalities: any,
+  addressDetails?: any,
+): number | null {
+  try {
+    if (modalities) {
+      const parsed =
+        typeof modalities === "string" ? JSON.parse(modalities) : modalities;
+      const candidates = [
+        parsed?.hourly?.price,
+        parsed?.hourlyPrice,
+        parsed?.price_per_hour,
+        parsed?.pricePerHour,
+        parsed?.price,
+      ];
+      for (const c of candidates) {
+        const val = Number(c);
+        if (!isNaN(val) && val > 0 && val <= 250) return val;
+      }
+    }
+    if (addressDetails) {
+      const addr =
+        typeof addressDetails === "string"
+          ? JSON.parse(addressDetails)
+          : addressDetails;
+      const addrPrice = Number(addr?.pricing?.hourly);
+      if (!isNaN(addrPrice) && addrPrice > 0 && addrPrice <= 250) {
+        return addrPrice;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function calculateSlotUnits(startIso: string, endIso: string): number {
+  const diffMinutes =
+    (new Date(endIso).getTime() - new Date(startIso).getTime()) / (1000 * 60);
+  if (diffMinutes <= 0) return 1;
+  if (diffMinutes >= 45 && diffMinutes <= 65) return 1;
+  return Math.max(1, Math.round(diffMinutes / 55));
+}
+
+const formatBRL = (val: number) =>
+  val.toLocaleString("pt-BR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
+const cleanPhoneForWa = (raw?: string | null) => {
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, "");
+  if (!digits) return null;
+  return digits.startsWith("55") ? digits : `55${digits}`;
+};
+
 // ============================================================================
 // TIPOS E COMPONENTE DO SINO DE NOTIFICAÇÕES EM TEMPO REAL DO ADMIN
 // ============================================================================
@@ -218,7 +296,7 @@ type NotificationFilterCategory =
 const STORAGE_READ_KEY = "fusion_admin_notif_read_ids_v1";
 const STORAGE_CLEARED_KEY = "fusion_admin_notif_cleared_ids_v1";
 
-// Controle em memória (evita conflitos de tipagem com useRef/.current no TSX)
+// Variáveis de controle de módulo (livres de conflitos de tipagem com useRef)
 const recentRealtimeKeys = new Map<string, number>();
 let bellSoundEnabledState = true;
 let bellUsingDbTableState = false;
@@ -260,6 +338,13 @@ export function AdminNotificationsBell({
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [hasNewPulse, setHasNewPulse] = useState(false);
   const [usingDbTable, setUsingDbTable] = useState(false);
+
+  // Estados do Modal de Detalhes Completos da Notificação
+  const [isDetailOpen, setIsDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [selectedNotif, setSelectedNotif] =
+    useState<AdminNotificationItem | null>(null);
+  const [detailData, setDetailData] = useState<any>(null);
 
   useEffect(() => {
     bellSoundEnabledState = soundEnabled;
@@ -832,23 +917,475 @@ export function AdminNotificationsBell({
     });
   };
 
+  // ==========================================================================
+  // CARREGAMENTO DO RAIO-X COMPLETO AO CLICAR EM "VER DETALHES"
+  // ==========================================================================
   const handleNotificationClick = async (item: AdminNotificationItem) => {
     if (!item.is_read) {
-      await handleMarkAsRead(item.id);
+      handleMarkAsRead(item.id);
     }
 
-    const targetTab = item.metadata?.target_tab;
-    if (targetTab) {
-      if (onNavigateTab) {
-        onNavigateTab(targetTab, item.metadata);
-      } else if (typeof window !== "undefined") {
-        window.dispatchEvent(
-          new CustomEvent("fusion-admin-navigate-tab", {
-            detail: { tab: targetTab, metadata: item.metadata },
-          }),
+    setSelectedNotif(item);
+    setDetailData(null);
+    setIsDetailOpen(true);
+    setDetailLoading(true);
+
+    try {
+      const evType = item.event_type;
+      const meta = item.metadata || {};
+
+      // 1. SE FOR RESERVA, CANCELAMENTO, CHECK-IN OU CHECK-OUT
+      if (
+        [
+          "booking_created",
+          "booking_cancelled",
+          "booking_checkin",
+          "booking_checkout",
+        ].includes(evType)
+      ) {
+        let bookingRecord: any = null;
+
+        if (meta.booking_id) {
+          const { data } = await supabase
+            .from("bookings")
+            .select("*")
+            .eq("id", meta.booking_id)
+            .maybeSingle();
+          bookingRecord = data;
+        }
+
+        // Fallback caso a notificação antiga não tenha booking_id
+        if (!bookingRecord && meta.user_id && meta.room_id) {
+          const { data } = await supabase
+            .from("bookings")
+            .select("*")
+            .eq("user_id", meta.user_id)
+            .eq("room_id", meta.room_id)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          bookingRecord = data;
+        }
+
+        if (!bookingRecord) {
+          setDetailData({ kind: "not_found" });
+          setDetailLoading(false);
+          return;
+        }
+
+        // Busca dados enriquecidos em paralelo
+        const bookingDayStart = startOfDay(
+          parseISO(bookingRecord.start_time),
+        ).toISOString();
+        const bookingDayEnd = endOfDay(
+          parseISO(bookingRecord.start_time),
+        ).toISOString();
+
+        const [
+          roomRes,
+          specRes,
+          packagesRes,
+          userTxsRes,
+          userSubsRes,
+          couponRes,
+          contractsRes,
+          sameDayBookingsRes,
+        ] = await Promise.all([
+          bookingRecord.room_id
+            ? supabase
+                .from("rooms")
+                .select("*")
+                .eq("id", bookingRecord.room_id)
+                .maybeSingle()
+            : Promise.resolve({ data: null }),
+          bookingRecord.user_id
+            ? supabase
+                .from("profiles")
+                .select("*")
+                .eq("id", bookingRecord.user_id)
+                .maybeSingle()
+            : Promise.resolve({ data: null }),
+          supabase.from("packages").select("id, tier, hours, price, active"),
+          bookingRecord.user_id
+            ? supabase
+                .from("wallet_transactions")
+                .select("*")
+                .eq("user_id", bookingRecord.user_id)
+                .order("created_at", { ascending: true })
+            : Promise.resolve({ data: [] as any[] }),
+          bookingRecord.user_id
+            ? supabase
+                .from("subscriptions")
+                .select("*")
+                .eq("user_id", bookingRecord.user_id)
+            : Promise.resolve({ data: [] as any[] }),
+          supabase
+            .from("coupon_uses")
+            .select("booking_id, discount_applied")
+            .eq("booking_id", bookingRecord.id),
+          bookingRecord.room_id
+            ? supabase
+                .from("room_contracts")
+                .select("*")
+                .eq("room_id", bookingRecord.room_id)
+            : Promise.resolve({ data: [] as any[] }),
+          bookingRecord.user_id && bookingRecord.room_id
+            ? supabase
+                .from("bookings")
+                .select("*")
+                .eq("user_id", bookingRecord.user_id)
+                .eq("room_id", bookingRecord.room_id)
+                .gte("start_time", bookingDayStart)
+                .lte("start_time", bookingDayEnd)
+                .order("start_time", { ascending: true })
+            : Promise.resolve({ data: [bookingRecord] }),
+        ]);
+
+        const room = roomRes.data;
+        const specialist = specRes.data;
+        const allPackages = packagesRes.data || [];
+        const userTxs = userTxsRes.data || [];
+        const userSubs = userSubsRes.data || [];
+        const roomContracts = contractsRes.data || [];
+
+        let hostProfile: any = null;
+        if (room?.host_id) {
+          const { data: hData } = await supabase
+            .from("profiles")
+            .select("id, full_name, email, phone, whatsapp")
+            .eq("id", room.host_id)
+            .maybeSingle();
+          hostProfile = hData;
+        }
+
+        // Identifica se o agendamento fez parte de um lote de múltiplas horas no mesmo dia
+        const mainCreatedMs = bookingRecord.created_at
+          ? new Date(bookingRecord.created_at).getTime()
+          : 0;
+        const batchBookings = (
+          sameDayBookingsRes.data || [bookingRecord]
+        ).filter((b: any) => {
+          if (b.id === bookingRecord.id) return true;
+          if (b.status !== bookingRecord.status) return false;
+          const bCreatedMs = b.created_at
+            ? new Date(b.created_at).getTime()
+            : 0;
+          return Math.abs(bCreatedMs - mainCreatedMs) <= 60 * 1000;
+        });
+
+        const totalBatchSlots = batchBookings.reduce(
+          (acc: number, b: any) =>
+            acc + calculateSlotUnits(b.start_time, b.end_time),
+          0,
         );
+
+        const roomTier = normalizeTier(room?.tier);
+        const rawTotalCost = Number(bookingRecord.total_cost || 0);
+        const upgradeFee = Number(bookingRecord.upgrade_fee_amount || 0);
+        const discount = (couponRes.data || []).reduce(
+          (acc: number, c: any) => acc + Number(c.discount_applied || 0),
+          0,
+        );
+
+        const linkedContract = bookingRecord.contract_id
+          ? roomContracts.find((c: any) => c.id === bookingRecord.contract_id)
+          : null;
+
+        const activeCohostContract = roomContracts.find(
+          (c: any) =>
+            c.status === "active" &&
+            c.contract_type === "monthly_exclusive" &&
+            c.allow_sublease,
+        );
+
+        const isContractBooking = Boolean(
+          bookingRecord.contract_id ||
+          (bookingRecord.booking_origin &&
+            String(bookingRecord.booking_origin).startsWith("contract")),
+        );
+
+        const isAdminManual = bookingRecord.booking_origin === "admin_manual";
+
+        const isExplicitWalletOrigin =
+          bookingRecord.booking_origin &&
+          String(bookingRecord.booking_origin).startsWith("wallet_");
+
+        const singleSlotUnits = calculateSlotUnits(
+          bookingRecord.start_time,
+          bookingRecord.end_time,
+        );
+
+        const isLegacyWalletOrigin =
+          !bookingRecord.booking_origin &&
+          Number(bookingRecord.agreed_value_brl || 0) === 0 &&
+          rawTotalCost > 0 &&
+          rawTotalCost <= singleSlotUnits * 2;
+
+        const isPackageBooking = Boolean(
+          isExplicitWalletOrigin || isLegacyWalletOrigin,
+        );
+
+        let originTitle = "";
+        let paymentMethodBadge = "";
+        let paymentDetailsText = "";
+        let unitHourlyBrl = 0;
+        let grossSingleBrl = 0;
+        let roomBaseSingleBrl = 0;
+        let standardFeeSingleBrl = 0;
+        let downgradeSpreadSingleBrl = 0;
+        let fusionProfitSingleBrl = 0;
+        let hostPayoutSingleBrl = 0;
+        let cohostPayoutSingleBrl = 0;
+        let isDowngrade = false;
+        let creditTierNormalized: "start" | "vip" | "master" = roomTier;
+
+        if (isContractBooking) {
+          const sessionVal =
+            Number(bookingRecord.agreed_value_brl) > 0
+              ? Number(bookingRecord.agreed_value_brl)
+              : Number(linkedContract?.session_value || 0);
+          const feePct = Number(linkedContract?.platform_fee_pct ?? 15) / 100;
+          unitHourlyBrl = sessionVal / Math.max(1, singleSlotUnits);
+          grossSingleBrl = sessionVal;
+          roomBaseSingleBrl = sessionVal;
+          standardFeeSingleBrl = sessionVal * feePct;
+          fusionProfitSingleBrl = standardFeeSingleBrl;
+          hostPayoutSingleBrl = Math.max(0, sessionVal - standardFeeSingleBrl);
+          originTitle = "Contrato Fixo / Recorrente";
+          paymentMethodBadge = "Fatura Contratual";
+          paymentDetailsText = linkedContract?.contract_type
+            ? `Alocação vinculada ao contrato (${linkedContract.contract_type})`
+            : "Horário fixo bloqueado por contrato";
+        } else if (isPackageBooking) {
+          const activeSub =
+            userSubs.find((s: any) => s.status === "ACTIVE") || userSubs[0];
+
+          creditTierNormalized = isExplicitWalletOrigin
+            ? normalizeTier(
+                String(bookingRecord.booking_origin).replace("wallet_", ""),
+              )
+            : activeSub
+              ? normalizeTier(activeSub.tier)
+              : roomTier;
+
+          const bookingTimeMs = bookingRecord.created_at
+            ? new Date(bookingRecord.created_at).getTime()
+            : new Date(bookingRecord.start_time).getTime();
+
+          if (!isExplicitWalletOrigin) {
+            const matchingDebit = userTxs.find((tx: any) => {
+              if (Number(tx.amount) >= 0) return false;
+              const txTime = new Date(tx.created_at).getTime();
+              return Math.abs(txTime - bookingTimeMs) <= 10 * 60 * 1000;
+            });
+            if (matchingDebit?.tier) {
+              creditTierNormalized = normalizeTier(matchingDebit.tier);
+            }
+          }
+
+          const { hourlyRateBrl: exactUserCreditRate, matchedHours } =
+            resolveCreditHourlyValueBRL({
+              usedTier: creditTierNormalized,
+              userTransactions: userTxs,
+              userSubscriptions: userSubs,
+              packages: allPackages,
+              bookingTimestampMs: bookingTimeMs,
+            });
+
+          const creditHourlyRate =
+            Number(bookingRecord.agreed_value_brl) > 0
+              ? Number(bookingRecord.agreed_value_brl) / singleSlotUnits
+              : exactUserCreditRate;
+
+          const cohostSplitPct = activeCohostContract
+            ? Number(activeCohostContract.cohost_split_pct || 80)
+            : null;
+
+          const arbitrage = calculatePackageBookingArbitrage({
+            creditTierRaw: creditTierNormalized,
+            roomTierRaw: roomTier,
+            creditsUsed: singleSlotUnits,
+            creditHourlyRateBrl: creditHourlyRate,
+            matchedPackageHours: matchedHours,
+            packages: allPackages,
+            cohostSplitPct,
+          });
+
+          unitHourlyBrl = arbitrage.creditHourlyRateBrl;
+          grossSingleBrl = Math.max(
+            0,
+            arbitrage.grossCreditValueBrl + upgradeFee - discount,
+          );
+          roomBaseSingleBrl = arbitrage.roomBaseValueBrl;
+          standardFeeSingleBrl = arbitrage.standardPlatformFeeBrl;
+          downgradeSpreadSingleBrl = arbitrage.downgradeSpreadProfitBrl;
+          fusionProfitSingleBrl = arbitrage.totalPlatformProfitBrl;
+          hostPayoutSingleBrl = arbitrage.hostPayoutBrl;
+          cohostPayoutSingleBrl = arbitrage.cohostPayoutBrl;
+          isDowngrade = arbitrage.isDowngrade;
+
+          // Identifica como o assinante pagou o pacote dele (PIX ou Cartão)
+          const hasPixPurchase = userTxs.some((tx: any) =>
+            String(tx.description || "")
+              .toUpperCase()
+              .includes("PIX"),
+          );
+          const cardInfo = specialist?.cc_last4
+            ? `Cartão final ${specialist.cc_last4}`
+            : "Cartão de Crédito";
+
+          originTitle = `Carteira Digital • Pacote Fusion Pass+ ${formatTierLabel(creditTierNormalized)} (${matchedHours || 8}h)`;
+          paymentMethodBadge = `Créditos Pass+ (${hasPixPurchase ? "Assinatura PIX" : cardInfo})`;
+          paymentDetailsText = isDowngrade
+            ? `Usou crédito ${formatTierLabel(creditTierNormalized)} em Sala ${formatTierLabel(roomTier)} (Downgrade c/ margem extra)`
+            : `Abatimento de saldo na Carteira Digital (${formatTierLabel(creditTierNormalized)})`;
+        } else {
+          // HORA AVULSA OU RESERVA ADMIN MANUAL
+          const baseAvulsoVal =
+            Number(bookingRecord.agreed_value_brl) > 0
+              ? Number(bookingRecord.agreed_value_brl)
+              : rawTotalCost >= singleSlotUnits * 20
+                ? rawTotalCost
+                : (roomTier === "master" ? 80 : roomTier === "vip" ? 45 : 40) *
+                  singleSlotUnits;
+
+          grossSingleBrl = Math.max(0, baseAvulsoVal + upgradeFee - discount);
+          unitHourlyBrl = grossSingleBrl / Math.max(1, singleSlotUnits);
+          roomBaseSingleBrl = grossSingleBrl;
+
+          if (activeCohostContract) {
+            const cohostPct = Number(
+              activeCohostContract.cohost_split_pct || 80,
+            );
+            cohostPayoutSingleBrl = grossSingleBrl * (cohostPct / 100);
+            standardFeeSingleBrl = Math.max(
+              0,
+              grossSingleBrl - cohostPayoutSingleBrl,
+            );
+            fusionProfitSingleBrl = standardFeeSingleBrl;
+            hostPayoutSingleBrl = 0;
+          } else {
+            standardFeeSingleBrl = grossSingleBrl * 0.2;
+            fusionProfitSingleBrl = standardFeeSingleBrl;
+            hostPayoutSingleBrl = Math.max(
+              0,
+              grossSingleBrl - standardFeeSingleBrl,
+            );
+          }
+
+          if (isAdminManual) {
+            originTitle = "Reserva Manual (Painel Admin)";
+            paymentMethodBadge = "Alocação Direta Admin";
+            paymentDetailsText =
+              "Horário bloqueado manualmente pela administração";
+          } else {
+            originTitle = `Hora Avulsa • Checkout Direto`;
+            const asaasId = bookingRecord.asaas_payment_id;
+            if (specialist?.cc_last4 && !asaasId) {
+              paymentMethodBadge = `Cartão •••• ${specialist.cc_last4}`;
+            } else if (asaasId) {
+              paymentMethodBadge = specialist?.cc_last4
+                ? `Checkout Asaas (PIX / Cartão •••• ${specialist.cc_last4})`
+                : `Checkout Asaas (PIX / Cartão)`;
+            } else {
+              paymentMethodBadge = "Pagamento Direto (PIX / Cartão)";
+            }
+            paymentDetailsText = asaasId
+              ? `Transação Asaas ID: ${asaasId}`
+              : "Reserva avulsa confirmada no checkout";
+          }
+        }
+
+        const multiplier = Math.max(1, batchBookings.length);
+
+        setDetailData({
+          kind: "booking",
+          booking: bookingRecord,
+          batchBookings,
+          totalBatchHours: totalBatchSlots,
+          room,
+          roomTier,
+          hostProfile,
+          specialist,
+          cohostName: activeCohostContract?.specialist_name || null,
+          originTitle,
+          paymentMethodBadge,
+          paymentDetailsText,
+          isPackageBooking,
+          isContractBooking,
+          isAdminManual,
+          isDowngrade,
+          creditTierNormalized,
+          unitHourlyBrl,
+          discountBrl: discount * multiplier,
+          upgradeFeeBrl: upgradeFee * multiplier,
+          grossTotalBrl: grossSingleBrl * multiplier,
+          roomBaseTotalBrl: roomBaseSingleBrl * multiplier,
+          standardFeeTotalBrl: standardFeeSingleBrl * multiplier,
+          downgradeSpreadTotalBrl: downgradeSpreadSingleBrl * multiplier,
+          fusionProfitTotalBrl: fusionProfitSingleBrl * multiplier,
+          hostPayoutTotalBrl: hostPayoutSingleBrl * multiplier,
+          cohostPayoutTotalBrl: cohostPayoutSingleBrl * multiplier,
+        });
       }
-      setIsOpen(false);
+      // 2. SE FOR CADASTRO DE ESPECIALISTA OU ANFITRIÃO
+      else if (
+        evType === "specialist_registered" ||
+        evType === "host_registered"
+      ) {
+        const userId = meta.user_id;
+        const { data: prof } = userId
+          ? await supabase
+              .from("profiles")
+              .select("*")
+              .eq("id", userId)
+              .maybeSingle()
+          : { data: null };
+
+        setDetailData({
+          kind: "profile",
+          profile: prof,
+          isHost: evType === "host_registered" || prof?.role === "host",
+        });
+      }
+      // 3. SE FOR NOVA SALA CADASTRADA
+      else if (evType === "room_created") {
+        const roomId = meta.room_id;
+        const { data: room } = roomId
+          ? await supabase
+              .from("rooms")
+              .select("*")
+              .eq("id", roomId)
+              .maybeSingle()
+          : { data: null };
+
+        let hostProfile: any = null;
+        if (room?.host_id) {
+          const { data: hData } = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("id", room.host_id)
+            .maybeSingle();
+          hostProfile = hData;
+        }
+
+        setDetailData({
+          kind: "room",
+          room,
+          hostProfile,
+          hourlyRate: room
+            ? extractRoomModalitiesHourlyRate(
+                room.modalities,
+                room.address_details,
+              )
+            : null,
+        });
+      }
+    } catch (err) {
+      console.error("Erro ao carregar detalhes da notificação:", err);
+      setDetailData({ kind: "error" });
+    } finally {
+      setDetailLoading(false);
     }
   };
 
@@ -914,316 +1451,692 @@ export function AdminNotificationsBell({
   };
 
   return (
-    <Sheet open={isOpen} onOpenChange={setIsOpen}>
-      <SheetTrigger asChild>
-        <button
-          type="button"
-          title="Central de Notificações em Tempo Real"
-          className={`relative inline-flex items-center justify-center h-10 px-3.5 rounded-xl border transition-all cursor-pointer shadow-2xs gap-2 ${
-            unreadCount > 0
-              ? "bg-orange-50/90 border-orange-200 text-[#BF4B24] hover:bg-orange-100/80"
-              : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-slate-900"
-          } ${hasNewPulse ? "ring-4 ring-[#BF4B24]/25 scale-105" : ""}`}
-        >
-          <Bell
-            className={`w-4 h-4 transition-transform ${
-              hasNewPulse ? "animate-bounce" : ""
-            }`}
-          />
-          <span className="text-xs font-semibold hidden sm:inline">
-            Notificações
-          </span>
-
-          {unreadCount > 0 && (
-            <span className="flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-[#BF4B24] text-white text-[10px] font-black shadow-2xs tabular-nums relative">
-              <span className="absolute inline-flex h-full w-full rounded-full bg-[#BF4B24] opacity-60 animate-ping" />
-              <span className="relative">
-                {unreadCount > 99 ? "99+" : unreadCount}
-              </span>
+    <>
+      <Sheet open={isOpen} onOpenChange={setIsOpen}>
+        <SheetTrigger asChild>
+          <button
+            type="button"
+            title="Central de Notificações em Tempo Real"
+            className={`relative inline-flex items-center justify-center h-10 px-3.5 rounded-xl border transition-all cursor-pointer shadow-2xs gap-2 ${
+              unreadCount > 0
+                ? "bg-orange-50/90 border-orange-200 text-[#BF4B24] hover:bg-orange-100/80"
+                : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-slate-900"
+            } ${hasNewPulse ? "ring-4 ring-[#BF4B24]/25 scale-105" : ""}`}
+          >
+            <Bell
+              className={`w-4 h-4 transition-transform ${
+                hasNewPulse ? "animate-bounce" : ""
+              }`}
+            />
+            <span className="text-xs font-semibold hidden sm:inline">
+              Notificações
             </span>
-          )}
-        </button>
-      </SheetTrigger>
 
-      <SheetContent className="w-full sm:max-w-md md:max-w-lg p-0 flex flex-col bg-[#FAF7F4] border-l border-slate-200">
-        <div className="bg-white px-6 pt-6 pb-4 border-b border-slate-200/90">
-          <SheetHeader className="space-y-1 text-left">
-            <div className="flex items-center justify-between gap-2 pr-6">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-[#BF4B24]/10 text-[#BF4B24] flex items-center justify-center">
-                  <Bell className="w-4 h-4" />
-                </div>
-                <div>
-                  <SheetTitle className="text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
-                    Radar da Plataforma
-                    <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                      Ao Vivo
-                    </span>
-                  </SheetTitle>
-                  <SheetDescription className="text-xs text-slate-500">
-                    Reservas, cancelamentos, cadastros e novas salas em tempo
-                    real.
-                  </SheetDescription>
+            {unreadCount > 0 && (
+              <span className="flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-[#BF4B24] text-white text-[10px] font-black shadow-2xs tabular-nums relative">
+                <span className="absolute inline-flex h-full w-full rounded-full bg-[#BF4B24] opacity-60 animate-ping" />
+                <span className="relative">
+                  {unreadCount > 99 ? "99+" : unreadCount}
+                </span>
+              </span>
+            )}
+          </button>
+        </SheetTrigger>
+
+        <SheetContent className="w-full sm:max-w-md md:max-w-lg p-0 flex flex-col bg-[#FAF7F4] border-l border-slate-200">
+          <div className="bg-white px-6 pt-6 pb-4 border-b border-slate-200/90">
+            <SheetHeader className="space-y-1 text-left">
+              <div className="flex items-center justify-between gap-2 pr-6">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-[#BF4B24]/10 text-[#BF4B24] flex items-center justify-center">
+                    <Bell className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <SheetTitle className="text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
+                      Radar da Plataforma
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        Ao Vivo
+                      </span>
+                    </SheetTitle>
+                    <SheetDescription className="text-xs text-slate-500">
+                      Clique em qualquer notificação para abrir o Raio-X
+                      completo.
+                    </SheetDescription>
+                  </div>
                 </div>
               </div>
-            </div>
-          </SheetHeader>
+            </SheetHeader>
 
-          <div className="flex items-center justify-between gap-2 mt-4 pt-3 border-t border-slate-100">
-            <div className="flex items-center gap-1.5">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handleMarkAllAsRead}
-                disabled={unreadCount === 0}
-                className="h-8 text-[11px] font-bold border-slate-200 text-slate-700 rounded-lg"
-              >
-                <CheckCheck className="w-3.5 h-3.5 mr-1.5 text-emerald-600" />
-                Ler todas ({unreadCount})
-              </Button>
+            <div className="flex items-center justify-between gap-2 mt-4 pt-3 border-t border-slate-100">
+              <div className="flex items-center gap-1.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleMarkAllAsRead}
+                  disabled={unreadCount === 0}
+                  className="h-8 text-[11px] font-bold border-slate-200 text-slate-700 rounded-lg"
+                >
+                  <CheckCheck className="w-3.5 h-3.5 mr-1.5 text-emerald-600" />
+                  Ler todas ({unreadCount})
+                </Button>
 
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={handleClearRead}
-                disabled={notifications.length - unreadCount === 0}
-                className="h-8 text-[11px] font-semibold text-slate-500 hover:text-red-600 rounded-lg"
-              >
-                <Trash2 className="w-3.5 h-3.5 mr-1" />
-                Limpar lidas
-              </Button>
-            </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleClearRead}
+                  disabled={notifications.length - unreadCount === 0}
+                  className="h-8 text-[11px] font-semibold text-slate-500 hover:text-red-600 rounded-lg"
+                >
+                  <Trash2 className="w-3.5 h-3.5 mr-1" />
+                  Limpar lidas
+                </Button>
+              </div>
 
-            <button
-              type="button"
-              onClick={() => setSoundEnabled((prev) => !prev)}
-              className={`h-8 px-2.5 rounded-lg border text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
-                soundEnabled
-                  ? "bg-slate-900 text-white border-slate-900"
-                  : "bg-slate-100 text-slate-500 border-slate-200"
-              }`}
-            >
-              {soundEnabled ? (
-                <>
-                  <Volume2 className="w-3.5 h-3.5 text-amber-400" />
-                  Som On
-                </>
-              ) : (
-                <>
-                  <VolumeX className="w-3.5 h-3.5" />
-                  Mudo
-                </>
-              )}
-            </button>
-          </div>
-
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar mt-3 pt-1">
-            {[
-              { id: "all", label: `Todas (${countsByCategory.all})` },
-              {
-                id: "unread",
-                label: `Não lidas (${countsByCategory.unread})`,
-              },
-              {
-                id: "bookings",
-                label: `Reservas (${countsByCategory.bookings})`,
-              },
-              {
-                id: "cancellations",
-                label: `Cancelamentos (${countsByCategory.cancellations})`,
-              },
-              {
-                id: "users",
-                label: `Cadastros (${countsByCategory.users})`,
-              },
-              {
-                id: "rooms",
-                label: `Salas (${countsByCategory.rooms})`,
-              },
-            ].map((tab) => (
               <button
-                key={tab.id}
                 type="button"
-                onClick={() =>
-                  setActiveFilter(tab.id as NotificationFilterCategory)
-                }
-                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold whitespace-nowrap transition-all cursor-pointer ${
-                  activeFilter === tab.id
-                    ? "bg-[#BF4B24] text-white shadow-2xs"
-                    : "bg-slate-100 text-slate-600 hover:bg-slate-200/70"
+                onClick={() => setSoundEnabled((prev) => !prev)}
+                className={`h-8 px-2.5 rounded-lg border text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  soundEnabled
+                    ? "bg-slate-900 text-white border-slate-900"
+                    : "bg-slate-100 text-slate-500 border-slate-200"
                 }`}
               >
-                {tab.label}
+                {soundEnabled ? (
+                  <>
+                    <Volume2 className="w-3.5 h-3.5 text-amber-400" />
+                    Som On
+                  </>
+                ) : (
+                  <>
+                    <VolumeX className="w-3.5 h-3.5" />
+                    Mudo
+                  </>
+                )}
               </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
-          {loading ? (
-            <div className="flex flex-col items-center justify-center h-64 text-slate-400 gap-2">
-              <Loader2 className="w-7 h-7 animate-spin text-[#BF4B24]" />
-              <p className="text-xs font-medium">
-                Carregando eventos da plataforma...
-              </p>
             </div>
-          ) : filteredNotifications.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-64 text-center px-6">
-              <div className="w-12 h-12 rounded-2xl bg-slate-200/70 text-slate-400 flex items-center justify-center mb-3">
-                <Bell className="w-6 h-6" />
-              </div>
-              <p className="text-sm font-bold text-slate-700">
-                Nenhuma notificação neste filtro
-              </p>
-              <p className="text-xs text-slate-500 mt-1">
-                Novos agendamentos, cancelamentos, cadastros de especialistas,
-                anfitriões e salas aparecerão aqui instantaneamente.
-              </p>
-            </div>
-          ) : (
-            filteredNotifications.map((item) => {
-              const visual = getEventVisuals(item.event_type);
-              const IconComponent = visual.icon;
 
-              let relativeTime = "";
-              let exactTime = "";
-              try {
-                const parsed = parseISO(item.created_at);
-                relativeTime = formatDistanceToNow(parsed, {
-                  addSuffix: true,
-                  locale: ptBR,
-                });
-                exactTime = format(parsed, "dd/MM/yyyy 'às' HH:mm", {
-                  locale: ptBR,
-                });
-              } catch {
-                relativeTime = "recentemente";
-              }
-
-              return (
-                <div
-                  key={item.id}
-                  onClick={() => handleNotificationClick(item)}
-                  className={`group relative rounded-2xl border p-4 transition-all cursor-pointer ${
-                    !item.is_read
-                      ? "bg-white border-orange-200/90 shadow-xs hover:border-[#BF4B24]"
-                      : "bg-white/70 border-slate-200/70 opacity-80 hover:opacity-100 hover:bg-white"
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar mt-3 pt-1">
+              {[
+                { id: "all", label: `Todas (${countsByCategory.all})` },
+                {
+                  id: "unread",
+                  label: `Não lidas (${countsByCategory.unread})`,
+                },
+                {
+                  id: "bookings",
+                  label: `Reservas (${countsByCategory.bookings})`,
+                },
+                {
+                  id: "cancellations",
+                  label: `Cancelamentos (${countsByCategory.cancellations})`,
+                },
+                {
+                  id: "users",
+                  label: `Cadastros (${countsByCategory.users})`,
+                },
+                {
+                  id: "rooms",
+                  label: `Salas (${countsByCategory.rooms})`,
+                },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() =>
+                    setActiveFilter(tab.id as NotificationFilterCategory)
+                  }
+                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold whitespace-nowrap transition-all cursor-pointer ${
+                    activeFilter === tab.id
+                      ? "bg-[#BF4B24] text-white shadow-2xs"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200/70"
                   }`}
                 >
-                  {!item.is_read && (
-                    <span
-                      title="Não lida"
-                      className="absolute top-4 right-4 w-2.5 h-2.5 rounded-full bg-[#BF4B24] ring-4 ring-orange-100"
-                    />
-                  )}
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-                  <div className="flex items-start gap-3.5">
-                    <div
-                      className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 mt-0.5 ${visual.bgIcon}`}
-                    >
-                      <IconComponent className="w-5 h-5" />
-                    </div>
+          <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+            {loading ? (
+              <div className="flex flex-col items-center justify-center h-64 text-slate-400 gap-2">
+                <Loader2 className="w-7 h-7 animate-spin text-[#BF4B24]" />
+                <p className="text-xs font-medium">
+                  Carregando eventos da plataforma...
+                </p>
+              </div>
+            ) : filteredNotifications.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-64 text-center px-6">
+                <div className="w-12 h-12 rounded-2xl bg-slate-200/70 text-slate-400 flex items-center justify-center mb-3">
+                  <Bell className="w-6 h-6" />
+                </div>
+                <p className="text-sm font-bold text-slate-700">
+                  Nenhuma notificação neste filtro
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  Novos agendamentos, cancelamentos, cadastros de especialistas,
+                  anfitriões e salas aparecerão aqui instantaneamente.
+                </p>
+              </div>
+            ) : (
+              filteredNotifications.map((item) => {
+                const visual = getEventVisuals(item.event_type);
+                const IconComponent = visual.icon;
 
-                    <div className="flex-1 min-w-0 pr-4">
-                      <div className="flex items-center gap-2 mb-1">
-                        <Badge
-                          className={`${visual.badgeClass} border-0 text-[10px] font-bold px-2 py-0`}
-                        >
-                          {visual.badgeText}
-                        </Badge>
-                        <span
-                          title={exactTime}
-                          className="text-[11px] font-medium text-slate-400"
-                        >
-                          {relativeTime}
-                        </span>
+                let relativeTime = "";
+                let exactTime = "";
+                try {
+                  const parsed = parseISO(item.created_at);
+                  relativeTime = formatDistanceToNow(parsed, {
+                    addSuffix: true,
+                    locale: ptBR,
+                  });
+                  exactTime = format(parsed, "dd/MM/yyyy 'às' HH:mm", {
+                    locale: ptBR,
+                  });
+                } catch {
+                  relativeTime = "recentemente";
+                }
+
+                return (
+                  <div
+                    key={item.id}
+                    onClick={() => handleNotificationClick(item)}
+                    className={`group relative rounded-2xl border p-4 transition-all cursor-pointer ${
+                      !item.is_read
+                        ? "bg-white border-orange-200/90 shadow-xs hover:border-[#BF4B24]"
+                        : "bg-white/70 border-slate-200/70 opacity-85 hover:opacity-100 hover:bg-white"
+                    }`}
+                  >
+                    {!item.is_read && (
+                      <span
+                        title="Não lida"
+                        className="absolute top-4 right-4 w-2.5 h-2.5 rounded-full bg-[#BF4B24] ring-4 ring-orange-100"
+                      />
+                    )}
+
+                    <div className="flex items-start gap-3.5">
+                      <div
+                        className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 mt-0.5 ${visual.bgIcon}`}
+                      >
+                        <IconComponent className="w-5 h-5" />
                       </div>
 
-                      <h4 className="text-xs font-extrabold text-slate-900 leading-snug">
-                        {item.title}
-                      </h4>
+                      <div className="flex-1 min-w-0 pr-4">
+                        <div className="flex items-center gap-2 mb-1">
+                          <Badge
+                            className={`${visual.badgeClass} border-0 text-[10px] font-bold px-2 py-0`}
+                          >
+                            {visual.badgeText}
+                          </Badge>
+                          <span
+                            title={exactTime}
+                            className="text-[11px] font-medium text-slate-400"
+                          >
+                            {relativeTime}
+                          </span>
+                        </div>
 
-                      <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                        {item.message}
-                      </p>
+                        <h4 className="text-xs font-extrabold text-slate-900 leading-snug">
+                          {item.title}
+                        </h4>
 
-                      <div className="mt-2.5 flex items-center justify-between text-[11px] text-slate-400">
-                        <span>{exactTime}</span>
-                        <span className="inline-flex items-center gap-0.5 font-bold text-[#BF4B24] opacity-0 group-hover:opacity-100 transition-opacity">
-                          {item.is_read ? "Ver detalhes" : "Marcar como lida"}{" "}
-                          <ChevronRight className="w-3 h-3" />
-                        </span>
+                        <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                          {item.message}
+                        </p>
+
+                        <div className="mt-2.5 flex items-center justify-between text-[11px] text-slate-400">
+                          <span>{exactTime}</span>
+                          <span className="inline-flex items-center gap-0.5 font-bold text-[#BF4B24] group-hover:translate-x-0.5 transition-transform">
+                            Ver detalhes completos{" "}
+                            <ChevronRight className="w-3.5 h-3.5" />
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </div>
+                );
+              })
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* ================================================================== */}
+      {/* MODAL DE RAIO-X COMPLETO DO EVENTO / RESERVA                       */}
+      {/* ================================================================== */}
+      <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
+        <DialogContent className="sm:max-w-xl max-h-[90vh] p-0 gap-0 overflow-hidden flex flex-col bg-white border-slate-200 shadow-2xl rounded-2xl">
+          <DialogHeader className="px-6 py-4 bg-slate-900 text-white shrink-0">
+            <div className="flex items-center justify-between gap-2 pr-6">
+              <div>
+                <DialogTitle className="text-base font-bold text-white flex items-center gap-2">
+                  {selectedNotif?.title || "Detalhes da Notificação"}
+                </DialogTitle>
+                <DialogDescription className="text-xs text-slate-400 mt-0.5">
+                  Auditoria completa de origem, forma de pagamento, horários e
+                  divisão financeira.
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto p-6 space-y-5 text-xs">
+            {detailLoading ? (
+              <div className="flex flex-col items-center justify-center py-16 gap-2.5 text-slate-500">
+                <Loader2 className="w-8 h-8 animate-spin text-[#BF4B24]" />
+                <p className="font-semibold text-xs">
+                  Buscando dados completos da transação...
+                </p>
+              </div>
+            ) : !detailData || detailData.kind === "not_found" ? (
+              <div className="text-center py-12 space-y-2">
+                <p className="text-sm font-bold text-slate-800">
+                  {selectedNotif?.title}
+                </p>
+                <p className="text-xs text-slate-600">
+                  {selectedNotif?.message}
+                </p>
+                <p className="text-[11px] text-slate-400 pt-2">
+                  O registro original não foi localizado ou foi removido.
+                </p>
+              </div>
+            ) : detailData.kind === "booking" ? (
+              <>
+                {/* 1. STATUS, CANAL / ORIGEM E FORMA DE PAGAMENTO */}
+                <div className="p-4 rounded-2xl bg-[#FAF7F4] border border-orange-200/80 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#BF4B24] bg-orange-100/80 px-2.5 py-1 rounded-md">
+                      {detailData.originTitle}
+                    </span>
+
+                    {detailData.booking.status === "cancelled" ? (
+                      <Badge className="bg-red-100 text-red-800 border-0 font-bold text-[11px]">
+                        Cancelada
+                      </Badge>
+                    ) : detailData.booking.status === "completed" ? (
+                      <Badge className="bg-slate-200 text-slate-800 border-0 font-bold text-[11px]">
+                        Concluída
+                      </Badge>
+                    ) : (
+                      <Badge className="bg-emerald-100 text-emerald-800 border-0 font-bold text-[11px]">
+                        Confirmada
+                      </Badge>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-stone-200/70">
+                    <div>
+                      <span className="text-[11px] text-slate-500 block">
+                        Forma de Pagamento / Meio
+                      </span>
+                      <span className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5 mt-0.5">
+                        <CreditCard className="w-3.5 h-3.5 text-[#BF4B24]" />
+                        {detailData.paymentMethodBadge}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="text-[11px] text-slate-500 block">
+                        Código da Reserva
+                      </span>
+                      <span className="font-mono font-bold text-slate-800 text-xs flex items-center gap-1 mt-0.5">
+                        <Hash className="w-3.5 h-3.5 text-slate-400" />
+                        {detailData.booking.id.slice(0, 8)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-slate-600 bg-white/80 px-3 py-2 rounded-xl border border-stone-200/60">
+                    {detailData.paymentDetailsText}
+                  </p>
                 </div>
-              );
-            })
-          )}
-        </div>
-      </SheetContent>
-    </Sheet>
+
+                {/* 2. SALA, CLÍNICA E DATA/HORÁRIOS RESERVADOS */}
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                        Consultório & Clínica Anfitriã
+                      </span>
+                      <h4 className="text-sm font-black text-slate-900 mt-0.5">
+                        {detailData.room?.name || "Sala"} • Categoria{" "}
+                        {formatTierLabel(detailData.roomTier)}
+                      </h4>
+                      <p className="text-xs font-medium text-slate-600 mt-0.5">
+                        Anfitrião:{" "}
+                        <strong>
+                          {detailData.hostProfile?.full_name || "Fusion Clinic"}
+                        </strong>
+                        {detailData.cohostName
+                          ? ` • Co-Host: ${detailData.cohostName}`
+                          : ""}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-200/80 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <span className="text-[11px] text-slate-500 block">
+                        Para qual dia foi agendado
+                      </span>
+                      <span className="font-extrabold text-slate-900 text-xs block mt-0.5 capitalize">
+                        {format(
+                          parseISO(detailData.booking.start_time),
+                          "EEEE, dd/MM/yyyy",
+                          { locale: ptBR },
+                        )}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="text-[11px] text-slate-500 block">
+                        Feito em (Data do Pedido)
+                      </span>
+                      <span className="font-bold text-slate-700 text-xs block mt-0.5">
+                        {detailData.booking.created_at
+                          ? format(
+                              parseISO(detailData.booking.created_at),
+                              "dd/MM/yyyy 'às' HH:mm",
+                            )
+                          : "-"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Lista todos os horários reservados naquele lote */}
+                  <div className="pt-2">
+                    <span className="text-[11px] font-bold text-slate-600 block mb-1.5">
+                      Horário(s) Reservado(s) ({detailData.totalBatchHours}h no
+                      total):
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {detailData.batchBookings.map((bSlot: any) => (
+                        <span
+                          key={bSlot.id}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 text-white font-bold text-[11px] tabular-nums"
+                        >
+                          <Clock className="w-3 h-3 text-amber-400" />
+                          {format(parseISO(bSlot.start_time), "HH:mm")} às{" "}
+                          {format(parseISO(bSlot.end_time), "HH:mm")}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {(detailData.booking.checkin_time ||
+                    detailData.booking.checkout_time) && (
+                    <div className="pt-2 border-t border-slate-200/80 flex flex-wrap gap-4 text-[11px]">
+                      {detailData.booking.checkin_time && (
+                        <span className="text-emerald-700 font-bold">
+                          📲 Check-in:{" "}
+                          {format(
+                            parseISO(detailData.booking.checkin_time),
+                            "dd/MM HH:mm",
+                          )}
+                        </span>
+                      )}
+                      {detailData.booking.checkout_time && (
+                        <span className="text-teal-700 font-bold">
+                          ✅ Check-out:{" "}
+                          {format(
+                            parseISO(detailData.booking.checkout_time),
+                            "dd/MM HH:mm",
+                          )}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* 3. RAIO-X FINANCEIRO E SPLIT */}
+                <div className="bg-slate-900 text-white p-4 rounded-2xl space-y-2.5 tabular-nums">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                    <div>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                        Valor Total da Reserva ({detailData.totalBatchHours}h)
+                      </span>
+                      <span className="text-xl font-black text-white">
+                        R$ {formatBRL(detailData.grossTotalBrl)}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[10px] text-slate-400 block">
+                        Valor por Hora
+                      </span>
+                      <span className="text-xs font-bold text-amber-400">
+                        R$ {formatBRL(detailData.unitHourlyBrl)}/h
+                      </span>
+                    </div>
+                  </div>
+
+                  {detailData.discountBrl > 0 && (
+                    <div className="flex justify-between text-xs text-amber-300">
+                      <span>Desconto de Cupom Aplicado:</span>
+                      <span className="font-bold">
+                        - R$ {formatBRL(detailData.discountBrl)}
+                      </span>
+                    </div>
+                  )}
+
+                  {detailData.isDowngrade && (
+                    <div className="bg-slate-800 p-2.5 rounded-xl space-y-1 text-[11px]">
+                      <div className="flex justify-between text-slate-300">
+                        <span>
+                          Base da Sala Entregue (
+                          {formatTierLabel(detailData.roomTier)}):
+                        </span>
+                        <span className="font-semibold text-white">
+                          R$ {formatBRL(detailData.roomBaseTotalBrl)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-emerald-400 font-bold">
+                        <span className="flex items-center gap-1">
+                          <ArrowDownRight className="w-3.5 h-3.5" /> Ganho Extra
+                          de Downgrade (100% Fusion):
+                        </span>
+                        <span>
+                          + R$ {formatBRL(detailData.downgradeSpreadTotalBrl)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex justify-between text-xs text-slate-300">
+                    <span>Taxa Base Plataforma:</span>
+                    <span className="font-semibold text-white">
+                      R$ {formatBRL(detailData.standardFeeTotalBrl)}
+                    </span>
+                  </div>
+
+                  {detailData.cohostPayoutTotalBrl > 0 && (
+                    <div className="flex justify-between text-xs text-slate-300">
+                      <span>
+                        Repasse Co-Anfitrião ({detailData.cohostName}):
+                      </span>
+                      <span className="font-semibold text-white">
+                        R$ {formatBRL(detailData.cohostPayoutTotalBrl)}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-between text-xs text-slate-300">
+                    <span>
+                      Repasse Clínica (
+                      {detailData.hostProfile?.full_name || "Fusion Clinic"}):
+                    </span>
+                    <span className="font-semibold text-white">
+                      R$ {formatBRL(detailData.hostPayoutTotalBrl)}
+                    </span>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-800 flex justify-between items-center text-xs">
+                    <span className="font-bold text-slate-200">
+                      Receita Líquida Total Fusion:
+                    </span>
+                    <span className="text-sm font-black text-emerald-400">
+                      + R$ {formatBRL(detailData.fusionProfitTotalBrl)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* 4. DADOS DO PROFISSIONAL / ESPECIALISTA */}
+                {detailData.specialist && (
+                  <div className="p-4 rounded-2xl bg-white border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                        Profissional Responsável
+                      </span>
+                      <p className="text-sm font-bold text-slate-900">
+                        {detailData.specialist.full_name || "Especialista"}
+                      </p>
+                      <p className="text-xs text-[#BF4B24] font-semibold">
+                        {detailData.specialist.specialty || "Saúde"}{" "}
+                        {detailData.specialist.council_number
+                          ? `• ${detailData.specialist.council || "Conselho"}: ${detailData.specialist.council_number}`
+                          : ""}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        {detailData.specialist.email || ""}{" "}
+                        {detailData.specialist.cpf
+                          ? `• CPF: ${detailData.specialist.cpf}`
+                          : ""}
+                      </p>
+                    </div>
+
+                    {cleanPhoneForWa(
+                      detailData.specialist.whatsapp ||
+                        detailData.specialist.phone,
+                    ) && (
+                      <a
+                        href={`https://wa.me/${cleanPhoneForWa(
+                          detailData.specialist.whatsapp ||
+                            detailData.specialist.phone,
+                        )}?text=${encodeURIComponent(
+                          `Olá Dr(a). ${(detailData.specialist.full_name || "").split(" ")[0]}, tudo bem? Falando da Fusion Clinic sobre sua reserva na sala ${detailData.room?.name || ""}.`,
+                        )}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="h-9 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs inline-flex items-center justify-center gap-1.5 shrink-0 transition-colors"
+                      >
+                        <MessageCircle className="w-4 h-4" />
+                        WhatsApp
+                      </a>
+                    )}
+                  </div>
+                )}
+              </>
+            ) : detailData.kind === "profile" && detailData.profile ? (
+              /* MODAL DE DETALHES DE CADASTRO DE ESPECIALISTA / ANFITRIÃO */
+              <div className="space-y-4">
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-full bg-[#BF4B24]/10 text-[#BF4B24] flex items-center justify-center font-black text-base shrink-0">
+                    <User className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <Badge className="bg-slate-900 text-white border-0 text-[10px] mb-1">
+                      {detailData.isHost
+                        ? "Conta de Anfitrião"
+                        : "Conta de Especialista"}
+                    </Badge>
+                    <h4 className="text-base font-black text-slate-900">
+                      {detailData.profile.full_name || "Novo Cadastrado"}
+                    </h4>
+                    <p className="text-xs text-slate-500">
+                      {detailData.profile.email}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 p-4 rounded-2xl border border-slate-200 bg-white">
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">
+                      Especialidade
+                    </span>
+                    <span className="font-bold text-slate-900">
+                      {detailData.profile.specialty || "Não informada"}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">
+                      Conselho Profissional
+                    </span>
+                    <span className="font-bold text-slate-900">
+                      {detailData.profile.council
+                        ? `${detailData.profile.council} ${detailData.profile.council_number || ""}`
+                        : "Não informado"}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">
+                      CPF
+                    </span>
+                    <span className="font-bold text-slate-900">
+                      {detailData.profile.cpf || "Não informado"}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">
+                      Telefone / WhatsApp
+                    </span>
+                    <span className="font-bold text-slate-900">
+                      {detailData.profile.whatsapp ||
+                        detailData.profile.phone ||
+                        "Não informado"}
+                    </span>
+                  </div>
+                </div>
+
+                {cleanPhoneForWa(
+                  detailData.profile.whatsapp || detailData.profile.phone,
+                ) && (
+                  <a
+                    href={`https://wa.me/${cleanPhoneForWa(
+                      detailData.profile.whatsapp || detailData.profile.phone,
+                    )}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full h-10 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs inline-flex items-center justify-center gap-2 transition-colors"
+                  >
+                    <MessageCircle className="w-4 h-4" />
+                    Dar Boas-Vindas no WhatsApp
+                  </a>
+                )}
+              </div>
+            ) : detailData.kind === "room" && detailData.room ? (
+              /* MODAL DE DETALHES DE NOVA SALA CADASTRADA */
+              <div className="space-y-4">
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+                  <Badge className="bg-orange-100 text-[#BF4B24] border-0 font-bold text-[10px]">
+                    Categoria{" "}
+                    {formatTierLabel(normalizeTier(detailData.room.tier))}
+                  </Badge>
+                  <h4 className="text-base font-black text-slate-900">
+                    {detailData.room.name}
+                  </h4>
+                  <p className="text-xs text-slate-600">
+                    Cadastrada por:{" "}
+                    <strong>
+                      {detailData.hostProfile?.full_name || "Anfitrião"}
+                    </strong>
+                  </p>
+                  {detailData.hourlyRate && (
+                    <p className="text-xs font-bold text-emerald-700">
+                      Tarifa Hora Avulsa: R$ {formatBRL(detailData.hourlyRate)}
+                      /h
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
-}
-
-function normalizeTier(tier?: string | null): "start" | "vip" | "master" {
-  const t = (tier || "start").toLowerCase().trim();
-  if (t.includes("master") || t.includes("premium")) return "master";
-  if (t.includes("vip")) return "vip";
-  return "start";
-}
-
-function formatTierLabel(tier: "start" | "vip" | "master"): string {
-  if (tier === "master") return "Premium";
-  if (tier === "vip") return "VIP";
-  return "Basic";
-}
-
-function extractRoomModalitiesHourlyRate(
-  modalities: any,
-  addressDetails?: any,
-): number | null {
-  try {
-    if (modalities) {
-      const parsed =
-        typeof modalities === "string" ? JSON.parse(modalities) : modalities;
-      const candidates = [
-        parsed?.hourly?.price,
-        parsed?.hourlyPrice,
-        parsed?.price_per_hour,
-        parsed?.pricePerHour,
-        parsed?.price,
-      ];
-      for (const c of candidates) {
-        const val = Number(c);
-        if (!isNaN(val) && val > 0 && val <= 250) return val;
-      }
-    }
-    if (addressDetails) {
-      const addr =
-        typeof addressDetails === "string"
-          ? JSON.parse(addressDetails)
-          : addressDetails;
-      const addrPrice = Number(addr?.pricing?.hourly);
-      if (!isNaN(addrPrice) && addrPrice > 0 && addrPrice <= 250) {
-        return addrPrice;
-      }
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function calculateSlotUnits(startIso: string, endIso: string): number {
-  const diffMinutes =
-    (new Date(endIso).getTime() - new Date(startIso).getTime()) / (1000 * 60);
-  if (diffMinutes <= 0) return 1;
-  if (diffMinutes >= 45 && diffMinutes <= 65) return 1;
-  return Math.max(1, Math.round(diffMinutes / 55));
 }
 
 function computeRoomAvailableHoursInInterval(
@@ -1391,19 +2304,6 @@ function extractContractBaixaEvents(contract: any): {
 
   return events;
 }
-
-const formatBRL = (val: number) =>
-  val.toLocaleString("pt-BR", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-
-const cleanPhoneForWa = (raw?: string | null) => {
-  if (!raw) return null;
-  const digits = raw.replace(/\D/g, "");
-  if (!digits) return null;
-  return digits.startsWith("55") ? digits : `55${digits}`;
-};
 
 export function AdminOverviewTab({
   onNavigateTab,
@@ -1702,9 +2602,6 @@ export function AdminOverviewTab({
 
         const roomsMap = new Map<string, any>(
           roomsData.map((r: any) => [r.id, r]),
-        );
-        const categoriesMap = new Map<string, any>(
-          (categoriesRes.data || []).map((c: any) => [c.id, c]),
         );
         const contractsById = new Map<string, any>(
           contractsData.map((c: any) => [c.id, c]),
@@ -3022,7 +3919,7 @@ export function AdminOverviewTab({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 print:hidden">
-          {/* SINO DE NOTIFICAÇÕES EM TEMPO REAL */}
+          {/* SINO DE NOTIFICAÇÕES EM TEMPO REAL COM MODAL DE RAIO-X */}
           <AdminNotificationsBell onNavigateTab={onNavigateTab} />
 
           <div className="flex items-center bg-white border border-slate-200 p-1 rounded-xl">
