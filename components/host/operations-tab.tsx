@@ -17,19 +17,16 @@ import {
   Edit3,
   Building2,
   TrendingDown,
-  TrendingUp,
   Loader2,
   FileSpreadsheet,
   Calendar as CalendarIcon,
-  Wallet,
   Camera,
   Mic,
   Square,
   ExternalLink,
-  DoorOpen,
   X,
-  UploadCloud,
   FileCheck2,
+  RefreshCw,
 } from "lucide-react";
 import {
   ComposedChart,
@@ -184,6 +181,85 @@ function slugifyCategory(label: string): string {
     .replace(/^_|_$/g, "");
 }
 
+/**
+ * Comprime fotos de câmera de celular (que costumam ter 6MB a 12MB)
+ * para ~180KB em JPEG nítido, evitando erro 413 na API e acelerando a leitura em 10x.
+ */
+async function compressImageForOCR(
+  file: File,
+): Promise<{ base64: string; mimeType: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const resultStr = event.target?.result as string;
+      if (!file.type.startsWith("image/")) {
+        const rawBase64 = resultStr.split(",")[1] || "";
+        resolve({
+          base64: rawBase64,
+          mimeType: file.type || "application/pdf",
+        });
+        return;
+      }
+
+      const img = new Image();
+      img.onload = () => {
+        const MAX_DIM = 1600;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height && width > MAX_DIM) {
+          height = Math.round((height * MAX_DIM) / width);
+          width = MAX_DIM;
+        } else if (height > MAX_DIM) {
+          width = Math.round((width * MAX_DIM) / height);
+          height = MAX_DIM;
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+
+        if (!ctx) {
+          const fallbackBase64 = resultStr.split(",")[1] || "";
+          resolve({ base64: fallbackBase64, mimeType: file.type });
+          return;
+        }
+
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.84);
+        const cleanBase64 = dataUrl.split(",")[1] || "";
+        resolve({ base64: cleanBase64, mimeType: "image/jpeg" });
+      };
+      img.onerror = () => {
+        const fallbackBase64 = resultStr.split(",")[1] || "";
+        resolve({
+          base64: fallbackBase64,
+          mimeType: file.type || "image/jpeg",
+        });
+      };
+      img.src = resultStr;
+    };
+    reader.onerror = (err) => reject(err);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const str = String(reader.result || "");
+      resolve(str.split(",")[1] || "");
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
 function parseVoiceCommandLocally(
   transcript: string,
   categoriesMap: Record<string, string>,
@@ -254,6 +330,7 @@ export function HostOperationsTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [aiProcessing, setAiProcessing] = useState(false);
+  const [aiStatusMessage, setAiStatusMessage] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string>("");
 
   const [activeSubTab, setActiveSubTab] = useState<
@@ -280,7 +357,6 @@ export function HostOperationsTab() {
     Record<string, { grossBrl: number; hostNetBrl: number; hours: number }>
   >({});
 
-  // Categorias personalizadas criadas pelo anfitrião
   const [customCategoriesMap, setCustomCategoriesMap] = useState<
     Record<string, string>
   >({});
@@ -360,8 +436,8 @@ export function HostOperationsTab() {
   const [expenseForm, setExpenseForm] = useState({
     title: "",
     vendor: "",
-    category: "energia",
-    cost_type: "fixed" as "fixed" | "variable",
+    category: "manutencao",
+    cost_type: "variable" as "fixed" | "variable",
     room_id: "",
     amount: "",
     expense_date: format(new Date(), "yyyy-MM-dd"),
@@ -390,7 +466,6 @@ export function HostOperationsTab() {
       const lastDay = new Date(year, month, 0).getDate();
       const endOfMonthStr = `${selectedMonth}-${String(lastDay).padStart(2, "0")}`;
 
-      // Carrega categorias personalizadas salvas no banco ou localmente
       const customCats: Record<string, string> = {};
       try {
         const localCats = localStorage.getItem(
@@ -464,7 +539,6 @@ export function HostOperationsTab() {
 
       const parsedExpenses: ClinicExpense[] = (expRes.data || []).map(
         (e: any) => {
-          // Caso haja categorias novas salvas diretamente na coluna category
           if (
             e.category &&
             !DEFAULT_EXPENSE_CATEGORIES[e.category] &&
@@ -493,7 +567,6 @@ export function HostOperationsTab() {
       setCustomCategoriesMap({ ...customCats });
       setExpenses(parsedExpenses);
 
-      // Calcula o Repasse Líquido recebido por cada sala no mês para comparar com os custos
       const revMap: Record<
         string,
         { grossBrl: number; hostNetBrl: number; hours: number }
@@ -574,7 +647,7 @@ export function HostOperationsTab() {
   };
 
   // ============================================================================
-  // INTELIGÊNCIA MULTIMODAL: FOTO DA NOTA (OCR) + COMANDO DE VOZ
+  // INTELIGÊNCIA MULTIMODAL: FOTO DA NOTA COMPRIMIDA (OCR) + COMANDO DE VOZ
   // ============================================================================
   const processReceiptAndVoiceWithAI = async (
     imgFile: File | null,
@@ -582,6 +655,8 @@ export function HostOperationsTab() {
     spokenText: string,
   ) => {
     setAiProcessing(true);
+    setAiStatusMessage("Analisando nota fiscal e extraindo valor...");
+
     try {
       // 1. Aplica interpretação local imediata se houver comando de voz
       if (spokenText.trim()) {
@@ -610,68 +685,99 @@ export function HostOperationsTab() {
         }));
       }
 
-      // 2. Chama a rota de IA para ler a foto da nota fiscal e cruzar com o áudio
-      const fd = new FormData();
-      if (imgFile) fd.append("image", imgFile);
-      if (audioBlob) {
-        fd.append(
-          "audio",
-          new File([audioBlob], "voice.webm", { type: "audio/webm" }),
-        );
+      // 2. Comprime a imagem no cliente (evita erro 413 de fotos pesadas da câmera do celular)
+      let imageBase64 = "";
+      let imageMimeType = "image/jpeg";
+      if (imgFile) {
+        const compressed = await compressImageForOCR(imgFile);
+        imageBase64 = compressed.base64;
+        imageMimeType = compressed.mimeType;
       }
-      fd.append("transcript", spokenText);
-      fd.append("categories", JSON.stringify(expenseCategoriesMap));
-      fd.append(
-        "rooms",
-        JSON.stringify(rooms.map((r) => ({ id: r.id, name: r.name }))),
-      );
+
+      let audioBase64 = "";
+      if (audioBlob && audioBlob.size > 0) {
+        audioBase64 = await blobToBase64(audioBlob);
+      }
 
       const res = await fetch("/api/host/parse-expense", {
         method: "POST",
-        body: fd,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64,
+          imageMimeType,
+          audioBase64,
+          audioMimeType: "audio/webm",
+          transcript: spokenText,
+          categories: expenseCategoriesMap,
+          rooms: rooms.map((r) => ({ id: r.id, name: r.name })),
+        }),
       });
 
-      if (res.ok) {
-        const json = await res.json();
-        const d = json.data;
-        if (d) {
-          let resolvedCategoryKey = d.category_key || "";
-          if (
-            resolvedCategoryKey &&
-            !expenseCategoriesMap[resolvedCategoryKey]
-          ) {
-            const label =
-              d.category_label ||
-              resolvedCategoryKey.charAt(0).toUpperCase() +
-                resolvedCategoryKey.slice(1).replace(/_/g, " ");
-            const slug = slugifyCategory(label);
-            resolvedCategoryKey = slug;
-            setCustomCategoriesMap((prev) => ({ ...prev, [slug]: label }));
-          }
+      const json = await res.json().catch(() => null);
 
-          setExpenseForm((prev) => ({
-            ...prev,
-            title: d.title || prev.title || "Despesa Operacional",
-            vendor: d.vendor || prev.vendor,
-            amount: Number(d.amount) > 0 ? String(d.amount) : prev.amount,
-            expense_date: d.expense_date || prev.expense_date,
-            category: resolvedCategoryKey || prev.category,
-            cost_type: d.cost_type === "fixed" ? "fixed" : prev.cost_type,
-            room_id: d.room_id || prev.room_id,
-            payment_status: d.payment_status === "pending" ? "pending" : "paid",
-            notes: d.notes || prev.notes,
-          }));
-
-          toast({
-            title: "Nota / comando lido automaticamente",
-            description: `${d.title || "Despesa"}${
-              Number(d.amount) > 0 ? ` — R$ ${formatBRL(Number(d.amount))}` : ""
-            }. Confira os dados e clique em salvar.`,
-          });
-        }
+      if (!res.ok) {
+        const errMsg =
+          json?.error ||
+          `Erro HTTP ${res.status}: Verifique se o arquivo app/api/host/parse-expense/route.ts foi criado.`;
+        setAiStatusMessage(`Aviso: ${errMsg}`);
+        toast({
+          variant: "destructive",
+          title: "Não foi possível ler a nota automaticamente",
+          description: errMsg,
+        });
+        return;
       }
-    } catch (e) {
-      console.warn("Leitura auxiliar concluída:", e);
+
+      const d = json?.data;
+      if (d) {
+        let resolvedCategoryKey = d.category_key || "";
+        if (resolvedCategoryKey && !expenseCategoriesMap[resolvedCategoryKey]) {
+          const label =
+            d.category_label ||
+            resolvedCategoryKey.charAt(0).toUpperCase() +
+              resolvedCategoryKey.slice(1).replace(/_/g, " ");
+          const slug = slugifyCategory(label);
+          resolvedCategoryKey = slug;
+          setCustomCategoriesMap((prev) => ({ ...prev, [slug]: label }));
+        }
+
+        const extractedAmount = Number(d.amount || 0);
+
+        setExpenseForm((prev) => ({
+          ...prev,
+          title: d.title || d.vendor || prev.title || "Despesa de Cupom Fiscal",
+          vendor: d.vendor || prev.vendor,
+          amount: extractedAmount > 0 ? String(extractedAmount) : prev.amount,
+          expense_date: d.expense_date || prev.expense_date,
+          category: resolvedCategoryKey || prev.category,
+          cost_type: d.cost_type === "fixed" ? "fixed" : prev.cost_type,
+          room_id: d.room_id || prev.room_id,
+          payment_status: d.payment_status === "pending" ? "pending" : "paid",
+          notes: d.notes || prev.notes,
+        }));
+
+        setAiStatusMessage(
+          `Dados extraídos: ${d.title || d.vendor || "Nota lida"}${
+            extractedAmount > 0 ? ` • R$ ${formatBRL(extractedAmount)}` : ""
+          }`,
+        );
+
+        toast({
+          title: "Nota fiscal lida com sucesso!",
+          description: `${d.title || "Despesa"}${
+            extractedAmount > 0 ? ` — R$ ${formatBRL(extractedAmount)}` : ""
+          }`,
+        });
+      }
+    } catch (e: any) {
+      setAiStatusMessage(
+        "Não foi possível conectar ao leitor automático. Preencha manualmente abaixo.",
+      );
+      toast({
+        variant: "destructive",
+        title: "Falha ao processar imagem",
+        description: e.message || "Tente novamente.",
+      });
     } finally {
       setAiProcessing(false);
     }
@@ -682,6 +788,7 @@ export function HostOperationsTab() {
     setReceiptFile(file);
     setReceiptPreviewUrl(URL.createObjectURL(file));
 
+    // Se o modal ainda estava fechado, abre preservando os campos para receber o OCR
     if (!isExpenseModalOpen) {
       setEditingExpense(null);
       setExpenseForm({
@@ -697,6 +804,11 @@ export function HostOperationsTab() {
         custom_fields: [],
       });
       setIsExpenseModalOpen(true);
+    }
+
+    // Limpa o value do input para permitir selecionar a mesma foto novamente se quiser
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
     }
 
     await processReceiptAndVoiceWithAI(file, null, voiceTranscript);
@@ -830,12 +942,13 @@ export function HostOperationsTab() {
     setEditingExpense(null);
     setReceiptFile(null);
     setReceiptPreviewUrl(null);
+    setAiStatusMessage(null);
     setVoiceTranscript("");
     setExpenseForm({
       title: "",
       vendor: "",
-      category: "energia",
-      cost_type: "fixed",
+      category: "manutencao",
+      cost_type: "variable",
       room_id: "",
       amount: "",
       expense_date: format(new Date(), "yyyy-MM-dd"),
@@ -850,6 +963,7 @@ export function HostOperationsTab() {
     setEditingExpense(exp);
     setReceiptFile(null);
     setReceiptPreviewUrl(exp.receipt_url || null);
+    setAiStatusMessage(null);
     setVoiceTranscript("");
     setExpenseForm({
       title: exp.title,
@@ -981,7 +1095,7 @@ export function HostOperationsTab() {
       toast({
         title: editingExpense
           ? "Despesa atualizada"
-          : "Despesa registada na Central de Custos",
+          : "Despesa registrada na Central de Custos",
       });
       setIsExpenseModalOpen(false);
       loadOperationsData();
@@ -1459,7 +1573,6 @@ export function HostOperationsTab() {
     .filter((e) => e.payment_status === "pending")
     .reduce((acc, curr) => acc + curr.amount, 0);
 
-  // Cálculos de Rateio do Hub e Gráficos por Categoria
   const hubCostAnalytics = useMemo(() => {
     const totalHostRevenueNet = Object.values(roomRevenuesMap).reduce(
       (acc, r) => acc + r.hostNetBrl,
@@ -1539,7 +1652,6 @@ export function HostOperationsTab() {
     allocationMethod,
   ]);
 
-  // Filtros de busca
   const q = search.toLowerCase();
   const filteredInventory = inventory.filter((i) => {
     if (onlyCriticalStock && i.current_quantity > i.min_quantity) return false;
@@ -1623,9 +1735,7 @@ export function HostOperationsTab() {
         </div>
       </div>
 
-      {/* ==================================================================== */}
-      {/* BARRA DE CAPTURA INTELIGENTE (FOTO DA NOTA + COMANDO DE VOZ)         */}
-      {/* ==================================================================== */}
+      {/* BARRA DE CAPTURA INTELIGENTE (FOTO DA NOTA + COMANDO DE VOZ) */}
       <div className="mb-6 bg-[#FAF7F4] border border-stone-200/90 rounded-2xl p-5 shadow-2xs">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-1 max-w-xl">
@@ -1938,9 +2048,7 @@ export function HostOperationsTab() {
       {/* ==================================================================== */}
       {activeSubTab === "expenses" && (
         <div className="space-y-6">
-          {/* GRÁFICOS VISUAIS E TABELA DE RATEIO DO HUB POR SALA */}
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            {/* Gráfico 1: Rateio de Custos por Sala */}
             <div className="xl:col-span-2 bg-white p-6 rounded-2xl border border-slate-200/90 flex flex-col justify-between">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
                 <div>
@@ -2082,7 +2190,6 @@ export function HostOperationsTab() {
               )}
             </div>
 
-            {/* Gráfico 2: Divisão por Categoria de Gasto */}
             <div className="bg-white p-6 rounded-2xl border border-slate-200/90 flex flex-col justify-between">
               <div className="flex items-center justify-between mb-2">
                 <div>
@@ -2156,7 +2263,6 @@ export function HostOperationsTab() {
             </div>
           </div>
 
-          {/* TABELA DE DESPESAS E NOTAS ANEXADAS */}
           <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden">
             <div className="p-4 sm:px-6 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-slate-50/50">
               <span className="text-xs font-bold text-slate-700">
@@ -2197,7 +2303,7 @@ export function HostOperationsTab() {
               <div className="py-16 text-center px-4">
                 <Receipt className="w-10 h-10 text-slate-200 mx-auto mb-3" />
                 <p className="font-bold text-slate-700 text-sm">
-                  Nenhuma despesa registada na competência {selectedMonth}.
+                  Nenhuma despesa registrada na competência {selectedMonth}.
                 </p>
                 <p className="text-xs text-slate-400 mt-1">
                   Fotografe uma nota fiscal ou grave um comando de voz acima
@@ -2608,12 +2714,12 @@ export function HostOperationsTab() {
       )}
 
       {/* ==================================================================== */}
-      {/* MODAL DE DESPESA (COM LEITURA DE FOTO DA NOTA, VOZ E CAMPOS EXTRAS)  */}
+      {/* MODAL DE DESPESA (RESPONSIVO NO CELULAR + LEITURA DE NOTA COM IA)    */}
       {/* ==================================================================== */}
       <Dialog open={isExpenseModalOpen} onOpenChange={setIsExpenseModalOpen}>
-        <DialogContent className="sm:max-w-xl max-h-[92vh] overflow-y-auto bg-white rounded-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-slate-900">
+        <DialogContent className="w-[94vw] max-w-lg max-h-[90vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6 bg-white rounded-2xl">
+          <DialogHeader className="text-left">
+            <DialogTitle className="text-base sm:text-lg font-bold text-slate-900">
               {editingExpense
                 ? "Editar Despesa do Hub"
                 : "Lançar Despesa Operacional"}
@@ -2625,14 +2731,14 @@ export function HostOperationsTab() {
           </DialogHeader>
 
           {/* Barra rápida de Foto + Voz dentro do Modal */}
-          <div className="p-3 rounded-xl bg-[#FAF7F4] border border-stone-200/90 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
+          <div className="p-3 rounded-xl bg-[#FAF7F4] border border-stone-200/90 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <Button
                 type="button"
                 size="sm"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={aiProcessing}
-                className="h-9 rounded-lg bg-slate-900 text-white text-xs font-semibold cursor-pointer"
+                className="flex-1 h-9 rounded-lg bg-slate-900 text-white text-xs font-semibold cursor-pointer"
               >
                 <Camera className="w-3.5 h-3.5 mr-1.5 text-[#BF4B24]" />
                 {receiptFile || receiptPreviewUrl
@@ -2647,7 +2753,7 @@ export function HostOperationsTab() {
                   variant="outline"
                   onClick={startVoiceRecording}
                   disabled={aiProcessing}
-                  className="h-9 rounded-lg border-stone-300 bg-white text-slate-800 text-xs font-semibold cursor-pointer"
+                  className="flex-1 h-9 rounded-lg border-stone-300 bg-white text-slate-800 text-xs font-semibold cursor-pointer"
                 >
                   <Mic className="w-3.5 h-3.5 mr-1.5 text-[#BF4B24]" />
                   Falar Comando
@@ -2657,7 +2763,7 @@ export function HostOperationsTab() {
                   type="button"
                   size="sm"
                   onClick={stopVoiceRecording}
-                  className="h-9 rounded-lg bg-red-600 text-white text-xs font-bold animate-pulse cursor-pointer"
+                  className="flex-1 h-9 rounded-lg bg-red-600 text-white text-xs font-bold animate-pulse cursor-pointer"
                 >
                   <Square className="w-3 h-3 mr-1.5 fill-white" />
                   Parar Áudio
@@ -2666,10 +2772,31 @@ export function HostOperationsTab() {
             </div>
 
             {aiProcessing && (
-              <span className="text-xs font-semibold text-[#BF4B24] flex items-center gap-1.5">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                Extraindo dados...
-              </span>
+              <div className="px-3 py-2 rounded-lg bg-orange-50 border border-orange-200 text-xs font-semibold text-[#BF4B24] flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                <span>Lendo nota fiscal e preenchendo os campos...</span>
+              </div>
+            )}
+
+            {!aiProcessing && aiStatusMessage && (
+              <div className="px-3 py-2 rounded-lg bg-white border border-stone-200 text-[11px] font-semibold text-slate-700 flex items-center justify-between gap-2">
+                <span className="truncate">{aiStatusMessage}</span>
+                {receiptFile && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      processReceiptAndVoiceWithAI(
+                        receiptFile,
+                        null,
+                        voiceTranscript,
+                      )
+                    }
+                    className="text-[#BF4B24] hover:underline shrink-0 inline-flex items-center gap-1"
+                  >
+                    <RefreshCw className="w-3 h-3" /> Reler
+                  </button>
+                )}
+              </div>
             )}
           </div>
 
@@ -2685,6 +2812,7 @@ export function HostOperationsTab() {
                 onClick={() => {
                   setReceiptFile(null);
                   setReceiptPreviewUrl(null);
+                  setAiStatusMessage(null);
                 }}
                 className="absolute top-2 right-2 p-1 rounded-full bg-slate-900/80 text-white hover:bg-slate-900"
               >
@@ -2693,7 +2821,7 @@ export function HostOperationsTab() {
             </div>
           )}
 
-          <div className="space-y-4 py-1">
+          <div className="space-y-3.5 py-1">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="sm:col-span-2">
                 <Label className="text-xs font-semibold text-slate-700">
@@ -2705,7 +2833,7 @@ export function HostOperationsTab() {
                     setExpenseForm({ ...expenseForm, title: e.target.value })
                   }
                   placeholder="Ex: Conta de Energia Cosern / Manutenção Ar"
-                  className="mt-1 h-10 text-xs rounded-xl"
+                  className="mt-1 h-10 text-xs rounded-xl w-full"
                 />
               </div>
 
@@ -2721,7 +2849,7 @@ export function HostOperationsTab() {
                     setExpenseForm({ ...expenseForm, amount: e.target.value })
                   }
                   placeholder="0.00"
-                  className="mt-1 h-10 font-bold text-sm rounded-xl"
+                  className="mt-1 h-10 font-bold text-sm rounded-xl w-full"
                 />
               </div>
 
@@ -2738,7 +2866,7 @@ export function HostOperationsTab() {
                       expense_date: e.target.value,
                     })
                   }
-                  className="mt-1 h-10 text-xs font-semibold rounded-xl"
+                  className="mt-1 h-10 text-xs font-semibold rounded-xl w-full"
                 />
               </div>
 
@@ -2803,7 +2931,7 @@ export function HostOperationsTab() {
                     setExpenseForm({ ...expenseForm, vendor: e.target.value })
                   }
                   placeholder="Ex: Cosern, Kalunga..."
-                  className="mt-1 h-10 text-xs rounded-xl"
+                  className="mt-1 h-10 text-xs rounded-xl w-full"
                 />
               </div>
 
@@ -2853,14 +2981,14 @@ export function HostOperationsTab() {
               {expenseForm.custom_fields.map((cf, index) => (
                 <div key={index} className="flex items-center gap-2">
                   <Input
-                    placeholder="Campo (ex: Nº Nota, Garantia)"
+                    placeholder="Campo (ex: Nº Nota)"
                     value={cf.key}
                     onChange={(e) => {
                       const next = [...expenseForm.custom_fields];
                       next[index].key = e.target.value;
                       setExpenseForm({ ...expenseForm, custom_fields: next });
                     }}
-                    className="h-9 text-xs flex-1"
+                    className="h-9 text-xs flex-1 min-w-0"
                   />
                   <Input
                     placeholder="Informação"
@@ -2870,7 +2998,7 @@ export function HostOperationsTab() {
                       next[index].value = e.target.value;
                       setExpenseForm({ ...expenseForm, custom_fields: next });
                     }}
-                    className="h-9 text-xs flex-1"
+                    className="h-9 text-xs flex-1 min-w-0"
                   />
                   <Button
                     type="button"
@@ -2884,7 +3012,7 @@ export function HostOperationsTab() {
                         ),
                       })
                     }
-                    className="h-9 w-9 text-slate-400 hover:text-red-600"
+                    className="h-9 w-9 text-slate-400 hover:text-red-600 shrink-0"
                   >
                     <X className="w-4 h-4" />
                   </Button>
@@ -2902,12 +3030,12 @@ export function HostOperationsTab() {
                   setExpenseForm({ ...expenseForm, notes: e.target.value })
                 }
                 placeholder="Ex: Pago via PIX CNPJ"
-                className="mt-1 h-10 text-xs rounded-xl"
+                className="mt-1 h-10 text-xs rounded-xl w-full"
               />
             </div>
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="gap-2 sm:gap-0">
             <Button
               variant="ghost"
               onClick={() => setIsExpenseModalOpen(false)}
@@ -2917,7 +3045,7 @@ export function HostOperationsTab() {
             </Button>
             <Button
               onClick={handleSaveExpense}
-              disabled={saving}
+              disabled={saving || aiProcessing}
               className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs rounded-xl px-5 cursor-pointer"
             >
               {saving ? "Salvando..." : "Salvar Despesa"}
@@ -2931,8 +3059,8 @@ export function HostOperationsTab() {
         open={isNewCategoryModalOpen}
         onOpenChange={setIsNewCategoryModalOpen}
       >
-        <DialogContent className="sm:max-w-sm bg-white rounded-2xl">
-          <DialogHeader>
+        <DialogContent className="w-[92vw] max-w-sm bg-white rounded-2xl p-5">
+          <DialogHeader className="text-left">
             <DialogTitle className="text-base font-bold text-slate-900">
               Criar Categoria de Despesa
             </DialogTitle>
@@ -2948,7 +3076,7 @@ export function HostOperationsTab() {
                 Nome da Categoria
               </Label>
               <Input
-                placeholder="Ex: Café & Recepção, Contabilidade, Marketing..."
+                placeholder="Ex: Café & Recepção, Contabilidade..."
                 value={newCategoryLabel}
                 onChange={(e) => setNewCategoryLabel(e.target.value)}
                 className="mt-1 h-10 text-xs rounded-xl"
@@ -2984,8 +3112,8 @@ export function HostOperationsTab() {
 
       {/* MODAIS DE ESTOQUE E MANUTENÇÃO MANTIDOS */}
       <Dialog open={isItemModalOpen} onOpenChange={setIsItemModalOpen}>
-        <DialogContent className="sm:max-w-lg bg-white rounded-2xl">
-          <DialogHeader>
+        <DialogContent className="w-[94vw] max-w-lg bg-white rounded-2xl p-4 sm:p-6">
+          <DialogHeader className="text-left">
             <DialogTitle className="text-lg font-bold text-slate-900">
               {editingItem
                 ? "Editar Item do Estoque"
@@ -3175,8 +3303,8 @@ export function HostOperationsTab() {
       </Dialog>
 
       <Dialog open={isRestockModalOpen} onOpenChange={setIsRestockModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white rounded-2xl">
-          <DialogHeader>
+        <DialogContent className="w-[92vw] max-w-md bg-white rounded-2xl p-4 sm:p-6">
+          <DialogHeader className="text-left">
             <DialogTitle className="text-lg font-bold text-slate-900">
               {restockMode === "in"
                 ? `Repor Estoque: ${restockTarget?.name}`
@@ -3269,8 +3397,8 @@ export function HostOperationsTab() {
       </Dialog>
 
       <Dialog open={isMaintModalOpen} onOpenChange={setIsMaintModalOpen}>
-        <DialogContent className="sm:max-w-lg bg-white rounded-2xl">
-          <DialogHeader>
+        <DialogContent className="w-[94vw] max-w-lg bg-white rounded-2xl p-4 sm:p-6">
+          <DialogHeader className="text-left">
             <DialogTitle className="text-lg font-bold text-slate-900">
               {editingMaint
                 ? "Editar Ordem de Manutenção"
