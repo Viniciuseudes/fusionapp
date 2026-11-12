@@ -27,6 +27,7 @@ import {
   X,
   FileCheck2,
   RefreshCw,
+  Sparkles,
 } from "lucide-react";
 import {
   ComposedChart,
@@ -44,14 +45,6 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { format, parseISO } from "date-fns";
 
@@ -182,8 +175,8 @@ function slugifyCategory(label: string): string {
 }
 
 /**
- * Comprime fotos de câmera de celular (que costumam ter 6MB a 12MB)
- * para ~180KB em JPEG nítido, evitando erro 413 na API e acelerando a leitura em 10x.
+ * Compressão ultra-rápida para 1024px (~60KB):
+ * Mantém total nitidez para números de cupom fiscal e envia em <0.2s no 4G.
  */
 async function compressImageForOCR(
   file: File,
@@ -203,7 +196,7 @@ async function compressImageForOCR(
 
       const img = new Image();
       img.onload = () => {
-        const MAX_DIM = 1600;
+        const MAX_DIM = 1024;
         let width = img.width;
         let height = img.height;
 
@@ -221,8 +214,10 @@ async function compressImageForOCR(
         const ctx = canvas.getContext("2d");
 
         if (!ctx) {
-          const fallbackBase64 = resultStr.split(",")[1] || "";
-          resolve({ base64: fallbackBase64, mimeType: file.type });
+          resolve({
+            base64: resultStr.split(",")[1] || "",
+            mimeType: file.type,
+          });
           return;
         }
 
@@ -230,14 +225,15 @@ async function compressImageForOCR(
         ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
 
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.84);
-        const cleanBase64 = dataUrl.split(",")[1] || "";
-        resolve({ base64: cleanBase64, mimeType: "image/jpeg" });
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.76);
+        resolve({
+          base64: dataUrl.split(",")[1] || "",
+          mimeType: "image/jpeg",
+        });
       };
       img.onerror = () => {
-        const fallbackBase64 = resultStr.split(",")[1] || "";
         resolve({
-          base64: fallbackBase64,
+          base64: resultStr.split(",")[1] || "",
           mimeType: file.type || "image/jpeg",
         });
       };
@@ -425,6 +421,7 @@ export function HostOperationsTab() {
   const [receiptPreviewUrl, setReceiptPreviewUrl] = useState<string | null>(
     null,
   );
+  const [isLightboxPreviewOpen, setIsLightboxPreviewOpen] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [voiceTranscript, setVoiceTranscript] = useState("");
 
@@ -647,7 +644,7 @@ export function HostOperationsTab() {
   };
 
   // ============================================================================
-  // INTELIGÊNCIA MULTIMODAL: FOTO DA NOTA COMPRIMIDA (OCR) + COMANDO DE VOZ
+  // LEITURA ULTRA-RÁPIDA DE NOTA (OCR) + COMANDO DE VOZ
   // ============================================================================
   const processReceiptAndVoiceWithAI = async (
     imgFile: File | null,
@@ -655,10 +652,9 @@ export function HostOperationsTab() {
     spokenText: string,
   ) => {
     setAiProcessing(true);
-    setAiStatusMessage("Analisando nota fiscal e extraindo valor...");
+    setAiStatusMessage("Lendo comprovante...");
 
     try {
-      // 1. Aplica interpretação local imediata se houver comando de voz
       if (spokenText.trim()) {
         const local = parseVoiceCommandLocally(
           spokenText,
@@ -685,7 +681,6 @@ export function HostOperationsTab() {
         }));
       }
 
-      // 2. Comprime a imagem no cliente (evita erro 413 de fotos pesadas da câmera do celular)
       let imageBase64 = "";
       let imageMimeType = "image/jpeg";
       if (imgFile) {
@@ -716,13 +711,11 @@ export function HostOperationsTab() {
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
-        const errMsg =
-          json?.error ||
-          `Erro HTTP ${res.status}: Verifique se o arquivo app/api/host/parse-expense/route.ts foi criado.`;
-        setAiStatusMessage(`Aviso: ${errMsg}`);
+        const errMsg = json?.error || `Falha na leitura (${res.status})`;
+        setAiStatusMessage(errMsg);
         toast({
           variant: "destructive",
-          title: "Não foi possível ler a nota automaticamente",
+          title: "Não foi possível ler automaticamente",
           description: errMsg,
         });
         return;
@@ -757,27 +750,13 @@ export function HostOperationsTab() {
         }));
 
         setAiStatusMessage(
-          `Dados extraídos: ${d.title || d.vendor || "Nota lida"}${
+          `Preenchido: ${d.title || d.vendor || "Nota lida"}${
             extractedAmount > 0 ? ` • R$ ${formatBRL(extractedAmount)}` : ""
           }`,
         );
-
-        toast({
-          title: "Nota fiscal lida com sucesso!",
-          description: `${d.title || "Despesa"}${
-            extractedAmount > 0 ? ` — R$ ${formatBRL(extractedAmount)}` : ""
-          }`,
-        });
       }
     } catch (e: any) {
-      setAiStatusMessage(
-        "Não foi possível conectar ao leitor automático. Preencha manualmente abaixo.",
-      );
-      toast({
-        variant: "destructive",
-        title: "Falha ao processar imagem",
-        description: e.message || "Tente novamente.",
-      });
+      setAiStatusMessage("Preencha os campos abaixo manualmente.");
     } finally {
       setAiProcessing(false);
     }
@@ -788,7 +767,6 @@ export function HostOperationsTab() {
     setReceiptFile(file);
     setReceiptPreviewUrl(URL.createObjectURL(file));
 
-    // Se o modal ainda estava fechado, abre preservando os campos para receber o OCR
     if (!isExpenseModalOpen) {
       setEditingExpense(null);
       setExpenseForm({
@@ -806,7 +784,6 @@ export function HostOperationsTab() {
       setIsExpenseModalOpen(true);
     }
 
-    // Limpa o value do input para permitir selecionar a mesma foto novamente se quiser
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -880,9 +857,8 @@ export function HostOperationsTab() {
     } catch {
       toast({
         variant: "destructive",
-        title: "Acesso ao microfone negado",
-        description:
-          "Permita o uso do microfone no navegador para lançar despesas por voz.",
+        title: "Microfone bloqueado",
+        description: "Permita o uso do microfone no navegador.",
       });
     }
   };
@@ -930,8 +906,7 @@ export function HostOperationsTab() {
     setIsNewCategoryModalOpen(false);
 
     toast({
-      title: `Categoria "${label}" adicionada`,
-      description: "Já selecionada para este lançamento.",
+      title: `Categoria "${label}" criada`,
     });
   };
 
@@ -1095,7 +1070,7 @@ export function HostOperationsTab() {
       toast({
         title: editingExpense
           ? "Despesa atualizada"
-          : "Despesa registrada na Central de Custos",
+          : "Despesa salva com sucesso",
       });
       setIsExpenseModalOpen(false);
       loadOperationsData();
@@ -1127,7 +1102,7 @@ export function HostOperationsTab() {
   };
 
   // ============================================================================
-  // AÇÕES DE ESTOQUE & INSUMOS (INTACTAS)
+  // AÇÕES DE ESTOQUE & INSUMOS
   // ============================================================================
   const openNewItemModal = () => {
     setEditingItem(null);
@@ -1335,7 +1310,7 @@ export function HostOperationsTab() {
   };
 
   // ============================================================================
-  // AÇÕES DE MANUTENÇÃO (INTACTAS)
+  // AÇÕES DE MANUTENÇÃO
   // ============================================================================
   const openNewMaintModal = () => {
     setEditingMaint(null);
@@ -1703,77 +1678,77 @@ export function HostOperationsTab() {
   }
 
   return (
-    <div className="p-4 lg:p-8 animate-in fade-in duration-300 max-w-7xl mx-auto w-full pb-32 font-sans">
+    <div className="p-3.5 sm:p-6 lg:p-8 animate-in fade-in duration-300 max-w-7xl mx-auto w-full pb-32 font-sans overflow-x-hidden">
       {/* HEADER E SELETOR DE COMPETÊNCIA MENSAL */}
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 mb-5">
         <div>
-          <span className="text-[11px] font-bold uppercase tracking-widest text-[#BF4B24]">
+          <span className="text-[10px] sm:text-[11px] font-bold uppercase tracking-widest text-[#BF4B24]">
             Gestão Operacional do Anfitrião
           </span>
-          <h1 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight mt-0.5">
-            Central de Custos, Rateio do Hub & Operações
+          <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-slate-900 tracking-tight mt-0.5">
+            Central de Custos & Rateio do Hub
           </h1>
-          <p className="text-sm text-slate-500 mt-1">
-            Fotografe notas fiscais, grave despesas por voz, distribua os custos
-            do Hub por sala e controle o estoque e manutenções.
+          <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
+            Leia notas por foto, grave despesas por voz e acompanhe o custo real
+            de cada sala.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs">
-            <CalendarIcon className="w-4 h-4 text-[#BF4B24] mr-2" />
-            <span className="text-xs font-bold text-slate-500 mr-2 uppercase">
-              Mês:
-            </span>
-            <input
-              type="month"
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
-              className="text-sm font-bold text-slate-900 outline-none bg-transparent"
-            />
-          </div>
+        <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-2 shadow-2xs self-start sm:self-auto">
+          <CalendarIcon className="w-4 h-4 text-[#BF4B24] mr-2 shrink-0" />
+          <span className="text-[11px] font-bold text-slate-500 mr-2 uppercase">
+            Mês:
+          </span>
+          <input
+            type="month"
+            value={selectedMonth}
+            onChange={(e) => setSelectedMonth(e.target.value)}
+            className="text-xs sm:text-sm font-bold text-slate-900 outline-none bg-transparent"
+          />
         </div>
       </div>
 
-      {/* BARRA DE CAPTURA INTELIGENTE (FOTO DA NOTA + COMANDO DE VOZ) */}
-      <div className="mb-6 bg-[#FAF7F4] border border-stone-200/90 rounded-2xl p-5 shadow-2xs">
+      {/* ==================================================================== */}
+      {/* DOCK DE CAPTURA RÁPIDA MOBILE-FIRST (FOTO DA NOTA + COMANDO DE VOZ)  */}
+      {/* ==================================================================== */}
+      <div className="mb-5 bg-[#FAF7F4] border border-stone-200/90 rounded-2xl p-4 sm:p-5 shadow-2xs">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="space-y-1 max-w-xl">
+          <div className="space-y-0.5">
+            <div className="inline-flex items-center gap-1.5 text-[11px] font-bold text-[#BF4B24]">
+              <Sparkles className="w-3.5 h-3.5" />
+              Captura Inteligente Instantânea
+            </div>
             <h2 className="text-sm sm:text-base font-bold text-slate-900">
-              Lançamento Instantâneo por Foto ou Comando de Voz
+              Tire foto do cupom fiscal ou grave por voz
             </h2>
-            <p className="text-xs text-slate-600 leading-relaxed">
-              Tire a foto de uma nota/recibo para preenchimento automático do
-              valor ou fale no microfone:{" "}
-              <strong className="text-slate-800">
-                “Salve isso como despesa de manutenção no valor de 180 reais”
-              </strong>
-              .
+            <p className="text-xs text-slate-600">
+              O sistema extrai o valor, data, fornecedor e categoria em menos de
+              2 segundos.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*,application/pdf"
-              capture="environment"
-              className="hidden"
-              onChange={(e) => handleSelectReceiptPhoto(e.target.files?.[0])}
-            />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*,application/pdf"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => handleSelectReceiptPhoto(e.target.files?.[0])}
+          />
 
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2.5">
             <Button
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={aiProcessing}
-              className="h-10 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs cursor-pointer"
+              className="h-11 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs cursor-pointer shadow-2xs"
             >
               {aiProcessing ? (
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               ) : (
-                <Camera className="w-4 h-4 mr-2 text-[#BF4B24]" />
+                <Camera className="w-4 h-4 mr-2 text-[#BF4B24] shrink-0" />
               )}
-              Fotografar / Ler Nota
+              <span className="truncate">Ler Nota (Foto)</span>
             </Button>
 
             {!isRecording ? (
@@ -1782,125 +1757,81 @@ export function HostOperationsTab() {
                 variant="outline"
                 onClick={startVoiceRecording}
                 disabled={aiProcessing}
-                className="h-10 px-4 rounded-xl border-stone-300 bg-white hover:bg-stone-50 text-slate-900 font-semibold text-xs cursor-pointer"
+                className="h-11 px-4 rounded-xl border-stone-300 bg-white hover:bg-stone-50 text-slate-900 font-semibold text-xs cursor-pointer shadow-2xs"
               >
-                <Mic className="w-4 h-4 mr-2 text-[#BF4B24]" />
-                Gravar Despesa por Voz
+                <Mic className="w-4 h-4 mr-2 text-[#BF4B24] shrink-0" />
+                <span className="truncate">Lançar por Voz</span>
               </Button>
             ) : (
               <Button
                 type="button"
                 onClick={stopVoiceRecording}
-                className="h-10 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs animate-pulse cursor-pointer"
+                className="h-11 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs animate-pulse cursor-pointer"
               >
-                <Square className="w-3.5 h-3.5 mr-2 fill-white" />
-                Parar Gravação
+                <Square className="w-3.5 h-3.5 mr-2 fill-white shrink-0" />
+                <span>Parar Áudio</span>
               </Button>
             )}
 
             <Button
               type="button"
-              variant="outline"
-              onClick={() => setIsNewCategoryModalOpen(true)}
-              className="h-10 px-3.5 rounded-xl border-stone-200 bg-white text-slate-700 font-semibold text-xs cursor-pointer"
+              onClick={openNewExpenseModal}
+              className="col-span-2 sm:col-span-1 h-10 sm:h-11 px-4 rounded-xl bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs cursor-pointer"
             >
-              + Criar Categoria
+              <Plus className="w-4 h-4 mr-1.5" />
+              Lançamento Manual
             </Button>
           </div>
         </div>
 
         {isRecording && (
-          <div className="mt-3.5 p-3 rounded-xl bg-white border border-red-200 flex items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-ping" />
-              <span className="font-bold text-slate-900">Ouvindo:</span>
-              <span className="text-slate-600 italic">
+          <div className="mt-3 p-3 rounded-xl bg-white border border-red-200 flex items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-ping shrink-0" />
+              <span className="text-slate-700 truncate italic">
                 {voiceTranscript ||
-                  "Diga a despesa, categoria, sala e valor..."}
+                  "Ex: Despesa de manutenção na Sala 1 de 180 reais..."}
               </span>
             </div>
-            <span className="text-[11px] font-semibold text-red-600">
-              Clique em Parar para concluir
+            <span className="text-[11px] font-bold text-red-600 shrink-0">
+              Ouvindo
             </span>
           </div>
         )}
       </div>
 
-      {/* BANNER DE ALERTA DE ESTOQUE CRÍTICO */}
-      {criticalItems.length > 0 && (
-        <div className="mb-6 p-4 rounded-2xl bg-red-50 border border-red-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-start gap-3">
-            <div className="w-9 h-9 rounded-xl bg-red-600 text-white flex items-center justify-center shrink-0 mt-0.5">
-              <AlertTriangle className="w-4 h-4" />
-            </div>
-            <div>
-              <h3 className="text-xs font-bold text-red-950 uppercase tracking-wide">
-                {criticalItems.length} item(ns) em Estoque Crítico de Reposição
-              </h3>
-              <p className="text-xs text-red-800 mt-0.5">
-                Itens:{" "}
-                <strong>
-                  {criticalItems
-                    .slice(0, 5)
-                    .map((i) => `${i.name} (${i.current_quantity} ${i.unit})`)
-                    .join(", ")}
-                </strong>
-                . Orçamento estimado de reposição:{" "}
-                <strong>R$ {formatBRL(estimatedRestockBudget)}</strong>
-              </p>
-            </div>
-          </div>
-          <Button
-            onClick={() => {
-              setActiveSubTab("inventory");
-              setOnlyCriticalStock(true);
-            }}
-            className="bg-red-600 hover:bg-red-700 text-white font-semibold text-xs h-9 px-4 rounded-xl shrink-0"
-          >
-            Ver Itens Críticos
-          </Button>
-        </div>
-      )}
-
-      {/* 4 KPIS OPERACIONAIS E DE RATEIO */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 tabular-nums">
-        <div className="bg-slate-900 text-white p-5 rounded-2xl">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-slate-400">
-              Custos Totais do Hub no Mês
+      {/* KPIS COMPACTOS (2x2 NO MOBILE, 4 COLUNAS NO DESKTOP) */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-5 tabular-nums">
+        <div className="bg-slate-900 text-white p-4 sm:p-5 rounded-2xl">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[11px] font-medium text-slate-400">
+              Custos no Mês
             </span>
-            <TrendingDown className="w-4 h-4 text-orange-400" />
+            <TrendingDown className="w-4 h-4 text-orange-400 shrink-0" />
           </div>
-          <p className="text-2xl font-bold text-white">
+          <p className="text-lg sm:text-2xl font-bold text-white truncate">
             R$ {formatBRL(totalMonthExpenses)}
           </p>
-          <div className="flex items-center gap-2 mt-1.5 text-[11px]">
-            <span className="text-emerald-400 font-semibold">
-              Pago: R$ {formatBRL(paidMonthExpenses)}
-            </span>
-            <span className="text-slate-600">•</span>
-            <span className="text-amber-300 font-semibold">
-              Pendente: R$ {formatBRL(pendingMonthExpenses)}
-            </span>
-          </div>
+          <p className="text-[10px] sm:text-[11px] text-emerald-400 font-medium mt-1 truncate">
+            Pago: R$ {formatBRL(paidMonthExpenses)}
+          </p>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/90">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-slate-500">
-              Rateio Médio por Sala ({rooms.length} salas)
+        <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/90">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[11px] font-semibold text-slate-500">
+              Rateio / Sala
             </span>
-            <Building2 className="w-4 h-4 text-slate-400" />
+            <Building2 className="w-4 h-4 text-slate-400 shrink-0" />
           </div>
-          <p className="text-2xl font-bold text-slate-900">
+          <p className="text-lg sm:text-2xl font-bold text-slate-900 truncate">
             R${" "}
             {formatBRL(
               rooms.length > 0 ? totalMonthExpenses / rooms.length : 0,
             )}
-            <span className="text-xs font-normal text-slate-400">/sala</span>
           </p>
-          <p className="text-xs text-slate-500 mt-1">
-            Resultado Líquido do Hub:{" "}
+          <p className="text-[10px] sm:text-[11px] text-slate-500 mt-1 truncate">
+            Líquido Hub:{" "}
             <strong
               className={
                 hubCostAnalytics.netHubProfit >= 0
@@ -1913,88 +1844,86 @@ export function HostOperationsTab() {
           </p>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/90">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-slate-500">
-              Estoque de Insumos
+        <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/90">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[11px] font-semibold text-slate-500">
+              Estoque Atual
             </span>
-            <Package className="w-4 h-4 text-emerald-600" />
+            <Package className="w-4 h-4 text-emerald-600 shrink-0" />
           </div>
-          <p className="text-2xl font-bold text-slate-900">
+          <p className="text-lg sm:text-2xl font-bold text-slate-900 truncate">
             R$ {formatBRL(totalStockValue)}
           </p>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-[10px] sm:text-[11px] text-slate-500 mt-1 truncate">
             {criticalItems.length > 0
-              ? `${criticalItems.length} item(ns) abaixo do mínimo`
-              : `${inventory.length} itens abastecidos`}
+              ? `${criticalItems.length} item(ns) crítico(s)`
+              : `${inventory.length} itens ok`}
           </p>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/90">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-slate-500">
-              Manutenções Abertas
+        <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/90">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[11px] font-semibold text-slate-500">
+              Manutenções
             </span>
-            <Wrench className="w-4 h-4 text-[#BF4B24]" />
+            <Wrench className="w-4 h-4 text-[#BF4B24] shrink-0" />
           </div>
-          <p className="text-2xl font-bold text-slate-900">
+          <p className="text-lg sm:text-2xl font-bold text-slate-900">
             {openMaintenances.length}
           </p>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-[10px] sm:text-[11px] text-slate-500 mt-1 truncate">
             {urgentMaintenances.length > 0
-              ? `${urgentMaintenances.length} de prioridade alta/urgente`
-              : "Nenhuma urgência pendente"}
+              ? `${urgentMaintenances.length} urgente(s)`
+              : "Em dia"}
           </p>
         </div>
       </div>
 
       {/* BARRA DE NAVEGAÇÃO INTERNA DAS 3 SUB-ABAS */}
-      <div className="bg-white border border-slate-200/90 rounded-2xl p-3 mb-6 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
-        <div className="flex bg-slate-100 p-1 rounded-xl overflow-x-auto">
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-2.5 sm:p-3 mb-5 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5">
+        <div className="grid grid-cols-3 sm:flex bg-slate-100 p-1 rounded-xl">
           <button
+            type="button"
             onClick={() => setActiveSubTab("expenses")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
               activeSubTab === "expenses"
                 ? "bg-white text-slate-900 shadow-2xs"
                 : "text-slate-600 hover:text-slate-900"
             }`}
           >
-            <Receipt className="w-4 h-4 text-[#BF4B24]" />
-            Despesas & Rateio do Hub ({expenses.length})
+            <Receipt className="w-3.5 h-3.5 text-[#BF4B24] shrink-0" />
+            <span className="truncate">Despesas ({expenses.length})</span>
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveSubTab("inventory")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
               activeSubTab === "inventory"
                 ? "bg-white text-slate-900 shadow-2xs"
                 : "text-slate-600 hover:text-slate-900"
             }`}
           >
-            <Package className="w-4 h-4 text-[#BF4B24]" />
-            Estoque & Insumos ({inventory.length})
-            {criticalItems.length > 0 && (
-              <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-red-600 text-white">
-                {criticalItems.length}
-              </span>
-            )}
+            <Package className="w-3.5 h-3.5 text-[#BF4B24] shrink-0" />
+            <span className="truncate">Estoque ({inventory.length})</span>
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveSubTab("maintenance")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+            className={`flex items-center justify-center gap-1.5 px-2.5 sm:px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
               activeSubTab === "maintenance"
                 ? "bg-white text-slate-900 shadow-2xs"
                 : "text-slate-600 hover:text-slate-900"
             }`}
           >
-            <Wrench className="w-4 h-4 text-[#BF4B24]" />
-            Manutenção das Salas ({maintenances.length})
+            <Wrench className="w-3.5 h-3.5 text-[#BF4B24] shrink-0" />
+            <span className="truncate">Manutenção ({maintenances.length})</span>
           </button>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative flex-1 sm:w-60">
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1 sm:w-56">
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <Input
               placeholder="Buscar registro..."
@@ -2007,38 +1936,30 @@ export function HostOperationsTab() {
           {activeSubTab === "inventory" && (
             <Button
               onClick={openNewItemModal}
-              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs h-9 rounded-xl cursor-pointer"
+              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs h-9 rounded-xl shrink-0 cursor-pointer"
             >
-              <Plus className="w-4 h-4 mr-1.5" /> Novo Insumo
+              <Plus className="w-3.5 h-3.5 mr-1" /> Insumo
             </Button>
           )}
 
           {activeSubTab === "maintenance" && (
             <Button
               onClick={openNewMaintModal}
-              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs h-9 rounded-xl cursor-pointer"
+              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs h-9 rounded-xl shrink-0 cursor-pointer"
             >
-              <Plus className="w-4 h-4 mr-1.5" /> Nova Manutenção
+              <Plus className="w-3.5 h-3.5 mr-1" /> Reparo
             </Button>
           )}
 
           {activeSubTab === "expenses" && (
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                onClick={handleExportExpensesCSV}
-                className="h-9 rounded-xl font-semibold text-xs border-slate-200 text-slate-700 cursor-pointer"
-              >
-                <FileSpreadsheet className="w-3.5 h-3.5 mr-1.5 text-emerald-600" />
-                CSV
-              </Button>
-              <Button
-                onClick={openNewExpenseModal}
-                className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs h-9 rounded-xl cursor-pointer"
-              >
-                <Plus className="w-4 h-4 mr-1.5" /> Lançar Despesa
-              </Button>
-            </div>
+            <Button
+              variant="outline"
+              onClick={handleExportExpensesCSV}
+              className="h-9 rounded-xl font-semibold text-xs border-slate-200 text-slate-700 shrink-0 cursor-pointer"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 mr-1 text-emerald-600" />
+              CSV
+            </Button>
           )}
         </div>
       </div>
@@ -2047,17 +1968,261 @@ export function HostOperationsTab() {
       {/* SUB-ABA 1: DESPESAS DO MÊS, GRÁFICOS E RATEIO DO HUB POR SALA        */}
       {/* ==================================================================== */}
       {activeSubTab === "expenses" && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            <div className="xl:col-span-2 bg-white p-6 rounded-2xl border border-slate-200/90 flex flex-col justify-between">
+        <div className="space-y-5">
+          {/* LISTA DE DESPESAS (PRIMEIRO NO MOBILE PARA ACESSO IMEDIATO) */}
+          <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden">
+            <div className="p-4 sm:px-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-slate-50/50">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-800">
+                  Lançamentos do Mês ({filteredExpenses.length})
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsNewCategoryModalOpen(true)}
+                  className="sm:hidden text-xs font-bold text-[#BF4B24]"
+                >
+                  + Nova Categoria
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 sm:flex items-center gap-2">
+                <select
+                  value={expenseRoomFilter}
+                  onChange={(e) => setExpenseRoomFilter(e.target.value)}
+                  className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 outline-none"
+                >
+                  <option value="all">Todas as Salas</option>
+                  <option value="hub_shared">Rateio do Hub</option>
+                  {rooms.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={expenseCategoryFilter}
+                  onChange={(e) => setExpenseCategoryFilter(e.target.value)}
+                  className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 outline-none"
+                >
+                  <option value="all">Categorias</option>
+                  {Object.entries(expenseCategoriesMap).map(([k, v]) => (
+                    <option key={k} value={k}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {filteredExpenses.length === 0 ? (
+              <div className="py-12 text-center px-4">
+                <Receipt className="w-9 h-9 text-slate-200 mx-auto mb-2" />
+                <p className="font-bold text-slate-700 text-xs sm:text-sm">
+                  Nenhuma despesa registrada em {selectedMonth}.
+                </p>
+                <p className="text-xs text-slate-400 mt-1">
+                  Toque em “Ler Nota (Foto)” acima para registrar seu primeiro
+                  comprovante.
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* VISÃO MOBILE: CARDS COMPACTOS SEM ROLAGEM HORIZONTAL */}
+                <div className="md:hidden divide-y divide-slate-100">
+                  {filteredExpenses.map((exp) => (
+                    <div key={exp.id} className="p-4 space-y-2.5 tabular-nums">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="font-bold text-slate-900 text-sm truncate">
+                            {exp.title}
+                          </p>
+                          <p className="text-[11px] text-slate-500 truncate">
+                            {format(parseISO(exp.expense_date), "dd/MM/yyyy")} •{" "}
+                            {exp.room_name}
+                          </p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className="text-sm font-black text-slate-900 block">
+                            R$ {formatBRL(exp.amount)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleExpensePaid(exp)}
+                            className={`text-[10px] font-bold ${
+                              exp.payment_status === "paid"
+                                ? "text-emerald-700"
+                                : "text-amber-700"
+                            }`}
+                          >
+                            {exp.payment_status === "paid"
+                              ? "✓ Pago"
+                              : "⏳ Pendente"}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2 pt-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge className="bg-slate-100 text-slate-700 border-0 font-semibold text-[10px]">
+                            {expenseCategoriesMap[exp.category] || exp.category}
+                          </Badge>
+                          {exp.receipt_url && (
+                            <a
+                              href={exp.receipt_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-semibold text-[10px]"
+                            >
+                              <FileCheck2 className="w-3 h-3" /> Nota
+                            </a>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => openEditExpenseModal(exp)}
+                            className="h-7 w-7 text-slate-500"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDeleteExpense(exp)}
+                            className="h-7 w-7 text-slate-400 hover:text-red-600"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* VISÃO DESKTOP: TABELA COMPLETA */}
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-left text-xs whitespace-nowrap tabular-nums">
+                    <thead className="bg-slate-50 text-slate-500 font-semibold text-[11px] border-b border-slate-200">
+                      <tr>
+                        <th className="px-6 py-3.5">Data</th>
+                        <th className="px-6 py-3.5">Descrição & Detalhes</th>
+                        <th className="px-6 py-3.5">Categoria</th>
+                        <th className="px-6 py-3.5">Alocação / Sala</th>
+                        <th className="px-6 py-3.5 text-center">
+                          Nota / Anexo
+                        </th>
+                        <th className="px-6 py-3.5 text-center">Status</th>
+                        <th className="px-6 py-3.5 text-right">Valor (R$)</th>
+                        <th className="px-6 py-3.5 text-center">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredExpenses.map((exp) => (
+                        <tr key={exp.id} className="hover:bg-slate-50">
+                          <td className="px-6 py-4 font-semibold text-slate-600">
+                            {format(parseISO(exp.expense_date), "dd/MM/yyyy")}
+                          </td>
+                          <td className="px-6 py-4">
+                            <p className="font-bold text-slate-900">
+                              {exp.title}
+                            </p>
+                            {(exp.vendor || exp.notes) && (
+                              <p className="text-[11px] text-slate-400 mt-0.5">
+                                {[exp.vendor, exp.notes]
+                                  .filter(Boolean)
+                                  .join(" • ")}
+                              </p>
+                            )}
+                          </td>
+                          <td className="px-6 py-4">
+                            <Badge className="bg-slate-100 text-slate-700 border-0 font-semibold text-[11px]">
+                              {expenseCategoriesMap[exp.category] ||
+                                exp.category}
+                            </Badge>
+                          </td>
+                          <td className="px-6 py-4 font-semibold text-slate-600">
+                            {exp.room_name}
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            {exp.receipt_url ? (
+                              <a
+                                href={exp.receipt_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 font-semibold text-[11px] hover:bg-emerald-100"
+                              >
+                                <FileCheck2 className="w-3.5 h-3.5" />
+                                Ver Nota
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            ) : (
+                              <span className="text-slate-300 text-[11px]">
+                                —
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleExpensePaid(exp)}
+                            >
+                              {exp.payment_status === "paid" ? (
+                                <Badge className="bg-emerald-50 text-emerald-700 border-0 font-semibold cursor-pointer">
+                                  <CheckCircle2 className="w-3 h-3 mr-1" /> Pago
+                                </Badge>
+                              ) : (
+                                <Badge className="bg-amber-50 text-amber-800 border-0 font-semibold cursor-pointer">
+                                  <Clock className="w-3 h-3 mr-1" /> Pendente
+                                </Badge>
+                              )}
+                            </button>
+                          </td>
+                          <td className="px-6 py-4 text-right font-bold text-slate-900">
+                            R$ {formatBRL(exp.amount)}
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => openEditExpenseModal(exp)}
+                                className="h-8 w-8 text-slate-500 hover:text-slate-900"
+                              >
+                                <Edit3 className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleDeleteExpense(exp)}
+                                className="h-8 w-8 text-slate-400 hover:text-red-600"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* GRÁFICOS VISUAIS E RATEIO DO HUB POR SALA */}
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+            <div className="xl:col-span-2 bg-white p-4 sm:p-6 rounded-2xl border border-slate-200/90 flex flex-col justify-between">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
                 <div>
-                  <h2 className="text-base font-bold text-slate-900">
-                    Distribuição de Custos do Hub por Sala (Rateio Mensal)
+                  <h2 className="text-sm sm:text-base font-bold text-slate-900">
+                    Rateio de Custos do Hub por Sala
                   </h2>
                   <p className="text-xs text-slate-500">
-                    Compare o repasse líquido de cada sala com seus custos
-                    diretos mais a fração dos custos gerais do Hub.
+                    Repasse líquido de cada sala vs. custo direto + rateio do
+                    Hub.
                   </p>
                 </div>
 
@@ -2065,35 +2230,35 @@ export function HostOperationsTab() {
                   <button
                     type="button"
                     onClick={() => setAllocationMethod("equal")}
-                    className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                    className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
                       allocationMethod === "equal"
                         ? "bg-white text-slate-900 shadow-2xs"
                         : "text-slate-600"
                     }`}
                   >
-                    Rateio Igualitário
+                    Igualitário
                   </button>
                   <button
                     type="button"
                     onClick={() => setAllocationMethod("revenue_share")}
-                    className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                    className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
                       allocationMethod === "revenue_share"
                         ? "bg-white text-slate-900 shadow-2xs"
                         : "text-slate-600"
                     }`}
                   >
-                    Proporcional à Receita
+                    Por Receita
                   </button>
                 </div>
               </div>
 
               {rooms.length > 0 ? (
                 <>
-                  <div className="h-[220px] w-full">
+                  <div className="h-[200px] sm:h-[220px] w-full">
                     <ResponsiveContainer width="100%" height="100%">
                       <ComposedChart
                         data={hubCostAnalytics.roomDistribution}
-                        margin={{ top: 10, right: 10, left: -15, bottom: 0 }}
+                        margin={{ top: 10, right: 10, left: -18, bottom: 0 }}
                       >
                         <CartesianGrid
                           strokeDasharray="3 3"
@@ -2105,7 +2270,7 @@ export function HostOperationsTab() {
                           axisLine={false}
                           tickLine={false}
                           tick={{
-                            fontSize: 11,
+                            fontSize: 10,
                             fill: "#64748B",
                             fontWeight: 600,
                           }}
@@ -2113,14 +2278,14 @@ export function HostOperationsTab() {
                         <YAxis
                           axisLine={false}
                           tickLine={false}
-                          tick={{ fontSize: 11, fill: "#64748B" }}
+                          tick={{ fontSize: 10, fill: "#64748B" }}
                           tickFormatter={(v) => `R$${v}`}
                         />
                         <RechartsTooltip
                           formatter={(value: any, name: any) => [
                             `R$ ${formatBRL(Number(value || 0))}`,
                             name === "hostNetRevenue"
-                              ? "Repasse Líquido da Sala"
+                              ? "Repasse da Sala"
                               : "Custo Total (Direto + Rateio)",
                           ]}
                         />
@@ -2129,47 +2294,47 @@ export function HostOperationsTab() {
                           name="hostNetRevenue"
                           fill="#0F172A"
                           radius={[6, 6, 0, 0]}
-                          maxBarSize={34}
+                          maxBarSize={32}
                         />
                         <Bar
                           dataKey="totalRoomCost"
                           name="totalRoomCost"
                           fill="#BF4B24"
                           radius={[6, 6, 0, 0]}
-                          maxBarSize={34}
+                          maxBarSize={32}
                         />
                       </ComposedChart>
                     </ResponsiveContainer>
                   </div>
 
-                  <div className="mt-4 pt-4 border-t border-slate-100 overflow-x-auto">
+                  <div className="mt-4 pt-3 border-t border-slate-100 overflow-x-auto">
                     <table className="w-full text-left text-xs whitespace-nowrap tabular-nums">
-                      <thead className="text-slate-400 font-semibold text-[11px]">
+                      <thead className="text-slate-400 font-semibold text-[10px] uppercase">
                         <tr>
-                          <th className="pb-2">Sala</th>
-                          <th className="pb-2 text-right">Repasse no Mês</th>
-                          <th className="pb-2 text-right">Custo Direto</th>
-                          <th className="pb-2 text-right">Rateio do Hub</th>
-                          <th className="pb-2 text-right">Lucro Real</th>
+                          <th className="pb-2 pr-2">Sala</th>
+                          <th className="pb-2 px-2 text-right">Repasse</th>
+                          <th className="pb-2 px-2 text-right">Direto</th>
+                          <th className="pb-2 px-2 text-right">Rateio Hub</th>
+                          <th className="pb-2 pl-2 text-right">Resultado</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {hubCostAnalytics.roomDistribution.map((rm) => (
                           <tr key={rm.roomId}>
-                            <td className="py-2 font-bold text-slate-900">
+                            <td className="py-2 pr-2 font-bold text-slate-900">
                               {rm.roomName}
                             </td>
-                            <td className="py-2 text-right text-slate-700">
+                            <td className="py-2 px-2 text-right text-slate-700">
                               R$ {formatBRL(rm.hostNetRevenue)}
                             </td>
-                            <td className="py-2 text-right text-slate-600">
-                              - R$ {formatBRL(rm.directCost)}
+                            <td className="py-2 px-2 text-right text-slate-600">
+                              -R$ {formatBRL(rm.directCost)}
                             </td>
-                            <td className="py-2 text-right text-slate-500">
-                              - R$ {formatBRL(rm.allocatedSharedCost)}
+                            <td className="py-2 px-2 text-right text-slate-500">
+                              -R$ {formatBRL(rm.allocatedSharedCost)}
                             </td>
                             <td
-                              className={`py-2 text-right font-bold ${
+                              className={`py-2 pl-2 text-right font-bold ${
                                 rm.netProfit >= 0
                                   ? "text-emerald-700"
                                   : "text-red-600"
@@ -2184,20 +2349,20 @@ export function HostOperationsTab() {
                   </div>
                 </>
               ) : (
-                <p className="text-xs text-slate-400 py-12 text-center">
+                <p className="text-xs text-slate-400 py-10 text-center">
                   Nenhuma sala vinculada para cálculo de rateio.
                 </p>
               )}
             </div>
 
-            <div className="bg-white p-6 rounded-2xl border border-slate-200/90 flex flex-col justify-between">
+            <div className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200/90 flex flex-col justify-between">
               <div className="flex items-center justify-between mb-2">
                 <div>
-                  <h2 className="text-base font-bold text-slate-900">
+                  <h2 className="text-sm sm:text-base font-bold text-slate-900">
                     Despesas por Categoria
                   </h2>
                   <p className="text-xs text-slate-500">
-                    Composição dos custos em {selectedMonth}
+                    Divisão em {selectedMonth}
                   </p>
                 </div>
                 <button
@@ -2211,12 +2376,12 @@ export function HostOperationsTab() {
 
               <div className="flex-1 flex items-center justify-center my-2">
                 {hubCostAnalytics.categoryChartData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={185}>
+                  <ResponsiveContainer width="100%" height={180}>
                     <PieChart>
                       <Pie
                         data={hubCostAnalytics.categoryChartData}
-                        innerRadius={50}
-                        outerRadius={74}
+                        innerRadius={48}
+                        outerRadius={72}
                         paddingAngle={3}
                         dataKey="amount"
                       >
@@ -2233,19 +2398,19 @@ export function HostOperationsTab() {
                     </PieChart>
                   </ResponsiveContainer>
                 ) : (
-                  <p className="text-xs text-slate-400 py-12">
+                  <p className="text-xs text-slate-400 py-10">
                     Sem despesas neste mês.
                   </p>
                 )}
               </div>
 
-              <div className="space-y-2 max-h-[165px] overflow-y-auto pr-1 tabular-nums">
+              <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1 tabular-nums">
                 {hubCostAnalytics.categoryChartData.map((cat) => (
                   <div
                     key={cat.name}
                     className="flex items-center justify-between text-xs"
                   >
-                    <div className="flex items-center gap-2 truncate">
+                    <div className="flex items-center gap-2 truncate pr-2">
                       <span
                         className="w-2.5 h-2.5 rounded-full shrink-0"
                         style={{ backgroundColor: cat.color }}
@@ -2254,180 +2419,13 @@ export function HostOperationsTab() {
                         {cat.name}
                       </span>
                     </div>
-                    <span className="font-bold text-slate-900">
+                    <span className="font-bold text-slate-900 shrink-0">
                       R$ {formatBRL(cat.amount)} ({cat.pct}%)
                     </span>
                   </div>
                 ))}
               </div>
             </div>
-          </div>
-
-          <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden">
-            <div className="p-4 sm:px-6 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-slate-50/50">
-              <span className="text-xs font-bold text-slate-700">
-                Relatório de Despesas e Comprovantes ({filteredExpenses.length})
-              </span>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <select
-                  value={expenseRoomFilter}
-                  onChange={(e) => setExpenseRoomFilter(e.target.value)}
-                  className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 outline-none"
-                >
-                  <option value="all">Todas as Alocações</option>
-                  <option value="hub_shared">Rateio Geral do Hub</option>
-                  {rooms.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      Apenas {r.name}
-                    </option>
-                  ))}
-                </select>
-
-                <select
-                  value={expenseCategoryFilter}
-                  onChange={(e) => setExpenseCategoryFilter(e.target.value)}
-                  className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 outline-none"
-                >
-                  <option value="all">Todas as Categorias</option>
-                  {Object.entries(expenseCategoriesMap).map(([k, v]) => (
-                    <option key={k} value={k}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {filteredExpenses.length === 0 ? (
-              <div className="py-16 text-center px-4">
-                <Receipt className="w-10 h-10 text-slate-200 mx-auto mb-3" />
-                <p className="font-bold text-slate-700 text-sm">
-                  Nenhuma despesa registrada na competência {selectedMonth}.
-                </p>
-                <p className="text-xs text-slate-400 mt-1">
-                  Fotografe uma nota fiscal ou grave um comando de voz acima
-                  para lançar rapidamente.
-                </p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs whitespace-nowrap tabular-nums">
-                  <thead className="bg-slate-50 text-slate-500 font-semibold text-[11px] border-b border-slate-200">
-                    <tr>
-                      <th className="px-6 py-3.5">Data</th>
-                      <th className="px-6 py-3.5">Descrição & Detalhes</th>
-                      <th className="px-6 py-3.5">Categoria</th>
-                      <th className="px-6 py-3.5">Alocação / Sala</th>
-                      <th className="px-6 py-3.5 text-center">Nota / Anexo</th>
-                      <th className="px-6 py-3.5 text-center">Status</th>
-                      <th className="px-6 py-3.5 text-right">Valor (R$)</th>
-                      <th className="px-6 py-3.5 text-center">Ações</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredExpenses.map((exp) => (
-                      <tr key={exp.id} className="hover:bg-slate-50">
-                        <td className="px-6 py-4 font-semibold text-slate-600">
-                          {format(parseISO(exp.expense_date), "dd/MM/yyyy")}
-                        </td>
-                        <td className="px-6 py-4">
-                          <p className="font-bold text-slate-900">
-                            {exp.title}
-                          </p>
-                          {(exp.vendor || exp.notes) && (
-                            <p className="text-[11px] text-slate-400 mt-0.5">
-                              {[exp.vendor, exp.notes]
-                                .filter(Boolean)
-                                .join(" • ")}
-                            </p>
-                          )}
-                          {Array.isArray(exp.custom_fields) &&
-                            exp.custom_fields.length > 0 && (
-                              <div className="flex flex-wrap gap-1 mt-1">
-                                {exp.custom_fields.map((cf, idx) => (
-                                  <span
-                                    key={idx}
-                                    className="text-[10px] bg-stone-100 text-stone-700 px-1.5 py-0.5 rounded"
-                                  >
-                                    {cf.key}: <strong>{cf.value}</strong>
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                        </td>
-                        <td className="px-6 py-4">
-                          <Badge className="bg-slate-100 text-slate-700 border-0 font-semibold text-[11px]">
-                            {expenseCategoriesMap[exp.category] || exp.category}
-                          </Badge>
-                        </td>
-                        <td className="px-6 py-4 font-semibold text-slate-600">
-                          {exp.room_name}
-                        </td>
-                        <td className="px-6 py-4 text-center">
-                          {exp.receipt_url ? (
-                            <a
-                              href={exp.receipt_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 font-semibold text-[11px] hover:bg-emerald-100"
-                            >
-                              <FileCheck2 className="w-3.5 h-3.5" />
-                              Ver Nota
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
-                          ) : (
-                            <span className="text-slate-300 text-[11px]">
-                              —
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-6 py-4 text-center">
-                          <button
-                            type="button"
-                            onClick={() => handleToggleExpensePaid(exp)}
-                            title="Alternar entre Pago e Pendente"
-                          >
-                            {exp.payment_status === "paid" ? (
-                              <Badge className="bg-emerald-50 text-emerald-700 border-0 font-semibold cursor-pointer">
-                                <CheckCircle2 className="w-3 h-3 mr-1" /> Pago
-                              </Badge>
-                            ) : (
-                              <Badge className="bg-amber-50 text-amber-800 border-0 font-semibold cursor-pointer">
-                                <Clock className="w-3 h-3 mr-1" /> Pendente
-                              </Badge>
-                            )}
-                          </button>
-                        </td>
-                        <td className="px-6 py-4 text-right font-bold text-slate-900">
-                          R$ {formatBRL(exp.amount)}
-                        </td>
-                        <td className="px-6 py-4 text-center">
-                          <div className="flex items-center justify-center gap-1">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => openEditExpenseModal(exp)}
-                              className="h-8 w-8 text-slate-500 hover:text-slate-900"
-                            >
-                              <Edit3 className="w-4 h-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleDeleteExpense(exp)}
-                              className="h-8 w-8 text-slate-400 hover:text-red-600"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
           </div>
         </div>
       )}
@@ -2436,12 +2434,10 @@ export function HostOperationsTab() {
       {/* SUB-ABA 2: ESTOQUE & REPOSIÇÃO CRÍTICA                               */}
       {/* ==================================================================== */}
       {activeSubTab === "inventory" && (
-        <div className="bg-white border border-slate-200 rounded-2xl shadow-2xs overflow-hidden">
-          <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+          <div className="p-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2 bg-slate-50/50">
             <p className="text-xs font-semibold text-slate-500">
-              Use os botões <strong>Repor (+)</strong> e{" "}
-              <strong>Baixa (-)</strong> para atualizar rapidamente o estoque
-              diário da clínica.
+              Atualize rapidamente o estoque diário da clínica.
             </p>
             <label className="flex items-center gap-2 text-xs font-bold text-red-700 cursor-pointer">
               <input
@@ -2450,155 +2446,91 @@ export function HostOperationsTab() {
                 onChange={(e) => setOnlyCriticalStock(e.target.checked)}
                 className="rounded accent-red-600"
               />
-              Mostrar apenas estoque crítico ({criticalItems.length})
+              Apenas estoque crítico ({criticalItems.length})
             </label>
           </div>
 
           {filteredInventory.length === 0 ? (
-            <div className="py-16 text-center px-4">
-              <Package className="w-12 h-12 text-slate-200 mx-auto mb-3" />
-              <p className="font-bold text-slate-600">
+            <div className="py-14 text-center px-4">
+              <Package className="w-10 h-10 text-slate-200 mx-auto mb-2" />
+              <p className="font-bold text-slate-600 text-sm">
                 Nenhum item de estoque encontrado.
               </p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs whitespace-nowrap tabular-nums">
-                <thead className="bg-slate-50 text-slate-500 font-semibold text-[11px] border-b border-slate-200">
-                  <tr>
-                    <th className="px-6 py-4">Insumo / Material</th>
-                    <th className="px-6 py-4">Sala / Local</th>
-                    <th className="px-6 py-4 text-center">
-                      Quantidade Atual vs Mínimo
-                    </th>
-                    <th className="px-6 py-4 text-center">Status</th>
-                    <th className="px-6 py-4 text-right">Custo Unit.</th>
-                    <th className="px-6 py-4 text-center">
-                      Movimentação Rápida
-                    </th>
-                    <th className="px-6 py-4 text-center">Ações</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredInventory.map((item) => {
-                    const isCritical =
-                      item.current_quantity <= item.min_quantity;
-                    const isZero = item.current_quantity <= 0;
+            <div className="divide-y divide-slate-100">
+              {filteredInventory.map((item) => {
+                const isCritical = item.current_quantity <= item.min_quantity;
+                return (
+                  <div
+                    key={item.id}
+                    className={`p-4 sm:px-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                      isCritical ? "bg-red-50/40" : "hover:bg-slate-50"
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="font-bold text-slate-900 text-sm truncate">
+                          {item.name}
+                        </p>
+                        {isCritical && (
+                          <Badge className="bg-red-100 text-red-800 border-0 text-[10px] font-bold">
+                            Crítico
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {item.room_name} • Mínimo: {item.min_quantity}{" "}
+                        {item.unit} • Unit: R$ {formatBRL(item.unit_cost)}
+                      </p>
+                    </div>
 
-                    return (
-                      <tr
-                        key={item.id}
-                        className={`transition-colors ${
-                          isCritical
-                            ? "bg-red-50/40 hover:bg-red-50/70"
-                            : "hover:bg-slate-50"
+                    <div className="flex items-center justify-between sm:justify-end gap-3 tabular-nums">
+                      <span
+                        className={`text-sm font-black ${
+                          isCritical ? "text-red-600" : "text-slate-900"
                         }`}
                       >
-                        <td className="px-6 py-4">
-                          <p className="font-bold text-slate-900">
-                            {item.name}
-                          </p>
-                          <p className="text-[11px] text-slate-400">
-                            {INVENTORY_CATEGORIES[item.category] ||
-                              item.category}
-                            {item.supplier ? ` • Forn: ${item.supplier}` : ""}
-                          </p>
-                        </td>
+                        {item.current_quantity} {item.unit}
+                      </span>
 
-                        <td className="px-6 py-4">
-                          <span className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">
-                            <Building2 className="w-3.5 h-3.5 text-slate-400" />
-                            {item.room_name}
-                          </span>
-                        </td>
-
-                        <td className="px-6 py-4 text-center">
-                          <span
-                            className={`text-sm font-bold ${
-                              isCritical ? "text-red-600" : "text-slate-900"
-                            }`}
-                          >
-                            {item.current_quantity} {item.unit}
-                          </span>
-                          <span className="text-[11px] text-slate-400 block">
-                            Mínimo: {item.min_quantity} {item.unit}
-                          </span>
-                        </td>
-
-                        <td className="px-6 py-4 text-center">
-                          {isZero ? (
-                            <Badge className="bg-red-600 text-white border-0 font-bold">
-                              Esgotado
-                            </Badge>
-                          ) : isCritical ? (
-                            <Badge className="bg-red-100 text-red-800 border-0 font-bold">
-                              <AlertTriangle className="w-3 h-3 mr-1" />
-                              Reposição Crítica
-                            </Badge>
-                          ) : (
-                            <Badge className="bg-emerald-50 text-emerald-700 border-0 font-semibold">
-                              Normal
-                            </Badge>
-                          )}
-                        </td>
-
-                        <td className="px-6 py-4 text-right">
-                          <p className="font-bold text-slate-800">
-                            R$ {formatBRL(item.unit_cost)}
-                          </p>
-                          <p className="text-[10px] text-slate-400">
-                            Total: R${" "}
-                            {formatBRL(item.current_quantity * item.unit_cost)}
-                          </p>
-                        </td>
-
-                        <td className="px-6 py-4 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() =>
-                                openStockMovementModal(item, "out")
-                              }
-                              className="h-8 px-2.5 border-slate-200 text-slate-700 font-semibold text-xs"
-                            >
-                              <Minus className="w-3.5 h-3.5 mr-1" /> Baixa
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={() => openStockMovementModal(item, "in")}
-                              className="h-8 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs"
-                            >
-                              <Plus className="w-3.5 h-3.5 mr-1" /> Repor
-                            </Button>
-                          </div>
-                        </td>
-
-                        <td className="px-6 py-4 text-center">
-                          <div className="flex items-center justify-center gap-1">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => openEditItemModal(item)}
-                              className="h-8 w-8 text-slate-500 hover:text-slate-900"
-                            >
-                              <Edit3 className="w-4 h-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleDeleteInventoryItem(item)}
-                              className="h-8 w-8 text-slate-400 hover:text-red-600"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => openStockMovementModal(item, "out")}
+                          className="h-8 px-2.5 border-slate-200 text-slate-700 font-semibold text-xs"
+                        >
+                          <Minus className="w-3.5 h-3.5 mr-1" /> Baixa
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => openStockMovementModal(item, "in")}
+                          className="h-8 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs"
+                        >
+                          <Plus className="w-3.5 h-3.5 mr-1" /> Repor
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => openEditItemModal(item)}
+                          className="h-8 w-8 text-slate-500"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleDeleteInventoryItem(item)}
+                          className="h-8 w-8 text-slate-400 hover:text-red-600"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -2608,11 +2540,11 @@ export function HostOperationsTab() {
       {/* SUB-ABA 3: MANUTENÇÃO & INFRAESTRUTURA DAS SALAS                     */}
       {/* ==================================================================== */}
       {activeSubTab === "maintenance" && (
-        <div className="space-y-4">
+        <div className="space-y-3">
           {filteredMaintenances.length === 0 ? (
-            <div className="bg-white border border-slate-200 rounded-2xl py-16 text-center px-4">
-              <Wrench className="w-12 h-12 text-slate-200 mx-auto mb-3" />
-              <p className="font-bold text-slate-600">
+            <div className="bg-white border border-slate-200 rounded-2xl py-14 text-center px-4">
+              <Wrench className="w-10 h-10 text-slate-200 mx-auto mb-2" />
+              <p className="font-bold text-slate-600 text-sm">
                 Nenhuma ordem de manutenção registrada.
               </p>
             </div>
@@ -2620,9 +2552,9 @@ export function HostOperationsTab() {
             filteredMaintenances.map((m) => (
               <div
                 key={m.id}
-                className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col md:flex-row md:items-center justify-between gap-4"
+                className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-3"
               >
-                <div className="space-y-1.5">
+                <div className="space-y-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="text-sm font-bold text-slate-900">
                       {m.title}
@@ -2630,14 +2562,9 @@ export function HostOperationsTab() {
                     <Badge className="bg-slate-100 text-slate-700 border-0 text-[10px] font-semibold">
                       {m.room_name}
                     </Badge>
-                    {m.priority === "urgent" && (
-                      <Badge className="bg-red-600 text-white border-0 text-[10px] font-bold">
-                        Urgente
-                      </Badge>
-                    )}
                     {m.status === "completed" ? (
                       <Badge className="bg-emerald-50 text-emerald-700 border-0 text-[10px] font-semibold">
-                        <CheckCircle2 className="w-3 h-3 mr-1" /> Concluída
+                        Concluída
                       </Badge>
                     ) : (
                       <Badge className="bg-amber-50 text-amber-800 border-0 text-[10px] font-semibold">
@@ -2645,46 +2572,21 @@ export function HostOperationsTab() {
                       </Badge>
                     )}
                   </div>
-
                   {m.description && (
                     <p className="text-xs text-slate-600">{m.description}</p>
                   )}
-
-                  <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400 pt-1">
-                    <span>
-                      Categoria:{" "}
-                      {MAINTENANCE_CATEGORIES[m.category] || m.category}
-                    </span>
-                    {m.provider_name && (
-                      <span>
-                        Prestador: {m.provider_name}{" "}
-                        {m.provider_phone ? `(${m.provider_phone})` : ""}
-                      </span>
-                    )}
-                    {m.scheduled_date && (
-                      <span>
-                        Data: {format(parseISO(m.scheduled_date), "dd/MM/yyyy")}
-                      </span>
-                    )}
-                  </div>
                 </div>
 
-                <div className="flex items-center justify-between md:justify-end gap-4 border-t md:border-t-0 pt-3 md:pt-0 border-slate-100 tabular-nums">
-                  <div className="text-left md:text-right">
-                    <span className="text-[10px] text-slate-400 uppercase block">
-                      Custo
-                    </span>
-                    <span className="text-base font-bold text-slate-900">
-                      R$ {formatBRL(m.cost)}
-                    </span>
-                  </div>
-
+                <div className="flex items-center justify-between md:justify-end gap-3 border-t md:border-t-0 pt-2.5 md:pt-0 border-slate-100 tabular-nums">
+                  <span className="text-sm font-bold text-slate-900">
+                    R$ {formatBRL(m.cost)}
+                  </span>
                   <div className="flex items-center gap-1.5">
                     {m.status !== "completed" && (
                       <Button
                         size="sm"
                         onClick={() => handleMarkMaintCompleted(m)}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs h-9 rounded-xl"
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs h-8 rounded-xl"
                       >
                         <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Concluir
                       </Button>
@@ -2693,17 +2595,17 @@ export function HostOperationsTab() {
                       variant="outline"
                       size="icon"
                       onClick={() => openEditMaintModal(m)}
-                      className="h-9 w-9 rounded-xl border-slate-200"
+                      className="h-8 w-8 rounded-xl border-slate-200"
                     >
-                      <Edit3 className="w-4 h-4 text-slate-600" />
+                      <Edit3 className="w-3.5 h-3.5 text-slate-600" />
                     </Button>
                     <Button
                       variant="ghost"
                       size="icon"
                       onClick={() => handleDeleteMaint(m)}
-                      className="h-9 w-9 rounded-xl text-slate-400 hover:text-red-600"
+                      className="h-8 w-8 rounded-xl text-slate-400 hover:text-red-600"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-3.5 h-3.5" />
                     </Button>
                   </div>
                 </div>
@@ -2714,363 +2616,456 @@ export function HostOperationsTab() {
       )}
 
       {/* ==================================================================== */}
-      {/* MODAL DE DESPESA (RESPONSIVO NO CELULAR + LEITURA DE NOTA COM IA)    */}
+      {/* DRAWER / MODAL DE DESPESA (100% RESPONSIVO NO MOBILE E DESKTOP)      */}
       {/* ==================================================================== */}
-      <Dialog open={isExpenseModalOpen} onOpenChange={setIsExpenseModalOpen}>
-        <DialogContent className="w-[94vw] max-w-lg max-h-[90vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6 bg-white rounded-2xl">
-          <DialogHeader className="text-left">
-            <DialogTitle className="text-base sm:text-lg font-bold text-slate-900">
-              {editingExpense
-                ? "Editar Despesa do Hub"
-                : "Lançar Despesa Operacional"}
-            </DialogTitle>
-            <DialogDescription className="text-xs text-slate-500">
-              Tire foto da nota fiscal, grave por voz ou preencha os dados para
-              rateio no Hub.
-            </DialogDescription>
-          </DialogHeader>
-
-          {/* Barra rápida de Foto + Voz dentro do Modal */}
-          <div className="p-3 rounded-xl bg-[#FAF7F4] border border-stone-200/90 space-y-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={aiProcessing}
-                className="flex-1 h-9 rounded-lg bg-slate-900 text-white text-xs font-semibold cursor-pointer"
-              >
-                <Camera className="w-3.5 h-3.5 mr-1.5 text-[#BF4B24]" />
-                {receiptFile || receiptPreviewUrl
-                  ? "Trocar Nota / Anexo"
-                  : "Fotografar Nota"}
-              </Button>
-
-              {!isRecording ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={startVoiceRecording}
-                  disabled={aiProcessing}
-                  className="flex-1 h-9 rounded-lg border-stone-300 bg-white text-slate-800 text-xs font-semibold cursor-pointer"
-                >
-                  <Mic className="w-3.5 h-3.5 mr-1.5 text-[#BF4B24]" />
-                  Falar Comando
-                </Button>
-              ) : (
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={stopVoiceRecording}
-                  className="flex-1 h-9 rounded-lg bg-red-600 text-white text-xs font-bold animate-pulse cursor-pointer"
-                >
-                  <Square className="w-3 h-3 mr-1.5 fill-white" />
-                  Parar Áudio
-                </Button>
-              )}
-            </div>
-
-            {aiProcessing && (
-              <div className="px-3 py-2 rounded-lg bg-orange-50 border border-orange-200 text-xs font-semibold text-[#BF4B24] flex items-center gap-2">
-                <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-                <span>Lendo nota fiscal e preenchendo os campos...</span>
+      {isExpenseModalOpen && (
+        <div className="fixed inset-0 z-[120] flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-[2px] p-0 sm:p-4 animate-in fade-in duration-150">
+          <div className="w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl flex flex-col max-h-[92dvh] overflow-hidden">
+            {/* Cabeçalho Fixo */}
+            <div className="px-4 sm:px-6 py-4 border-b border-slate-100 flex items-center justify-between shrink-0 bg-white">
+              <div className="min-w-0 pr-2">
+                <h3 className="text-base sm:text-lg font-bold text-slate-900 truncate">
+                  {editingExpense
+                    ? "Editar Despesa do Hub"
+                    : "Lançar Despesa Operacional"}
+                </h3>
+                <p className="text-xs text-slate-500 truncate">
+                  Fotografe a nota, fale no microfone ou revise os campos.
+                </p>
               </div>
-            )}
-
-            {!aiProcessing && aiStatusMessage && (
-              <div className="px-3 py-2 rounded-lg bg-white border border-stone-200 text-[11px] font-semibold text-slate-700 flex items-center justify-between gap-2">
-                <span className="truncate">{aiStatusMessage}</span>
-                {receiptFile && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      processReceiptAndVoiceWithAI(
-                        receiptFile,
-                        null,
-                        voiceTranscript,
-                      )
-                    }
-                    className="text-[#BF4B24] hover:underline shrink-0 inline-flex items-center gap-1"
-                  >
-                    <RefreshCw className="w-3 h-3" /> Reler
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-
-          {receiptPreviewUrl && (
-            <div className="relative h-36 w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
-              <img
-                src={receiptPreviewUrl}
-                alt="Nota fiscal anexada"
-                className="w-full h-full object-contain"
-              />
               <button
                 type="button"
-                onClick={() => {
-                  setReceiptFile(null);
-                  setReceiptPreviewUrl(null);
-                  setAiStatusMessage(null);
-                }}
-                className="absolute top-2 right-2 p-1 rounded-full bg-slate-900/80 text-white hover:bg-slate-900"
+                onClick={() => setIsExpenseModalOpen(false)}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center shrink-0 cursor-pointer"
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
-          )}
 
-          <div className="space-y-3.5 py-1">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="sm:col-span-2">
-                <Label className="text-xs font-semibold text-slate-700">
-                  Descrição da Despesa *
-                </Label>
-                <Input
-                  value={expenseForm.title}
-                  onChange={(e) =>
-                    setExpenseForm({ ...expenseForm, title: e.target.value })
-                  }
-                  placeholder="Ex: Conta de Energia Cosern / Manutenção Ar"
-                  className="mt-1 h-10 text-xs rounded-xl w-full"
-                />
-              </div>
-
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Valor (R$) *
-                </Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={expenseForm.amount}
-                  onChange={(e) =>
-                    setExpenseForm({ ...expenseForm, amount: e.target.value })
-                  }
-                  placeholder="0.00"
-                  className="mt-1 h-10 font-bold text-sm rounded-xl w-full"
-                />
-              </div>
-
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Data da Despesa
-                </Label>
-                <Input
-                  type="date"
-                  value={expenseForm.expense_date}
-                  onChange={(e) =>
-                    setExpenseForm({
-                      ...expenseForm,
-                      expense_date: e.target.value,
-                    })
-                  }
-                  className="mt-1 h-10 text-xs font-semibold rounded-xl w-full"
-                />
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs font-semibold text-slate-700">
-                    Categoria
-                  </Label>
-                  <button
-                    type="button"
-                    onClick={() => setIsNewCategoryModalOpen(true)}
-                    className="text-[11px] font-bold text-[#BF4B24] hover:underline"
-                  >
-                    + Nova categoria
-                  </button>
-                </div>
-                <select
-                  value={expenseForm.category}
-                  onChange={(e) =>
-                    setExpenseForm({
-                      ...expenseForm,
-                      category: e.target.value,
-                    })
-                  }
-                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none"
-                >
-                  {Object.entries(expenseCategoriesMap).map(([k, v]) => (
-                    <option key={k} value={k}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Alocação (Rateio Hub ou Sala)
-                </Label>
-                <select
-                  value={expenseForm.room_id}
-                  onChange={(e) =>
-                    setExpenseForm({ ...expenseForm, room_id: e.target.value })
-                  }
-                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none"
-                >
-                  <option value="">Rateio Geral do Hub (Todas as Salas)</option>
-                  {rooms.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      Exclusivo: {r.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Fornecedor / Prestador (Opcional)
-                </Label>
-                <Input
-                  value={expenseForm.vendor}
-                  onChange={(e) =>
-                    setExpenseForm({ ...expenseForm, vendor: e.target.value })
-                  }
-                  placeholder="Ex: Cosern, Kalunga..."
-                  className="mt-1 h-10 text-xs rounded-xl w-full"
-                />
-              </div>
-
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Situação do Pagamento
-                </Label>
-                <select
-                  value={expenseForm.payment_status}
-                  onChange={(e) =>
-                    setExpenseForm({
-                      ...expenseForm,
-                      payment_status: e.target.value as "paid" | "pending",
-                    })
-                  }
-                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none"
-                >
-                  <option value="paid">Pago</option>
-                  <option value="pending">Pendente (A Pagar)</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Campos Personalizados */}
-            <div className="pt-2 border-t border-slate-100 space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs font-semibold text-slate-700">
-                  Campos Personalizados (Opcional)
-                </Label>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setExpenseForm((prev) => ({
-                      ...prev,
-                      custom_fields: [
-                        ...prev.custom_fields,
-                        { key: "", value: "" },
-                      ],
-                    }))
-                  }
-                  className="text-xs font-bold text-[#BF4B24] hover:underline"
-                >
-                  + Adicionar campo
-                </button>
-              </div>
-
-              {expenseForm.custom_fields.map((cf, index) => (
-                <div key={index} className="flex items-center gap-2">
-                  <Input
-                    placeholder="Campo (ex: Nº Nota)"
-                    value={cf.key}
-                    onChange={(e) => {
-                      const next = [...expenseForm.custom_fields];
-                      next[index].key = e.target.value;
-                      setExpenseForm({ ...expenseForm, custom_fields: next });
-                    }}
-                    className="h-9 text-xs flex-1 min-w-0"
-                  />
-                  <Input
-                    placeholder="Informação"
-                    value={cf.value}
-                    onChange={(e) => {
-                      const next = [...expenseForm.custom_fields];
-                      next[index].value = e.target.value;
-                      setExpenseForm({ ...expenseForm, custom_fields: next });
-                    }}
-                    className="h-9 text-xs flex-1 min-w-0"
-                  />
+            {/* Corpo Rolável sem corte lateral */}
+            <div className="p-4 sm:p-6 overflow-y-auto space-y-4 flex-1 min-w-0">
+              {/* Barra Compacta de Captura (Foto + Voz + Miniatura da Nota) */}
+              <div className="p-3 rounded-2xl bg-[#FAF7F4] border border-stone-200/90 space-y-2.5">
+                <div className="grid grid-cols-2 gap-2">
                   <Button
                     type="button"
-                    variant="ghost"
-                    size="icon"
-                    onClick={() =>
-                      setExpenseForm({
-                        ...expenseForm,
-                        custom_fields: expenseForm.custom_fields.filter(
-                          (_, i) => i !== index,
-                        ),
-                      })
-                    }
-                    className="h-9 w-9 text-slate-400 hover:text-red-600 shrink-0"
+                    size="sm"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={aiProcessing}
+                    className="h-9 rounded-xl bg-slate-900 text-white text-xs font-semibold cursor-pointer"
                   >
-                    <X className="w-4 h-4" />
+                    <Camera className="w-3.5 h-3.5 mr-1.5 text-[#BF4B24] shrink-0" />
+                    <span className="truncate">
+                      {receiptPreviewUrl ? "Trocar Foto" : "Fotografar Nota"}
+                    </span>
                   </Button>
+
+                  {!isRecording ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={startVoiceRecording}
+                      disabled={aiProcessing}
+                      className="h-9 rounded-xl border-stone-300 bg-white text-slate-800 text-xs font-semibold cursor-pointer"
+                    >
+                      <Mic className="w-3.5 h-3.5 mr-1.5 text-[#BF4B24] shrink-0" />
+                      <span className="truncate">Falar Comando</span>
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={stopVoiceRecording}
+                      className="h-9 rounded-xl bg-red-600 text-white text-xs font-bold animate-pulse cursor-pointer"
+                    >
+                      <Square className="w-3 h-3 mr-1.5 fill-white shrink-0" />
+                      <span>Parar Áudio</span>
+                    </Button>
+                  )}
                 </div>
-              ))}
+
+                {/* Miniatura Horizontal da Nota + Status da IA */}
+                {(receiptPreviewUrl || aiProcessing || aiStatusMessage) && (
+                  <div className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white border border-stone-200/80">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {receiptPreviewUrl && (
+                        <div
+                          onClick={() => setIsLightboxPreviewOpen(true)}
+                          className="relative w-11 h-11 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 shrink-0 cursor-pointer"
+                        >
+                          <img
+                            src={receiptPreviewUrl}
+                            alt="Nota"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        {aiProcessing ? (
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-[#BF4B24]">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                            <span className="truncate">
+                              Extraindo dados da nota...
+                            </span>
+                          </div>
+                        ) : (
+                          <p className="text-xs font-semibold text-slate-800 truncate">
+                            {aiStatusMessage || "Comprovante anexado"}
+                          </p>
+                        )}
+                        {receiptPreviewUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setIsLightboxPreviewOpen(true)}
+                            className="text-[10px] font-semibold text-[#BF4B24] hover:underline"
+                          >
+                            Ampliar imagem
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      {receiptFile && !aiProcessing && (
+                        <button
+                          type="button"
+                          title="Reler nota"
+                          onClick={() =>
+                            processReceiptAndVoiceWithAI(
+                              receiptFile,
+                              null,
+                              voiceTranscript,
+                            )
+                          }
+                          className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {receiptPreviewUrl && (
+                        <button
+                          type="button"
+                          title="Remover anexo"
+                          onClick={() => {
+                            setReceiptFile(null);
+                            setReceiptPreviewUrl(null);
+                            setAiStatusMessage(null);
+                          }}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-600"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Campos do Formulário */}
+              <div
+                className={`space-y-3.5 transition-opacity ${
+                  aiProcessing
+                    ? "opacity-60 pointer-events-none"
+                    : "opacity-100"
+                }`}
+              >
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Descrição da Despesa *
+                  </Label>
+                  <Input
+                    value={expenseForm.title}
+                    onChange={(e) =>
+                      setExpenseForm({ ...expenseForm, title: e.target.value })
+                    }
+                    placeholder="Ex: Conta de Energia / Compra de Insumos"
+                    className="mt-1 h-10 text-xs rounded-xl w-full"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700">
+                      Valor Total (R$) *
+                    </Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={expenseForm.amount}
+                      onChange={(e) =>
+                        setExpenseForm({
+                          ...expenseForm,
+                          amount: e.target.value,
+                        })
+                      }
+                      placeholder="0.00"
+                      className="mt-1 h-10 font-bold text-sm rounded-xl w-full"
+                    />
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700">
+                      Data da Despesa
+                    </Label>
+                    <Input
+                      type="date"
+                      value={expenseForm.expense_date}
+                      onChange={(e) =>
+                        setExpenseForm({
+                          ...expenseForm,
+                          expense_date: e.target.value,
+                        })
+                      }
+                      className="mt-1 h-10 text-xs font-semibold rounded-xl w-full"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs font-semibold text-slate-700">
+                        Categoria
+                      </Label>
+                      <button
+                        type="button"
+                        onClick={() => setIsNewCategoryModalOpen(true)}
+                        className="text-[11px] font-bold text-[#BF4B24] hover:underline"
+                      >
+                        + Nova categoria
+                      </button>
+                    </div>
+                    <select
+                      value={expenseForm.category}
+                      onChange={(e) =>
+                        setExpenseForm({
+                          ...expenseForm,
+                          category: e.target.value,
+                        })
+                      }
+                      className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none"
+                    >
+                      {Object.entries(expenseCategoriesMap).map(([k, v]) => (
+                        <option key={k} value={k}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700">
+                      Alocação (Hub ou Sala)
+                    </Label>
+                    <select
+                      value={expenseForm.room_id}
+                      onChange={(e) =>
+                        setExpenseForm({
+                          ...expenseForm,
+                          room_id: e.target.value,
+                        })
+                      }
+                      className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none"
+                    >
+                      <option value="">
+                        Rateio Geral do Hub (Todas as Salas)
+                      </option>
+                      {rooms.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          Exclusivo: {r.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700">
+                      Fornecedor / Loja (Opcional)
+                    </Label>
+                    <Input
+                      value={expenseForm.vendor}
+                      onChange={(e) =>
+                        setExpenseForm({
+                          ...expenseForm,
+                          vendor: e.target.value,
+                        })
+                      }
+                      placeholder="Extraído da nota..."
+                      className="mt-1 h-10 text-xs rounded-xl w-full"
+                    />
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700">
+                      Situação
+                    </Label>
+                    <select
+                      value={expenseForm.payment_status}
+                      onChange={(e) =>
+                        setExpenseForm({
+                          ...expenseForm,
+                          payment_status: e.target.value as "paid" | "pending",
+                        })
+                      }
+                      className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none"
+                    >
+                      <option value="paid">Pago</option>
+                      <option value="pending">Pendente (A Pagar)</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Campos Personalizados */}
+                <div className="pt-2 border-t border-slate-100 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-semibold text-slate-700">
+                      Campos Extras (Opcional)
+                    </Label>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpenseForm((prev) => ({
+                          ...prev,
+                          custom_fields: [
+                            ...prev.custom_fields,
+                            { key: "", value: "" },
+                          ],
+                        }))
+                      }
+                      className="text-xs font-bold text-[#BF4B24] hover:underline"
+                    >
+                      + Adicionar campo
+                    </button>
+                  </div>
+
+                  {expenseForm.custom_fields.map((cf, index) => (
+                    <div key={index} className="flex items-center gap-2">
+                      <Input
+                        placeholder="Campo"
+                        value={cf.key}
+                        onChange={(e) => {
+                          const next = [...expenseForm.custom_fields];
+                          next[index].key = e.target.value;
+                          setExpenseForm({
+                            ...expenseForm,
+                            custom_fields: next,
+                          });
+                        }}
+                        className="h-9 text-xs flex-1 min-w-0"
+                      />
+                      <Input
+                        placeholder="Valor"
+                        value={cf.value}
+                        onChange={(e) => {
+                          const next = [...expenseForm.custom_fields];
+                          next[index].value = e.target.value;
+                          setExpenseForm({
+                            ...expenseForm,
+                            custom_fields: next,
+                          });
+                        }}
+                        className="h-9 text-xs flex-1 min-w-0"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() =>
+                          setExpenseForm({
+                            ...expenseForm,
+                            custom_fields: expenseForm.custom_fields.filter(
+                              (_, i) => i !== index,
+                            ),
+                          })
+                        }
+                        className="h-9 w-9 text-slate-400 hover:text-red-600 shrink-0"
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Observações (Opcional)
+                  </Label>
+                  <Input
+                    value={expenseForm.notes}
+                    onChange={(e) =>
+                      setExpenseForm({ ...expenseForm, notes: e.target.value })
+                    }
+                    placeholder="Itens da nota ou observações..."
+                    className="mt-1 h-10 text-xs rounded-xl w-full"
+                  />
+                </div>
+              </div>
             </div>
 
-            <div>
-              <Label className="text-xs font-semibold text-slate-700">
-                Observações (Opcional)
-              </Label>
-              <Input
-                value={expenseForm.notes}
-                onChange={(e) =>
-                  setExpenseForm({ ...expenseForm, notes: e.target.value })
-                }
-                placeholder="Ex: Pago via PIX CNPJ"
-                className="mt-1 h-10 text-xs rounded-xl w-full"
-              />
+            {/* Rodapé Fixo */}
+            <div className="px-4 sm:px-6 py-3.5 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-2.5 shrink-0 pb-[calc(0.875rem+env(safe-area-inset-bottom))] sm:pb-3.5">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setIsExpenseModalOpen(false)}
+                className="h-10 font-semibold text-xs text-slate-600"
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                onClick={handleSaveExpense}
+                disabled={saving || aiProcessing}
+                className="h-10 px-6 bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-bold text-xs rounded-xl cursor-pointer"
+              >
+                {saving ? "Salvando..." : "Salvar Despesa"}
+              </Button>
             </div>
           </div>
+        </div>
+      )}
 
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button
-              variant="ghost"
-              onClick={() => setIsExpenseModalOpen(false)}
-              className="font-semibold text-xs"
-            >
-              Cancelar
-            </Button>
-            <Button
-              onClick={handleSaveExpense}
-              disabled={saving || aiProcessing}
-              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs rounded-xl px-5 cursor-pointer"
-            >
-              {saving ? "Salvando..." : "Salvar Despesa"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* VISUALIZADOR TELA CHEIA DA FOTO DA NOTA */}
+      {isLightboxPreviewOpen && receiptPreviewUrl && (
+        <div
+          onClick={() => setIsLightboxPreviewOpen(false)}
+          className="fixed inset-0 z-[150] bg-black/90 flex items-center justify-center p-4"
+        >
+          <button
+            type="button"
+            onClick={() => setIsLightboxPreviewOpen(false)}
+            className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/20 text-white flex items-center justify-center"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <img
+            src={receiptPreviewUrl}
+            alt="Comprovante Ampliado"
+            className="max-w-full max-h-[88dvh] object-contain rounded-lg"
+          />
+        </div>
+      )}
 
       {/* MODAL PARA CRIAR NOVA CATEGORIA PERSONALIZADA */}
-      <Dialog
-        open={isNewCategoryModalOpen}
-        onOpenChange={setIsNewCategoryModalOpen}
-      >
-        <DialogContent className="w-[92vw] max-w-sm bg-white rounded-2xl p-5">
-          <DialogHeader className="text-left">
-            <DialogTitle className="text-base font-bold text-slate-900">
-              Criar Categoria de Despesa
-            </DialogTitle>
-            <DialogDescription className="text-xs text-slate-500">
-              Adicione um novo tipo de custo para classificar suas notas e
-              despesas do Hub.
-            </DialogDescription>
-          </DialogHeader>
+      {isNewCategoryModalOpen && (
+        <div className="fixed inset-0 z-[130] flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-[2px] p-0 sm:p-4">
+          <div className="w-full sm:max-w-sm bg-white rounded-t-3xl sm:rounded-2xl p-5 space-y-4 shadow-2xl pb-[calc(1.25rem+env(safe-area-inset-bottom))] sm:pb-5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-slate-900">
+                Nova Categoria de Despesa
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsNewCategoryModalOpen(false)}
+                className="w-7 h-7 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
-          <div className="space-y-4">
             <div>
               <Label className="text-xs font-semibold text-slate-700">
                 Nome da Categoria
@@ -3107,216 +3102,208 @@ export function HostOperationsTab() {
               Salvar Categoria
             </Button>
           </div>
-        </DialogContent>
-      </Dialog>
+        </div>
+      )}
 
-      {/* MODAIS DE ESTOQUE E MANUTENÇÃO MANTIDOS */}
-      <Dialog open={isItemModalOpen} onOpenChange={setIsItemModalOpen}>
-        <DialogContent className="w-[94vw] max-w-lg bg-white rounded-2xl p-4 sm:p-6">
-          <DialogHeader className="text-left">
-            <DialogTitle className="text-lg font-bold text-slate-900">
-              {editingItem
-                ? "Editar Item do Estoque"
-                : "Cadastrar Insumo no Estoque"}
-            </DialogTitle>
-            <DialogDescription className="text-xs text-slate-500">
-              Defina a quantidade mínima de segurança para receber alertas de
-              reposição.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 py-2">
-            <div>
-              <Label className="text-xs font-semibold text-slate-700">
-                Nome do Insumo / Material *
-              </Label>
-              <Input
-                value={itemForm.name}
-                onChange={(e) =>
-                  setItemForm({ ...itemForm, name: e.target.value })
-                }
-                placeholder="Ex: Rolo de Lençol Descartável / Luva Nitrílica"
-                className="mt-1 h-10 text-xs rounded-xl"
-              />
+      {/* MODAL DE ITEM DE ESTOQUE (RESPONSIVO) */}
+      {isItemModalOpen && (
+        <div className="fixed inset-0 z-[120] flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-[2px] p-0 sm:p-4">
+          <div className="w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl flex flex-col max-h-[90dvh] overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="text-base font-bold text-slate-900">
+                {editingItem
+                  ? "Editar Item do Estoque"
+                  : "Cadastrar Insumo no Estoque"}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsItemModalOpen(false)}
+                className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="p-5 overflow-y-auto space-y-4 flex-1">
               <div>
                 <Label className="text-xs font-semibold text-slate-700">
-                  Categoria
-                </Label>
-                <select
-                  value={itemForm.category}
-                  onChange={(e) =>
-                    setItemForm({ ...itemForm, category: e.target.value })
-                  }
-                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
-                >
-                  {Object.entries(INVENTORY_CATEGORIES).map(([k, v]) => (
-                    <option key={k} value={k}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Sala Vinculada (Opcional)
-                </Label>
-                <select
-                  value={itemForm.room_id}
-                  onChange={(e) =>
-                    setItemForm({ ...itemForm, room_id: e.target.value })
-                  }
-                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
-                >
-                  <option value="">Uso Geral do Hub</option>
-                  {rooms.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Qtd. Atual *
+                  Nome do Insumo / Material *
                 </Label>
                 <Input
-                  type="number"
-                  value={itemForm.current_quantity}
+                  value={itemForm.name}
                   onChange={(e) =>
-                    setItemForm({
-                      ...itemForm,
-                      current_quantity: e.target.value,
-                    })
+                    setItemForm({ ...itemForm, name: e.target.value })
                   }
-                  className="mt-1 h-10 font-bold text-xs rounded-xl"
-                />
-              </div>
-
-              <div>
-                <Label className="text-xs font-semibold text-red-600">
-                  Estoque Mínimo *
-                </Label>
-                <Input
-                  type="number"
-                  value={itemForm.min_quantity}
-                  onChange={(e) =>
-                    setItemForm({ ...itemForm, min_quantity: e.target.value })
-                  }
-                  className="mt-1 h-10 font-bold text-xs border-red-200 rounded-xl"
-                />
-              </div>
-
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Unidade
-                </Label>
-                <select
-                  value={itemForm.unit}
-                  onChange={(e) =>
-                    setItemForm({ ...itemForm, unit: e.target.value })
-                  }
-                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
-                >
-                  <option value="un">Unidade (un)</option>
-                  <option value="cx">Caixa (cx)</option>
-                  <option value="pct">Pacote (pct)</option>
-                  <option value="rolo">Rolo</option>
-                  <option value="frasco">Frasco / Litro</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Custo Unitário (R$)
-                </Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={itemForm.unit_cost}
-                  onChange={(e) =>
-                    setItemForm({ ...itemForm, unit_cost: e.target.value })
-                  }
-                  placeholder="Ex: 18.50"
+                  placeholder="Ex: Rolo de Lençol Descartável / Luva Nitrílica"
                   className="mt-1 h-10 text-xs rounded-xl"
                 />
               </div>
 
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Fornecedor (Opcional)
-                </Label>
-                <Input
-                  value={itemForm.supplier}
-                  onChange={(e) =>
-                    setItemForm({ ...itemForm, supplier: e.target.value })
-                  }
-                  placeholder="Ex: Dental Cremer"
-                  className="mt-1 h-10 text-xs rounded-xl"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Categoria
+                  </Label>
+                  <select
+                    value={itemForm.category}
+                    onChange={(e) =>
+                      setItemForm({ ...itemForm, category: e.target.value })
+                    }
+                    className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
+                  >
+                    {Object.entries(INVENTORY_CATEGORIES).map(([k, v]) => (
+                      <option key={k} value={k}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Sala Vinculada (Opcional)
+                  </Label>
+                  <select
+                    value={itemForm.room_id}
+                    onChange={(e) =>
+                      setItemForm({ ...itemForm, room_id: e.target.value })
+                    }
+                    className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
+                  >
+                    <option value="">Uso Geral do Hub</option>
+                    {rooms.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2.5">
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Qtd. Atual *
+                  </Label>
+                  <Input
+                    type="number"
+                    value={itemForm.current_quantity}
+                    onChange={(e) =>
+                      setItemForm({
+                        ...itemForm,
+                        current_quantity: e.target.value,
+                      })
+                    }
+                    className="mt-1 h-10 font-bold text-xs rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold text-red-600">
+                    Mínimo *
+                  </Label>
+                  <Input
+                    type="number"
+                    value={itemForm.min_quantity}
+                    onChange={(e) =>
+                      setItemForm({ ...itemForm, min_quantity: e.target.value })
+                    }
+                    className="mt-1 h-10 font-bold text-xs border-red-200 rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Unidade
+                  </Label>
+                  <select
+                    value={itemForm.unit}
+                    onChange={(e) =>
+                      setItemForm({ ...itemForm, unit: e.target.value })
+                    }
+                    className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700"
+                  >
+                    <option value="un">un</option>
+                    <option value="cx">cx</option>
+                    <option value="pct">pct</option>
+                    <option value="rolo">rolo</option>
+                    <option value="frasco">frasco</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Custo Unitário (R$)
+                  </Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={itemForm.unit_cost}
+                    onChange={(e) =>
+                      setItemForm({ ...itemForm, unit_cost: e.target.value })
+                    }
+                    placeholder="Ex: 18.50"
+                    className="mt-1 h-10 text-xs rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Fornecedor
+                  </Label>
+                  <Input
+                    value={itemForm.supplier}
+                    onChange={(e) =>
+                      setItemForm({ ...itemForm, supplier: e.target.value })
+                    }
+                    placeholder="Opcional"
+                    className="mt-1 h-10 text-xs rounded-xl"
+                  />
+                </div>
               </div>
             </div>
 
-            {!editingItem && (
-              <label className="flex items-center gap-2 p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={itemForm.recordInitialExpense}
-                  onChange={(e) =>
-                    setItemForm({
-                      ...itemForm,
-                      recordInitialExpense: e.target.checked,
-                    })
-                  }
-                  className="rounded accent-[#BF4B24]"
-                />
-                Lançar o valor deste lote inicial nas Despesas do Mês
-              </label>
-            )}
+            <div className="px-5 py-3.5 border-t border-slate-100 bg-slate-50 flex justify-end gap-2 pb-[calc(0.875rem+env(safe-area-inset-bottom))] sm:pb-3.5">
+              <Button
+                variant="ghost"
+                onClick={() => setIsItemModalOpen(false)}
+                className="text-xs font-semibold"
+              >
+                Cancelar
+              </Button>
+              <Button
+                onClick={handleSaveInventoryItem}
+                disabled={saving}
+                className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs rounded-xl"
+              >
+                {saving ? "Salvando..." : "Salvar Insumo"}
+              </Button>
+            </div>
           </div>
+        </div>
+      )}
 
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              onClick={() => setIsItemModalOpen(false)}
-              className="font-semibold text-xs"
-            >
-              Cancelar
-            </Button>
-            <Button
-              onClick={handleSaveInventoryItem}
-              disabled={saving}
-              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs rounded-xl"
-            >
-              {saving ? "Salvando..." : "Salvar Insumo"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* MODAL DE REPOSIÇÃO / BAIXA DE ESTOQUE */}
+      {isRestockModalOpen && (
+        <div className="fixed inset-0 z-[120] flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-[2px] p-0 sm:p-4">
+          <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-2xl p-5 space-y-4 shadow-2xl pb-[calc(1.25rem+env(safe-area-inset-bottom))] sm:pb-5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-slate-900">
+                {restockMode === "in"
+                  ? `Repor: ${restockTarget?.name}`
+                  : `Baixa: ${restockTarget?.name}`}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsRestockModalOpen(false)}
+                className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
-      <Dialog open={isRestockModalOpen} onOpenChange={setIsRestockModalOpen}>
-        <DialogContent className="w-[92vw] max-w-md bg-white rounded-2xl p-4 sm:p-6">
-          <DialogHeader className="text-left">
-            <DialogTitle className="text-lg font-bold text-slate-900">
-              {restockMode === "in"
-                ? `Repor Estoque: ${restockTarget?.name}`
-                : `Registrar Baixa: ${restockTarget?.name}`}
-            </DialogTitle>
-            <DialogDescription className="text-xs text-slate-500">
-              Saldo atual: <strong>{restockTarget?.current_quantity}</strong>{" "}
-              {restockTarget?.unit}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 py-2">
             <div>
               <Label className="text-xs font-semibold text-slate-700">
                 Quantidade a{" "}
@@ -3335,7 +3322,7 @@ export function HostOperationsTab() {
               <>
                 <div>
                   <Label className="text-xs font-semibold text-slate-700">
-                    Custo Unitário desta Compra (R$)
+                    Custo Unitário (R$)
                   </Label>
                   <Input
                     type="number"
@@ -3354,7 +3341,7 @@ export function HostOperationsTab() {
                     className="rounded accent-emerald-600 h-4 w-4"
                   />
                   <span>
-                    Lançar automaticamente{" "}
+                    Lançar{" "}
                     <strong>
                       R${" "}
                       {formatBRL(
@@ -3367,267 +3354,196 @@ export function HostOperationsTab() {
                 </label>
               </>
             )}
-          </div>
 
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              onClick={() => setIsRestockModalOpen(false)}
-              className="font-semibold text-xs"
-            >
-              Cancelar
-            </Button>
-            <Button
-              onClick={handleConfirmStockMovement}
-              disabled={saving}
-              className={
-                restockMode === "in"
-                  ? "bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl"
-                  : "bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs rounded-xl"
-              }
-            >
-              {saving
-                ? "Processando..."
-                : restockMode === "in"
-                  ? "Confirmar Entrada"
-                  : "Confirmar Baixa"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={isMaintModalOpen} onOpenChange={setIsMaintModalOpen}>
-        <DialogContent className="w-[94vw] max-w-lg bg-white rounded-2xl p-4 sm:p-6">
-          <DialogHeader className="text-left">
-            <DialogTitle className="text-lg font-bold text-slate-900">
-              {editingMaint
-                ? "Editar Ordem de Manutenção"
-                : "Nova Ordem de Manutenção / Reparo"}
-            </DialogTitle>
-            <DialogDescription className="text-xs text-slate-500">
-              Registre manutenções preventivas ou corretivas das salas.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 py-2">
-            <div>
-              <Label className="text-xs font-semibold text-slate-700">
-                Título do Serviço / Reparo *
-              </Label>
-              <Input
-                value={maintForm.title}
-                onChange={(e) =>
-                  setMaintForm({ ...maintForm, title: e.target.value })
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                variant="ghost"
+                onClick={() => setIsRestockModalOpen(false)}
+                className="text-xs font-semibold"
+              >
+                Cancelar
+              </Button>
+              <Button
+                onClick={handleConfirmStockMovement}
+                disabled={saving}
+                className={
+                  restockMode === "in"
+                    ? "bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl"
+                    : "bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs rounded-xl"
                 }
-                placeholder="Ex: Higienização do Ar-Condicionado"
-                className="mt-1 h-10 text-xs rounded-xl"
-              />
+              >
+                {saving ? "Processando..." : "Confirmar"}
+              </Button>
             </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Sala / Espaço
-                </Label>
-                <select
-                  value={maintForm.room_id}
-                  onChange={(e) =>
-                    setMaintForm({ ...maintForm, room_id: e.target.value })
-                  }
-                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
-                >
-                  <option value="">Área Comum / Hub Geral</option>
-                  {rooms.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Tipo de Manutenção
-                </Label>
-                <select
-                  value={maintForm.category}
-                  onChange={(e) =>
-                    setMaintForm({ ...maintForm, category: e.target.value })
-                  }
-                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
-                >
-                  {Object.entries(MAINTENANCE_CATEGORIES).map(([k, v]) => (
-                    <option key={k} value={k}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Prioridade
-                </Label>
-                <select
-                  value={maintForm.priority}
-                  onChange={(e) =>
-                    setMaintForm({
-                      ...maintForm,
-                      priority: e.target.value as any,
-                    })
-                  }
-                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
-                >
-                  <option value="low">Baixa</option>
-                  <option value="normal">Normal</option>
-                  <option value="high">Alta</option>
-                  <option value="urgent">Urgente</option>
-                </select>
-              </div>
-
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Status
-                </Label>
-                <select
-                  value={maintForm.status}
-                  onChange={(e) =>
-                    setMaintForm({
-                      ...maintForm,
-                      status: e.target.value as any,
-                    })
-                  }
-                  className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
-                >
-                  <option value="pending">Pendente</option>
-                  <option value="in_progress">Em Execução</option>
-                  <option value="completed">Concluída</option>
-                </select>
-              </div>
-
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Data Prevista
-                </Label>
-                <Input
-                  type="date"
-                  value={maintForm.scheduled_date}
-                  onChange={(e) =>
-                    setMaintForm({
-                      ...maintForm,
-                      scheduled_date: e.target.value,
-                    })
-                  }
-                  className="mt-1 h-10 text-xs rounded-xl"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Prestador / Técnico
-                </Label>
-                <Input
-                  value={maintForm.provider_name}
-                  onChange={(e) =>
-                    setMaintForm({
-                      ...maintForm,
-                      provider_name: e.target.value,
-                    })
-                  }
-                  placeholder="Nome"
-                  className="mt-1 h-10 text-xs rounded-xl"
-                />
-              </div>
-
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  WhatsApp
-                </Label>
-                <Input
-                  value={maintForm.provider_phone}
-                  onChange={(e) =>
-                    setMaintForm({
-                      ...maintForm,
-                      provider_phone: e.target.value,
-                    })
-                  }
-                  placeholder="(84) 99999-9999"
-                  className="mt-1 h-10 text-xs rounded-xl"
-                />
-              </div>
-
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">
-                  Custo (R$)
-                </Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={maintForm.cost}
-                  onChange={(e) =>
-                    setMaintForm({ ...maintForm, cost: e.target.value })
-                  }
-                  placeholder="Ex: 250.00"
-                  className="mt-1 h-10 font-bold text-xs rounded-xl"
-                />
-              </div>
-            </div>
-
-            <div>
-              <Label className="text-xs font-semibold text-slate-700">
-                Detalhes do Serviço (Opcional)
-              </Label>
-              <Input
-                value={maintForm.description}
-                onChange={(e) =>
-                  setMaintForm({ ...maintForm, description: e.target.value })
-                }
-                placeholder="Peças trocadas, garantia do serviço..."
-                className="mt-1 h-10 text-xs rounded-xl"
-              />
-            </div>
-
-            {!editingMaint && Number(maintForm.cost) > 0 && (
-              <label className="flex items-center gap-2 p-3 rounded-xl bg-orange-50 border border-orange-200 text-xs font-semibold text-orange-950 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={maintForm.recordExpenseNow}
-                  onChange={(e) =>
-                    setMaintForm({
-                      ...maintForm,
-                      recordExpenseNow: e.target.checked,
-                    })
-                  }
-                  className="rounded accent-[#BF4B24]"
-                />
-                Lançar este custo de R$ {formatBRL(Number(maintForm.cost))}{" "}
-                automaticamente nas Despesas do Mês
-              </label>
-            )}
           </div>
+        </div>
+      )}
 
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              onClick={() => setIsMaintModalOpen(false)}
-              className="font-semibold text-xs"
-            >
-              Cancelar
-            </Button>
-            <Button
-              onClick={handleSaveMaintenance}
-              disabled={saving}
-              className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs rounded-xl"
-            >
-              {saving ? "Salvando..." : "Salvar Manutenção"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* MODAL DE MANUTENÇÃO (RESPONSIVO) */}
+      {isMaintModalOpen && (
+        <div className="fixed inset-0 z-[120] flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-[2px] p-0 sm:p-4">
+          <div className="w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl flex flex-col max-h-[90dvh] overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="text-base font-bold text-slate-900">
+                {editingMaint
+                  ? "Editar Manutenção"
+                  : "Nova Manutenção / Reparo"}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsMaintModalOpen(false)}
+                className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-4 flex-1">
+              <div>
+                <Label className="text-xs font-semibold text-slate-700">
+                  Título do Serviço / Reparo *
+                </Label>
+                <Input
+                  value={maintForm.title}
+                  onChange={(e) =>
+                    setMaintForm({ ...maintForm, title: e.target.value })
+                  }
+                  placeholder="Ex: Higienização do Ar-Condicionado"
+                  className="mt-1 h-10 text-xs rounded-xl"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Sala / Espaço
+                  </Label>
+                  <select
+                    value={maintForm.room_id}
+                    onChange={(e) =>
+                      setMaintForm({ ...maintForm, room_id: e.target.value })
+                    }
+                    className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
+                  >
+                    <option value="">Área Comum / Hub Geral</option>
+                    {rooms.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Categoria
+                  </Label>
+                  <select
+                    value={maintForm.category}
+                    onChange={(e) =>
+                      setMaintForm({ ...maintForm, category: e.target.value })
+                    }
+                    className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700"
+                  >
+                    {Object.entries(MAINTENANCE_CATEGORIES).map(([k, v]) => (
+                      <option key={k} value={k}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Custo (R$)
+                  </Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={maintForm.cost}
+                    onChange={(e) =>
+                      setMaintForm({ ...maintForm, cost: e.target.value })
+                    }
+                    placeholder="0.00"
+                    className="mt-1 h-10 font-bold text-xs rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Data
+                  </Label>
+                  <Input
+                    type="date"
+                    value={maintForm.scheduled_date}
+                    onChange={(e) =>
+                      setMaintForm({
+                        ...maintForm,
+                        scheduled_date: e.target.value,
+                      })
+                    }
+                    className="mt-1 h-10 text-xs rounded-xl"
+                  />
+                </div>
+
+                <div className="col-span-2 sm:col-span-1">
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Prestador
+                  </Label>
+                  <Input
+                    value={maintForm.provider_name}
+                    onChange={(e) =>
+                      setMaintForm({
+                        ...maintForm,
+                        provider_name: e.target.value,
+                      })
+                    }
+                    placeholder="Nome"
+                    className="mt-1 h-10 text-xs rounded-xl"
+                  />
+                </div>
+              </div>
+
+              {!editingMaint && Number(maintForm.cost) > 0 && (
+                <label className="flex items-center gap-2 p-3 rounded-xl bg-orange-50 border border-orange-200 text-xs font-semibold text-orange-950 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={maintForm.recordExpenseNow}
+                    onChange={(e) =>
+                      setMaintForm({
+                        ...maintForm,
+                        recordExpenseNow: e.target.checked,
+                      })
+                    }
+                    className="rounded accent-[#BF4B24]"
+                  />
+                  Lançar R$ {formatBRL(Number(maintForm.cost))} nas Despesas do
+                  Mês
+                </label>
+              )}
+            </div>
+
+            <div className="px-5 py-3.5 border-t border-slate-100 bg-slate-50 flex justify-end gap-2 pb-[calc(0.875rem+env(safe-area-inset-bottom))] sm:pb-3.5">
+              <Button
+                variant="ghost"
+                onClick={() => setIsMaintModalOpen(false)}
+                className="text-xs font-semibold"
+              >
+                Cancelar
+              </Button>
+              <Button
+                onClick={handleSaveMaintenance}
+                disabled={saving}
+                className="bg-[#BF4B24] hover:bg-[#9A3C1D] text-white font-semibold text-xs rounded-xl"
+              >
+                {saving ? "Salvando..." : "Salvar Manutenção"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
