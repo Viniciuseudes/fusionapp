@@ -27,6 +27,9 @@ import { useToast } from "@/hooks/use-toast";
 interface FusionPassPromoPopupProps {
   onSelectPlan?: (pkg?: any) => void;
   imageSrc?: string;
+  suspendAutoOpen?: boolean;
+  isSubscriber?: boolean;
+  currentTier?: string | null;
 }
 
 type TierKey = "start" | "vip" | "master";
@@ -37,7 +40,6 @@ const REFERENCE_AVULSO_RATES: Record<TierKey, number> = {
   master: 80,
 };
 
-// Chaves separadas para Visitante (Deslogado) e Profissional (Logado)
 const VISITOR_SEEN_KEY = "fusion_promo_seen_visitor_v5";
 const AUTH_SEEN_PREFIX = "fusion_promo_seen_auth_v5_";
 
@@ -62,9 +64,19 @@ const formatBRL = (val: number) =>
     maximumFractionDigits: 2,
   });
 
+function isReviewModalCurrentlyActive(): boolean {
+  if (typeof document === "undefined") return false;
+  return (
+    document.documentElement.getAttribute("data-fusion-review-open") ===
+      "true" ||
+    Boolean(document.querySelector('[data-fusion-review-modal="true"]'))
+  );
+}
+
 export function FusionPassPromoPopup({
   onSelectPlan,
   imageSrc = "/fusion-pass-popup.png",
+  suspendAutoOpen = false,
 }: FusionPassPromoPopupProps) {
   const router = useRouter();
   const { toast } = useToast();
@@ -84,7 +96,6 @@ export function FusionPassPromoPopup({
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [userProfile, setUserProfile] = useState<any | null>(null);
 
-  // Estados do Checkout Integrado
   const [billingType, setBillingType] = useState<"PIX" | "CREDIT_CARD">("PIX");
   const [processingPayment, setProcessingPayment] = useState(false);
   const [paymentId, setPaymentId] = useState<string | null>(null);
@@ -101,14 +112,34 @@ export function FusionPassPromoPopup({
   const [ccv, setCcv] = useState("");
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const hasScheduledInThisMountRef = useRef(false);
+  const suspendRef = useRef<boolean>(suspendAutoOpen);
+
+  useEffect(() => {
+    suspendRef.current = suspendAutoOpen;
+    // Se uma avaliação pendente abriu na tela, fecha ou cancela imediatamente o timer do banner promocional
+    if (suspendAutoOpen && timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    if (suspendAutoOpen && isOpen && step === "banner") {
+      setIsOpen(false);
+    }
+  }, [suspendAutoOpen, isOpen, step]);
 
   const getActiveStorageKey = useCallback((uid?: string | null) => {
     return uid ? `${AUTH_SEEN_PREFIX}${uid}` : VISITOR_SEEN_KEY;
   }, []);
 
   const openModal = useCallback(
-    (initialStep: "banner" | "plans" = "banner") => {
+    (initialStep: "banner" | "plans" = "banner", forceManual = false) => {
+      // Nunca abre automaticamente por cima do modal de avaliação
+      if (
+        !forceManual &&
+        (suspendRef.current || isReviewModalCurrentlyActive())
+      ) {
+        return;
+      }
+
       setStep(initialStep);
       setPaymentId(null);
       setPixQrCode(null);
@@ -141,7 +172,6 @@ export function FusionPassPromoPopup({
       setPaymentId(null);
       setShowRulesDetails(false);
 
-      // Libera o aviso de instalar app somente 8 segundos após fechar o pop-up
       setTimeout(() => {
         if (typeof document !== "undefined") {
           document.documentElement.removeAttribute("data-fusion-promo-active");
@@ -150,7 +180,7 @@ export function FusionPassPromoPopup({
     }, 200);
   }, [currentUserId, getActiveStorageKey]);
 
-  // 1. Inicialização unificada: verifica autenticação, pacotes e agenda a abertura de 4s
+  // 1. Carrega sessão e pacotes disponíveis
   useEffect(() => {
     if (
       typeof window !== "undefined" &&
@@ -161,23 +191,9 @@ export function FusionPassPromoPopup({
 
     let isMounted = true;
 
-    async function initPopupAndSchedule() {
+    async function initPopupData() {
       setLoadingPkgs(true);
       try {
-        try {
-          const navEntries = performance.getEntriesByType(
-            "navigation",
-          ) as PerformanceNavigationTiming[];
-          if (navEntries.length > 0 && navEntries[0].type === "reload") {
-            sessionStorage.removeItem(VISITOR_SEEN_KEY);
-            Object.keys(sessionStorage).forEach((k) => {
-              if (k.startsWith(AUTH_SEEN_PREFIX)) {
-                sessionStorage.removeItem(k);
-              }
-            });
-          }
-        } catch {}
-
         const [{ data: sessionData }, { data: pkgsData }] = await Promise.all([
           supabase.auth.getSession(),
           supabase
@@ -240,66 +256,22 @@ export function FusionPassPromoPopup({
             return;
           } catch {}
         }
-
-        const storageKey = getActiveStorageKey(uid);
-        const alreadyDismissed = sessionStorage.getItem(storageKey);
-
-        if (!alreadyDismissed && !hasScheduledInThisMountRef.current) {
-          hasScheduledInThisMountRef.current = true;
-          document.documentElement.setAttribute(
-            "data-fusion-promo-active",
-            "true",
-          );
-
-          timerRef.current = setTimeout(() => {
-            if (!isMounted) return;
-            const checkAgain = sessionStorage.getItem(storageKey);
-            if (!checkAgain) {
-              sessionStorage.setItem(storageKey, "true");
-              openModal("banner");
-            }
-          }, 4000);
-        }
       } catch {
       } finally {
         if (isMounted) setLoadingPkgs(false);
       }
     }
 
-    initPopupAndSchedule();
+    initPopupData();
 
     const { data: authListener } = supabase.auth.onAuthStateChange(
       (event, session) => {
         if (event === "SIGNED_OUT") {
           setIsAuthenticated(false);
           setCurrentUserId(null);
-          try {
-            sessionStorage.removeItem(VISITOR_SEEN_KEY);
-            Object.keys(sessionStorage).forEach((k) => {
-              if (k.startsWith(AUTH_SEEN_PREFIX)) {
-                sessionStorage.removeItem(k);
-              }
-            });
-          } catch {}
         } else if (event === "SIGNED_IN" && session?.user) {
-          const uid = session.user.id;
           setIsAuthenticated(true);
-          setCurrentUserId(uid);
-
-          const authKey = getActiveStorageKey(uid);
-          const alreadySeenAuth = sessionStorage.getItem(authKey);
-
-          if (!alreadySeenAuth) {
-            if (timerRef.current) clearTimeout(timerRef.current);
-            document.documentElement.setAttribute(
-              "data-fusion-promo-active",
-              "true",
-            );
-            timerRef.current = setTimeout(() => {
-              sessionStorage.setItem(authKey, "true");
-              openModal("banner");
-            }, 4000);
-          }
+          setCurrentUserId(session.user.id);
         }
       },
     );
@@ -308,7 +280,10 @@ export function FusionPassPromoPopup({
       if (timerRef.current) clearTimeout(timerRef.current);
       const customEv = e as CustomEvent;
       const targetStep = customEv.detail?.step === "plans" ? "plans" : "banner";
-      openModal(targetStep);
+      if (customEv.detail?.tier) {
+        setSelectedTier(normalizeTier(customEv.detail.tier));
+      }
+      openModal(targetStep, true);
     };
 
     window.addEventListener("open-fusion-pass", handleCustomOpen);
@@ -319,7 +294,46 @@ export function FusionPassPromoPopup({
       window.removeEventListener("open-fusion-pass", handleCustomOpen);
       authListener.subscription.unsubscribe();
     };
-  }, [supabase, openModal, getActiveStorageKey]);
+  }, [supabase, openModal]);
+
+  // 2. Agenda a abertura automática SOMENTE quando não houver modal de avaliação ativo
+  useEffect(() => {
+    if (
+      typeof window !== "undefined" &&
+      window.location.pathname.startsWith("/admin")
+    ) {
+      return;
+    }
+
+    if (suspendAutoOpen || isReviewModalCurrentlyActive()) {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      return;
+    }
+
+    const storageKey = getActiveStorageKey(currentUserId);
+    const alreadyDismissed = sessionStorage.getItem(storageKey);
+
+    if (alreadyDismissed) return;
+
+    timerRef.current = setTimeout(() => {
+      if (suspendRef.current || isReviewModalCurrentlyActive()) return;
+      const checkAgain = sessionStorage.getItem(storageKey);
+      if (!checkAgain) {
+        sessionStorage.setItem(storageKey, "true");
+        openModal("banner", false);
+      }
+    }, 4000);
+
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [suspendAutoOpen, currentUserId, getActiveStorageKey, openModal]);
 
   // Polling automático quando o QR Code PIX da assinatura estiver aberto
   useEffect(() => {
@@ -490,7 +504,6 @@ export function FusionPassPromoPopup({
 
   return (
     <>
-      {/* Adia o banner de instalar aplicativo enquanto o pop-up estiver ativo */}
       <style jsx global>{`
         html[data-fusion-promo-active="true"] [class*="pwa"],
         html[data-fusion-promo-active="true"] [id*="pwa"],
@@ -504,17 +517,15 @@ export function FusionPassPromoPopup({
       <div
         role="dialog"
         aria-modal="true"
-        className={`fixed inset-0 z-[9999] flex items-center justify-center p-4 sm:p-6 transition-opacity duration-200 font-sans ${
+        className={`fixed inset-0 z-[9990] flex items-center justify-center p-4 sm:p-6 transition-opacity duration-200 font-sans ${
           isClosing ? "opacity-0" : "opacity-100"
         }`}
       >
-        {/* Backdrop escurecido SEM onClick (só fecha se clicar no botão X) */}
         <div
           aria-hidden="true"
           className="fixed inset-0 bg-black/65 backdrop-blur-[2px] transition-opacity"
         />
 
-        {/* Card Principal (355px no celular / 395px no banner / 460px nos planos e checkout) */}
         <div
           className={`relative z-10 w-full ${
             step === "banner"
@@ -524,7 +535,6 @@ export function FusionPassPromoPopup({
             isClosing ? "scale-95 opacity-0" : "scale-100 opacity-100"
           }`}
         >
-          {/* Botão Fechar (X) - Único ponto de fechamento do modal */}
           <button
             type="button"
             onClick={handleClose}
@@ -536,9 +546,6 @@ export function FusionPassPromoPopup({
           </button>
 
           {step === "banner" && (
-            /* ================================================================ */
-            /* ETAPA 1: BANNER DE IMPACTO                                       */
-            /* ================================================================ */
             <div className="flex flex-col">
               <div
                 onClick={() => setStep("plans")}
@@ -585,9 +592,6 @@ export function FusionPassPromoPopup({
           )}
 
           {step === "plans" && (
-            /* ================================================================ */
-            /* ETAPA 2: VITRINE DE PLANOS + PÍLULA EXPLICATIVA                  */
-            /* ================================================================ */
             <div className="flex flex-col max-h-[86vh]">
               <div className="px-5 pt-4 pb-3.5 bg-[#FAF7F5] border-b border-stone-200/80">
                 <button
@@ -723,7 +727,6 @@ export function FusionPassPromoPopup({
                   })
                 )}
 
-                {/* Acordeão limpo de Dúvidas Rápidas / Garantias na Vitrine */}
                 <div className="pt-1">
                   <button
                     type="button"
@@ -791,9 +794,6 @@ export function FusionPassPromoPopup({
           )}
 
           {step === "checkout" && selectedPkg && (
-            /* ================================================================ */
-            /* ETAPA 3: CHECKOUT TRANSPARENTE + CARD DE GARANTIAS DO PLANO      */
-            /* ================================================================ */
             <div className="flex flex-col max-h-[88vh]">
               <div className="px-5 pt-4 pb-3.5 bg-[#FAF7F5] border-b border-stone-200/80">
                 <button
@@ -830,7 +830,6 @@ export function FusionPassPromoPopup({
               </div>
 
               <div className="p-4 sm:p-5 overflow-y-auto space-y-3.5 bg-white flex-1">
-                {/* CARD DE GARANTIAS E BENEFÍCIOS DO ASSINANTE (TRANSPARÊNCIA NO CHECKOUT) */}
                 <div className="p-3.5 rounded-2xl bg-[#FAF7F5] border border-[#BF4B24]/20 space-y-2">
                   <p className="text-[11px] font-bold uppercase tracking-wider text-[#BF4B24]">
                     Benefícios garantidos na sua assinatura
@@ -872,7 +871,6 @@ export function FusionPassPromoPopup({
                   </div>
                 </div>
 
-                {/* Seletor PIX vs Cartão */}
                 <div className="grid grid-cols-2 gap-1.5 bg-stone-100 p-1 rounded-xl">
                   <button
                     type="button"

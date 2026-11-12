@@ -29,7 +29,10 @@ import { ProfileTab } from "@/components/profile-tab";
 import { CohostTab } from "@/components/cohost-tab";
 import { NotificationBell } from "@/components/notification-bell";
 import { RoomDetail } from "@/components/room-detail";
-import { ReviewModal } from "@/components/review-modal";
+import {
+  ReviewModal,
+  SKIPPED_REVIEWS_LIST_KEY,
+} from "@/components/review-modal";
 import { PushRegistry } from "@/components/push-registry";
 import { FusionPassPromoPopup } from "@/components/fusion-pass-promo-popup";
 
@@ -68,8 +71,6 @@ function DashboardContent() {
     searchParams.get("room") ||
     searchParams.get("door");
 
-  // TRAVA PERMANENTE DE SESSÃO DE PORTA:
-  // Não volta para false quando a URL é limpa pelo BookingsTab, bloqueando 100% dos pop-ups!
   const [isDoorScanSession, setIsDoorScanSession] = useState<boolean>(() => {
     if (scanParam) return true;
     if (typeof window !== "undefined") {
@@ -92,7 +93,6 @@ function DashboardContent() {
     }
   }, [scanParam, isDoorScanSession]);
 
-  // Ativa atributo global no body para silenciar qualquer modal/banner de instalação PWA externo
   useEffect(() => {
     if (typeof document === "undefined") return;
     if (isDoorScanSession) {
@@ -112,6 +112,7 @@ function DashboardContent() {
   const [pendingReviewBooking, setPendingReviewBooking] = useState<any | null>(
     null,
   );
+  const [isReviewCheckDone, setIsReviewCheckDone] = useState(false);
   const [isCohost, setIsCohost] = useState(false);
   const [logoError, setLogoError] = useState(false);
 
@@ -196,7 +197,6 @@ function DashboardContent() {
   }, [activeTab, scanParam, isDoorScanSession]);
 
   const handleTabChange = (tab: TabType) => {
-    // Se o médico mudar manualmente para outra aba (ex: Buscar), encerramos o modo restrito da porta
     if (tab !== "bookings" && isDoorScanSession) {
       setIsDoorScanSession(false);
       if (typeof window !== "undefined") {
@@ -324,8 +324,6 @@ function DashboardContent() {
           specialty: profile.specialty || null,
         });
 
-        const todayStr = new Date().toISOString().split("T")[0];
-
         if (user.email) {
           await supabase
             .from("room_contracts")
@@ -339,10 +337,7 @@ function DashboardContent() {
             .from("room_contracts")
             .select("id, room_id")
             .eq("specialist_id", user.id)
-            .eq("status", "active")
-            .eq("allow_sublease", true)
-            .lte("start_date", todayStr)
-            .gte("end_date", todayStr)
+            .in("status", ["active", "pending_signature"])
             .limit(1),
           supabase
             .from("wallet_transactions")
@@ -402,7 +397,6 @@ function DashboardContent() {
           masterCredits,
         });
 
-        // BLOQUEIO TOTAL DE POP-UP DE AVALIAÇÃO ANTIGA QUANDO ENTROU VIA TAG NFC / QR
         const isScanActiveNow =
           isDoorScanSession ||
           (typeof window !== "undefined" &&
@@ -411,37 +405,87 @@ function DashboardContent() {
 
         if (!isScanActiveNow) {
           const now = new Date().toISOString();
-          const { data: bookings } = await supabase
-            .from("bookings")
-            .select(`id, room_id, start_time, end_time, status, rooms ( name )`)
-            .eq("user_id", user.id)
-            .in("status", ["confirmed", "completed"])
-            .lt("end_time", now)
-            .order("end_time", { ascending: false })
-            .limit(5);
 
-          if (bookings && bookings.length > 0) {
-            for (const booking of bookings) {
-              const isSkipped = localStorage.getItem(
-                `fusion_review_skipped_${booking.id}`,
-              );
-              if (isSkipped === "true") continue;
+          const [bookingsRes, userReviewsRes] = await Promise.all([
+            supabase
+              .from("bookings")
+              .select(
+                `id, room_id, start_time, end_time, status, contract_id, rooms ( name )`,
+              )
+              .eq("user_id", user.id)
+              .is("contract_id", null)
+              .in("status", ["confirmed", "completed"])
+              .lt("end_time", now)
+              .order("end_time", { ascending: false })
+              .limit(15),
+            supabase
+              .from("reviews")
+              .select("id, booking_id, room_id")
+              .eq("guest_id", user.id),
+          ]);
 
-              const { data: reviewData } = await supabase
-                .from("reviews")
-                .select("id")
-                .eq("booking_id", booking.id)
-                .maybeSingle();
+          const pastBookings = bookingsRes.data || [];
+          const existingReviews = userReviewsRes.data || [];
 
-              if (!reviewData) {
-                setPendingReviewBooking(booking);
-                break;
+          const reviewedBookingIds = new Set<string>(
+            existingReviews.map((r: any) => r.booking_id).filter(Boolean),
+          );
+
+          // Conjunto unificado de IDs e sessões já puladas (LocalStorage + User Metadata do Supabase)
+          const skippedSet = new Set<string>(
+            Array.isArray(user.user_metadata?.skipped_review_ids)
+              ? user.user_metadata.skipped_review_ids
+              : [],
+          );
+
+          try {
+            const rawLocalList = localStorage.getItem(SKIPPED_REVIEWS_LIST_KEY);
+            if (rawLocalList) {
+              const parsedLocal = JSON.parse(rawLocalList);
+              if (Array.isArray(parsedLocal)) {
+                parsedLocal.forEach((k) => skippedSet.add(k));
               }
             }
+          } catch {}
+
+          // Agrupa reservas de múltiplas horas da mesma sala e mesmo dia em uma única sessão
+          const sessionsMap = new Map<string, any[]>();
+          pastBookings.forEach((b: any) => {
+            const dayKey = `${b.room_id}_${String(b.start_time || "").slice(0, 10)}`;
+            const group = sessionsMap.get(dayKey) || [];
+            group.push(b);
+            sessionsMap.set(dayKey, group);
+          });
+
+          for (const [dayKey, groupBookings] of sessionsMap.entries()) {
+            const isSessionHandled =
+              skippedSet.has(dayKey) ||
+              localStorage.getItem(
+                `fusion_review_skipped_session_${dayKey}`,
+              ) === "true" ||
+              groupBookings.some(
+                (b: any) =>
+                  reviewedBookingIds.has(b.id) ||
+                  skippedSet.has(b.id) ||
+                  localStorage.getItem(`fusion_review_skipped_${b.id}`) ===
+                    "true",
+              );
+
+            if (isSessionHandled) continue;
+
+            // Encontrou a sessão mais recente ainda não avaliada nem pulada
+            const primaryBooking = groupBookings[groupBookings.length - 1];
+            setPendingReviewBooking({
+              ...primaryBooking,
+              siblingBookingIds: groupBookings.map((b: any) => b.id),
+            });
+            break;
           }
         }
       } catch (error) {
         console.error("Erro ao inicializar o dashboard:", error);
+      } finally {
+        setIsReviewCheckDone(true);
       }
     }
 
@@ -489,11 +533,6 @@ function DashboardContent() {
   const nextUpgradeTier = getNextUpgradeTier(walletState.activeTier);
   const nextUpgradeTierName = formatTierLabel(nextUpgradeTier);
 
-  const promoPopupProps: any = {
-    isSubscriber: walletState.isSubscriber,
-    currentTier: walletState.activeTier,
-  };
-
   return (
     <div className="flex min-h-svh flex-col bg-[#FAF7F4] font-sans">
       <style
@@ -517,7 +556,6 @@ function DashboardContent() {
                 border-radius: 0 !important;
               }
             }
-            /* Bloqueia qualquer modal ou banner de instalação externo durante a sessão da porta NFC/QR */
             body[data-door-scan-lock="true"] [role="dialog"]:not([data-door-allowed="true"]),
             body[data-door-scan-lock="true"] [data-radix-portal]:not(:has([data-door-allowed="true"])) {
               display: none !important;
@@ -528,10 +566,16 @@ function DashboardContent() {
         }}
       />
 
-      {/* NUNCA RENDERIZA POP-UPS DE DESCONTO, PUSH/PWA OU REVIEW ANTIGO NO SCAN DE PORTA */}
+      {/* O Pop-up do Fusion Pass+ fica suspenso enquanto a verificação de avaliação roda ou se o modal de avaliação estiver aberto */}
       {!isDoorScanSession && (
         <>
-          <FusionPassPromoPopup {...promoPopupProps} />
+          <FusionPassPromoPopup
+            isSubscriber={walletState.isSubscriber}
+            currentTier={walletState.activeTier}
+            suspendAutoOpen={
+              !isReviewCheckDone || Boolean(pendingReviewBooking)
+            }
+          />
           <PushRegistry />
         </>
       )}
@@ -661,7 +705,6 @@ function DashboardContent() {
               {isCohost && (
                 <DesktopNavLink
                   label="Minha Sala"
-                  badge="80%"
                   isActive={activeTab === "cohost"}
                   onClick={() => handleTabChange("cohost")}
                 />
@@ -893,6 +936,7 @@ function DashboardContent() {
           isOpen={!!pendingReviewBooking}
           onClose={() => setPendingReviewBooking(null)}
           bookingId={pendingReviewBooking?.id || ""}
+          siblingBookingIds={pendingReviewBooking?.siblingBookingIds || []}
           roomId={pendingReviewBooking?.room_id || ""}
           roomName={pendingReviewBooking?.rooms?.name || ""}
           bookingDate={pendingReviewBooking?.start_time}
