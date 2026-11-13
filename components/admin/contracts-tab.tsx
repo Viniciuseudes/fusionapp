@@ -16,19 +16,15 @@ import {
   Edit3,
   ExternalLink,
   Loader2,
-  Users,
   Percent,
-  Clock,
   FileCheck2,
   Wallet,
   CalendarClock,
   Layers,
-  Lock,
-  QrCode,
-  Barcode,
-  CreditCard,
   Copy,
   ArrowLeft,
+  X,
+  Clock,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -62,12 +58,30 @@ export interface ContractPricingTier {
   session_value?: number;
 }
 
-interface ContractScheduleConfig {
-  daysOfWeek: number[];
-  shifts: ("morning" | "afternoon" | "night" | "fullday")[];
+export interface ContractScheduleRule {
+  id: string;
+  dayOfWeek: number; // 0 (Dom) a 6 (Sáb)
+  shift: "fullday" | "morning" | "afternoon" | "night" | "custom";
   startHour: number;
   endHour: number;
+}
+
+export interface ContractAttachment {
+  id: string;
+  url: string;
+  filename: string;
+  uploaded_at: string;
+}
+
+interface ContractScheduleConfig {
+  daysOfWeek: number[];
+  shifts: ("morning" | "afternoon" | "night" | "fullday" | "custom")[];
+  startHour: number;
+  endHour: number;
+  scheduleRules?: ContractScheduleRule[];
+  day_hours?: Record<string, number[]>;
   pricingTiers?: ContractPricingTier[];
+  attachments?: ContractAttachment[];
   fine_pct?: number;
   interest_pct?: number;
   paid_dates?: Record<string, string>;
@@ -124,14 +138,35 @@ const WEEK_DAYS = [
 
 const SHIFT_OPTIONS = [
   {
-    id: "fullday",
+    id: "fullday" as const,
     label: "Diária Completa (08h às 20h)",
     start: 8,
     end: 20,
   },
-  { id: "morning", label: "Manhã (08h às 12h)", start: 8, end: 12 },
-  { id: "afternoon", label: "Tarde (13h às 18h)", start: 13, end: 18 },
-  { id: "night", label: "Noite (18h às 22h)", start: 18, end: 22 },
+  {
+    id: "morning" as const,
+    label: "Manhã (08h às 12h)",
+    start: 8,
+    end: 12,
+  },
+  {
+    id: "afternoon" as const,
+    label: "Tarde (13h às 18h)",
+    start: 13,
+    end: 18,
+  },
+  {
+    id: "night" as const,
+    label: "Noite (18h às 22h)",
+    start: 18,
+    end: 22,
+  },
+  {
+    id: "custom" as const,
+    label: "Horário Personalizado",
+    start: 8,
+    end: 14,
+  },
 ];
 
 const formatBRL = (val: number) =>
@@ -140,6 +175,99 @@ const formatBRL = (val: number) =>
     maximumFractionDigits: 2,
   });
 
+function extractScheduleRulesFromConfig(
+  cfg?: Partial<ContractScheduleConfig> | null,
+): ContractScheduleRule[] {
+  if (!cfg) {
+    return [
+      {
+        id: "default_seg",
+        dayOfWeek: 1,
+        shift: "morning",
+        startHour: 8,
+        endHour: 12,
+      },
+    ];
+  }
+
+  if (Array.isArray(cfg.scheduleRules) && cfg.scheduleRules.length > 0) {
+    return cfg.scheduleRules.map((r, idx) => ({
+      id: r.id || `rule_${r.dayOfWeek}_${r.startHour}_${idx}`,
+      dayOfWeek: Number(r.dayOfWeek),
+      shift: r.shift || "custom",
+      startHour: Number(r.startHour ?? 8),
+      endHour: Number(r.endHour ?? 12),
+    }));
+  }
+
+  const legacyDays =
+    Array.isArray(cfg.daysOfWeek) && cfg.daysOfWeek.length > 0
+      ? cfg.daysOfWeek
+      : [1];
+  const legacyShift = (cfg.shifts?.[0] || "fullday") as
+    "fullday" | "morning" | "afternoon" | "night" | "custom";
+  const sH = Number(cfg.startHour ?? 8);
+  const eH = Number(cfg.endHour ?? 20);
+
+  return legacyDays.map((d, idx) => ({
+    id: `legacy_${d}_${idx}`,
+    dayOfWeek: Number(d),
+    shift: legacyShift,
+    startHour: sH,
+    endHour: eH,
+  }));
+}
+
+function buildDayHoursMapFromRules(
+  rules: ContractScheduleRule[],
+): Record<string, number[]> {
+  const map: Record<string, number[]> = {
+    "0": [],
+    "1": [],
+    "2": [],
+    "3": [],
+    "4": [],
+    "5": [],
+    "6": [],
+  };
+
+  rules.forEach((r) => {
+    const key = String(r.dayOfWeek);
+    if (!map[key]) map[key] = [];
+    const startH = Math.max(6, Math.min(22, Number(r.startHour)));
+    const endH = Math.max(startH + 1, Math.min(23, Number(r.endHour)));
+    for (let h = startH; h < endH; h++) {
+      if (!map[key].includes(h)) {
+        map[key].push(h);
+      }
+    }
+    map[key].sort((a, b) => a - b);
+  });
+
+  return map;
+}
+
+function extractContractAttachments(
+  c?: RoomContract | null,
+): ContractAttachment[] {
+  if (!c) return [];
+  const savedList = c.schedule_config?.attachments;
+  if (Array.isArray(savedList) && savedList.length > 0) {
+    return savedList;
+  }
+  if (c.pdf_url) {
+    return [
+      {
+        id: `legacy_pdf_${c.id}`,
+        url: c.pdf_url,
+        filename: c.pdf_filename || "Contrato_Assinado.pdf",
+        uploaded_at: c.created_at || new Date().toISOString(),
+      },
+    ];
+  }
+  return [];
+}
+
 export function AdminContractsTab({
   mode = "admin",
   preselectedRoomId,
@@ -147,7 +275,6 @@ export function AdminContractsTab({
   const [supabase] = useState(() => createClient());
   const { toast } = useToast();
 
-  // Controle de navegação em Tela Cheia: "list" vs "form"
   const [viewMode, setViewMode] = useState<"list" | "form">("list");
 
   const [loading, setLoading] = useState(true);
@@ -168,8 +295,22 @@ export function AdminContractsTab({
   const [editingContract, setEditingContract] = useState<RoomContract | null>(
     null,
   );
-  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [pdfFiles, setPdfFiles] = useState<File[]>([]);
+  const [existingAttachments, setExistingAttachments] = useState<
+    ContractAttachment[]
+  >([]);
   const [specSearch, setSpecSearch] = useState("");
+
+  // Lista de janelas de horário por dia da semana (Segunda pode ter um horário, Terça outro, ou 2 turnos no mesmo dia)
+  const [scheduleRules, setScheduleRules] = useState<ContractScheduleRule[]>([
+    {
+      id: "init_seg_morning",
+      dayOfWeek: 1,
+      shift: "morning",
+      startHour: 8,
+      endHour: 12,
+    },
+  ]);
 
   const [pricingTiers, setPricingTiers] = useState<
     {
@@ -214,7 +355,7 @@ export function AdminContractsTab({
     specialist_document: "",
     specialist_email: "",
     specialist_phone: "",
-    contract_type: "fixed_daily" as
+    contract_type: "fixed_shift" as
       "monthly_exclusive" | "fixed_shift" | "fixed_daily" | "custom_daily",
     status: "active" as
       "active" | "pending_signature" | "expired" | "cancelled",
@@ -233,10 +374,6 @@ export function AdminContractsTab({
     host_split_pct: "85",
     allow_sublease: false,
     cohost_split_pct: "80",
-    daysOfWeek: [1] as number[],
-    selectedShift: "fullday" as "fullday" | "morning" | "afternoon" | "night",
-    startHour: 8,
-    endHour: 20,
     notes: "",
   });
 
@@ -369,6 +506,8 @@ export function AdminContractsTab({
                 })()
               : c.schedule_config || {};
 
+          const extractedRules = extractScheduleRulesFromConfig(rawSched);
+
           return {
             ...c,
             due_day: Math.min(31, Math.max(1, Number(c.due_day || 8))),
@@ -386,9 +525,11 @@ export function AdminContractsTab({
               startHour: 8,
               endHour: 20,
               pricingTiers: [],
+              attachments: [],
               fine_pct: 2,
               interest_pct: 1,
               ...rawSched,
+              scheduleRules: extractedRules,
             },
           };
         },
@@ -405,6 +546,135 @@ export function AdminContractsTab({
     } finally {
       setLoading(false);
     }
+  };
+
+  // ==========================================================================
+  // CLIQUE NAS PÍLULAS DOS DIAS DA SEMANA + CONFIGURAÇÃO INDIVIDUAL POR DIA
+  // ==========================================================================
+  const handleToggleDayPill = (dayId: number) => {
+    setScheduleRules((prev) => {
+      const hasThisDay = prev.some((r) => Number(r.dayOfWeek) === dayId);
+      if (hasThisDay) {
+        // Se só tem 1 dia ativo e não é sublocação, mantém pelo menos 1
+        const activeDaysSet = new Set(prev.map((r) => Number(r.dayOfWeek)));
+        if (activeDaysSet.size <= 1 && !form.allow_sublease) {
+          return prev;
+        }
+        return prev.filter((r) => Number(r.dayOfWeek) !== dayId);
+      }
+
+      // Ao ativar um novo dia (ex: Terça-feira), cria a linha de horário independente dele
+      const defaultShift =
+        form.contract_type === "fixed_daily" ? "fullday" : "morning";
+      const defaultStart = 8;
+      const defaultEnd = form.contract_type === "fixed_daily" ? 20 : 12;
+
+      return [
+        ...prev,
+        {
+          id: `rule_${dayId}_${Date.now()}`,
+          dayOfWeek: dayId,
+          shift: defaultShift,
+          startHour: defaultStart,
+          endHour: defaultEnd,
+        },
+      ];
+    });
+  };
+
+  // Permite adicionar um 2º ou 3º turno no mesmo dia (ex: Segunda Manhã + Segunda Tarde)
+  const handleAddExtraShiftOnSameDay = (dayId: number) => {
+    setScheduleRules((prev) => {
+      const existingOnDay = prev.filter((r) => Number(r.dayOfWeek) === dayId);
+      const hasMorning = existingOnDay.some((r) => r.startHour < 12);
+      const hasAfternoon = existingOnDay.some(
+        (r) => r.startHour >= 12 && r.startHour < 18,
+      );
+
+      let nextShift: ContractScheduleRule["shift"] = "afternoon";
+      let nextStart = 13;
+      let nextEnd = 18;
+
+      if (!hasMorning) {
+        nextShift = "morning";
+        nextStart = 8;
+        nextEnd = 12;
+      } else if (!hasAfternoon) {
+        nextShift = "afternoon";
+        nextStart = 13;
+        nextEnd = 18;
+      } else {
+        nextShift = "night";
+        nextStart = 18;
+        nextEnd = 22;
+      }
+
+      return [
+        ...prev,
+        {
+          id: `rule_${dayId}_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+          dayOfWeek: dayId,
+          shift: nextShift,
+          startHour: nextStart,
+          endHour: nextEnd,
+        },
+      ];
+    });
+  };
+
+  // Altera a Faixa de Turno (Manhã, Tarde, Noite, Diária) apenas daquela linha específica
+  const handleRuleShiftSelectChange = (
+    ruleId: string,
+    shiftId: "fullday" | "morning" | "afternoon" | "night" | "custom",
+  ) => {
+    const found = SHIFT_OPTIONS.find((s) => s.id === shiftId);
+    setScheduleRules((prev) =>
+      prev.map((r) =>
+        r.id === ruleId
+          ? {
+              ...r,
+              shift: shiftId,
+              startHour:
+                shiftId === "custom" ? r.startHour : found ? found.start : 8,
+              endHour:
+                shiftId === "custom" ? r.endHour : found ? found.end : 12,
+            }
+          : r,
+      ),
+    );
+  };
+
+  // Altera a Hora Inicial ou Hora Final apenas daquela linha específica
+  const handleRuleHourInputChange = (
+    ruleId: string,
+    field: "startHour" | "endHour",
+    rawVal: string,
+  ) => {
+    const numVal = Math.max(0, Math.min(23, Number(rawVal) || 0));
+    setScheduleRules((prev) =>
+      prev.map((r) => {
+        if (r.id !== ruleId) return r;
+        const nextStart = field === "startHour" ? numVal : r.startHour;
+        const nextEnd = field === "endHour" ? numVal : r.endHour;
+
+        let matchedShift: ContractScheduleRule["shift"] = "custom";
+        if (nextStart === 8 && nextEnd === 12) matchedShift = "morning";
+        else if (nextStart === 13 && nextEnd === 18) matchedShift = "afternoon";
+        else if (nextStart === 18 && nextEnd === 22) matchedShift = "night";
+        else if (nextStart === 8 && nextEnd === 20) matchedShift = "fullday";
+
+        return {
+          ...r,
+          startHour: nextStart,
+          endHour: nextEnd,
+          shift: matchedShift,
+        };
+      }),
+    );
+  };
+
+  const handleRemoveSingleRule = (ruleId: string) => {
+    setScheduleRules((prev) => prev.filter((r) => r.id !== ruleId));
   };
 
   const activeCohostContractByRoomId = useMemo(() => {
@@ -453,6 +723,13 @@ export function AdminContractsTab({
     totalTiers: number;
   } => {
     const tiers = c.schedule_config?.pricingTiers || [];
+    const rulesCount = Math.max(
+      1,
+      c.schedule_config?.scheduleRules?.length ||
+        c.schedule_config?.daysOfWeek?.length ||
+        1,
+    );
+
     if (tiers.length === 0) {
       return {
         contractValue: Number(c.contract_value || 0),
@@ -466,10 +743,7 @@ export function AdminContractsTab({
       (t) => targetDateStr >= t.start_date && targetDateStr <= t.end_date,
     );
     const chosenTier = matchedIdx >= 0 ? tiers[matchedIdx] : tiers[0];
-    const occurrencesPerMonth = Math.max(
-      1,
-      (c.schedule_config?.daysOfWeek?.length || 1) * 4,
-    );
+    const occurrencesPerMonth = Math.max(1, rulesCount * 4);
     const cVal = Number(chosenTier.contract_value || c.contract_value || 0);
     const sVal =
       Number(chosenTier.session_value) > 0
@@ -487,11 +761,11 @@ export function AdminContractsTab({
     };
   };
 
-  const calculateContractOccurrenceDates = (
+  const calculateRuleOccurrencesInInterval = (
     startStr: string,
     endStr: string,
-    daysOfWeek: number[],
-  ): Date[] => {
+    rules: ContractScheduleRule[],
+  ): { dateObj: Date; rule: ContractScheduleRule }[] => {
     try {
       const start = parseISO(startStr);
       const end = parseISO(endStr);
@@ -501,16 +775,30 @@ export function AdminContractsTab({
       if (differenceInDays(end, start) > 366) return [];
 
       const allDays = eachDayOfInterval({ start, end });
-      return allDays.filter((d) => daysOfWeek.includes(getDay(d)));
+      const results: { dateObj: Date; rule: ContractScheduleRule }[] = [];
+
+      allDays.forEach((d) => {
+        const dow = getDay(d);
+        const matchingRules = rules.filter((r) => Number(r.dayOfWeek) === dow);
+        matchingRules.forEach((r) => {
+          results.push({ dateObj: d, rule: r });
+        });
+      });
+
+      return results;
     } catch {
       return [];
     }
   };
 
-  const previewDates = calculateContractOccurrenceDates(
-    form.start_date,
-    form.end_date,
-    form.daysOfWeek,
+  const previewRuleOccurrences = useMemo(
+    () =>
+      calculateRuleOccurrencesInInterval(
+        form.start_date,
+        form.end_date,
+        scheduleRules,
+      ),
+    [form.start_date, form.end_date, scheduleRules],
   );
 
   const getComputedSessionValueForAmount = (
@@ -521,13 +809,13 @@ export function AdminContractsTab({
     if (contractValNum <= 0) return 0;
 
     if (form.billing_cycle === "upfront") {
-      return previewDates.length > 0
-        ? contractValNum / previewDates.length
+      return previewRuleOccurrences.length > 0
+        ? contractValNum / previewRuleOccurrences.length
         : contractValNum;
     }
 
-    const occurrencesPerMonth = Math.max(1, form.daysOfWeek.length * 4);
-    return contractValNum / occurrencesPerMonth;
+    const shiftsPerMonth = Math.max(1, scheduleRules.length * 4);
+    return contractValNum / shiftsPerMonth;
   };
 
   const getComputedSessionValue = () => {
@@ -665,30 +953,20 @@ export function AdminContractsTab({
     }
 
     const cfg = contract.schedule_config || {
-      daysOfWeek: [1, 2, 3, 4, 5, 6, 0],
-      shifts: ["fullday"],
+      daysOfWeek: [1],
+      shifts: ["morning"],
       startHour: 8,
-      endHour: 20,
+      endHour: 12,
       pricingTiers: [],
     };
 
-    const startH = Number(cfg.startHour ?? 8);
-    const endH = Number(cfg.endHour ?? 20);
+    const rules = extractScheduleRulesFromConfig(cfg);
+    const dayHoursMap = buildDayHoursMapFromRules(rules);
 
     if (
       contract.contract_type === "monthly_exclusive" &&
       contract.allow_sublease
     ) {
-      const openSubleaseDays = Array.isArray(cfg.daysOfWeek)
-        ? cfg.daysOfWeek
-        : [];
-      const openHoursSlots: string[] = [];
-      for (let h = startH; h < endH; h++) {
-        const sH = String(h).padStart(2, "0");
-        const eH = String(h + 1).padStart(2, "0");
-        openHoursSlots.push(`${sH}h-${eH}h`);
-      }
-
       const { data: currentRoom } = await supabase
         .from("rooms")
         .select("availability")
@@ -714,14 +992,24 @@ export function AdminContractsTab({
         { day: 0, name: "Domingo" },
       ];
 
+      let openDaysCount = 0;
       const updatedWeekConfig = weekdayNames.map((wd) => {
-        const isOpenForSublease = openSubleaseDays.includes(wd.day);
+        const hoursForThisDay = dayHoursMap[String(wd.day)] || [];
+        const isOpenForSublease = hoursForThisDay.length > 0;
+        if (isOpenForSublease) openDaysCount += 1;
+
+        const openHoursSlots = hoursForThisDay.map((h) => {
+          const sH = String(h).padStart(2, "0");
+          const eH = String(h + 1).padStart(2, "0");
+          return `${sH}h-${eH}h`;
+        });
+
         return {
           day: wd.day,
           dayName: wd.name,
           enabled: isOpenForSublease,
           rentalType: "hourly",
-          availableHours: isOpenForSublease ? openHoursSlots : [],
+          availableHours: openHoursSlots,
           selectedShifts: [],
         };
       });
@@ -753,32 +1041,27 @@ export function AdminContractsTab({
         } catch {}
       }
 
-      return openSubleaseDays.length;
+      return openDaysCount;
     }
 
-    const effectiveDays =
+    const effectiveRules: ContractScheduleRule[] =
       contract.contract_type === "monthly_exclusive" && !contract.allow_sublease
-        ? [1, 2, 3, 4, 5, 6, 0]
-        : cfg.daysOfWeek || [1];
+        ? [1, 2, 3, 4, 5, 6, 0].map((d) => ({
+            id: `excl_${d}`,
+            dayOfWeek: d,
+            shift: "fullday",
+            startHour: 6,
+            endHour: 23,
+          }))
+        : rules;
 
-    const occurrenceDates = calculateContractOccurrenceDates(
+    const ruleOccurrences = calculateRuleOccurrencesInInterval(
       contract.start_date,
       contract.end_date,
-      effectiveDays,
+      effectiveRules,
     );
 
-    if (occurrenceDates.length === 0) return 0;
-
-    const effectiveStartH =
-      contract.contract_type === "monthly_exclusive" && !contract.allow_sublease
-        ? 6
-        : startH;
-    const effectiveEndH =
-      contract.contract_type === "monthly_exclusive" && !contract.allow_sublease
-        ? 23
-        : endH;
-
-    const durationHours = Math.max(1, effectiveEndH - effectiveStartH);
+    if (ruleOccurrences.length === 0) return 0;
 
     const targetUserId =
       contract.specialist_id ||
@@ -788,7 +1071,7 @@ export function AdminContractsTab({
 
     if (!targetUserId) return 0;
 
-    const defaultOccurrencesPerMonth = Math.max(1, effectiveDays.length * 4);
+    const defaultOccurrencesPerMonth = Math.max(1, effectiveRules.length * 4);
     const baseSessionVal =
       Number(contract.session_value) > 0
         ? Number(contract.session_value)
@@ -814,10 +1097,10 @@ export function AdminContractsTab({
       if (tierContractVal <= 0) return baseSessionVal;
 
       if (contract.billing_cycle === "upfront") {
-        const tierOccurrences = calculateContractOccurrenceDates(
+        const tierOccurrences = calculateRuleOccurrencesInInterval(
           matchingTier.start_date,
           matchingTier.end_date,
-          effectiveDays,
+          effectiveRules,
         );
         return tierOccurrences.length > 0
           ? tierContractVal / tierOccurrences.length
@@ -830,13 +1113,14 @@ export function AdminContractsTab({
     const bookingStatus =
       contract.status === "pending_signature" ? "pending_payment" : "confirmed";
 
-    const bookingsPayload = occurrenceDates.map((dateObj) => {
+    const bookingsPayload = ruleOccurrences.map(({ dateObj, rule }) => {
       const startTime = new Date(dateObj);
-      startTime.setHours(effectiveStartH, 0, 0, 0);
+      startTime.setHours(rule.startHour, 0, 0, 0);
 
       const endTime = new Date(dateObj);
-      endTime.setHours(effectiveEndH, 0, 0, 0);
+      endTime.setHours(rule.endHour, 0, 0, 0);
 
+      const durationHours = Math.max(1, rule.endHour - rule.startHour);
       const dateSpecificVal = resolveSessionValueForDate(dateObj);
 
       return {
@@ -868,7 +1152,7 @@ export function AdminContractsTab({
     roomId: string,
   ): Promise<{ url: string; filename: string }> => {
     const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const filePath = `${roomId}/${Date.now()}_${cleanName}`;
+    const filePath = `${roomId}/${Date.now()}_${Math.random().toString(36).slice(2, 5)}_${cleanName}`;
 
     const { error: uploadErr } = await supabase.storage
       .from("contracts")
@@ -892,12 +1176,26 @@ export function AdminContractsTab({
 
   const handleQuickPdfUpload = async (
     contract: RoomContract,
-    file: File | undefined,
+    filesArray: File[],
   ) => {
-    if (!file) return;
+    if (!filesArray || filesArray.length === 0) return;
     setUploadingPdfId(contract.id);
     try {
-      const uploaded = await uploadContractPdf(file, contract.room_id);
+      const currentAttachments = extractContractAttachments(contract);
+      const newlyUploaded: ContractAttachment[] = [];
+
+      for (const file of filesArray) {
+        const uploaded = await uploadContractPdf(file, contract.room_id);
+        newlyUploaded.push({
+          id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          url: uploaded.url,
+          filename: uploaded.filename,
+          uploaded_at: new Date().toISOString(),
+        });
+      }
+
+      const mergedAttachments = [...currentAttachments, ...newlyUploaded];
+      const primaryPdf = mergedAttachments[0] || null;
 
       const newStatus =
         contract.status === "pending_signature" ? "active" : contract.status;
@@ -905,8 +1203,12 @@ export function AdminContractsTab({
       const { error } = await supabase
         .from("room_contracts")
         .update({
-          pdf_url: uploaded.url,
-          pdf_filename: uploaded.filename,
+          pdf_url: primaryPdf ? primaryPdf.url : null,
+          pdf_filename: primaryPdf ? primaryPdf.filename : null,
+          schedule_config: {
+            ...contract.schedule_config,
+            attachments: mergedAttachments,
+          },
           status: newStatus,
           updated_at: new Date().toISOString(),
         })
@@ -915,8 +1217,11 @@ export function AdminContractsTab({
       if (error) throw error;
 
       toast({
-        title: "Contrato PDF anexado",
-        description: `Arquivo "${uploaded.filename}" salvo com sucesso.`,
+        title:
+          newlyUploaded.length > 1
+            ? `${newlyUploaded.length} documentos anexados`
+            : "Documento PDF adicionado ao contrato",
+        description: `Total de ${mergedAttachments.length} arquivo(s) vinculado(s) a este contrato.`,
       });
 
       loadInitialData();
@@ -928,6 +1233,42 @@ export function AdminContractsTab({
       });
     } finally {
       setUploadingPdfId(null);
+    }
+  };
+
+  const handleRemoveContractAttachment = async (
+    contract: RoomContract,
+    attachmentId: string,
+  ) => {
+    if (!confirm("Remover este documento PDF do contrato?")) return;
+    try {
+      const remaining = extractContractAttachments(contract).filter(
+        (a) => a.id !== attachmentId,
+      );
+      const primaryPdf = remaining[0] || null;
+
+      const { error } = await supabase
+        .from("room_contracts")
+        .update({
+          pdf_url: primaryPdf ? primaryPdf.url : null,
+          pdf_filename: primaryPdf ? primaryPdf.filename : null,
+          schedule_config: {
+            ...contract.schedule_config,
+            attachments: remaining,
+          },
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", contract.id);
+
+      if (error) throw error;
+      toast({ title: "Documento removido do contrato" });
+      loadInitialData();
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro ao remover PDF",
+        description: err.message,
+      });
     }
   };
 
@@ -1089,12 +1430,23 @@ export function AdminContractsTab({
 
   const openCreateFormPage = () => {
     setEditingContract(null);
-    setPdfFile(null);
+    setPdfFiles([]);
+    setExistingAttachments([]);
     setSpecSearch("");
     setPricingTiers([]);
 
     const defaultRoomId = preselectedRoomId || rooms[0]?.id || "";
     const roomHasActiveCohost = activeCohostContractByRoomId.has(defaultRoomId);
+
+    setScheduleRules([
+      {
+        id: `init_${Date.now()}`,
+        dayOfWeek: 1,
+        shift: "morning",
+        startHour: 8,
+        endHour: 12,
+      },
+    ]);
 
     setForm({
       room_id: defaultRoomId,
@@ -1103,7 +1455,7 @@ export function AdminContractsTab({
       specialist_document: "",
       specialist_email: "",
       specialist_phone: "",
-      contract_type: "fixed_daily",
+      contract_type: "fixed_shift",
       status: "active",
       start_date: format(new Date(), "yyyy-MM-dd"),
       end_date: format(
@@ -1120,10 +1472,6 @@ export function AdminContractsTab({
       host_split_pct: roomHasActiveCohost ? "80" : "85",
       allow_sublease: false,
       cohost_split_pct: "80",
-      daysOfWeek: [1],
-      selectedShift: "fullday",
-      startHour: 8,
-      endHour: 20,
       notes: "",
     });
     setViewMode("form");
@@ -1131,10 +1479,9 @@ export function AdminContractsTab({
 
   const openEditFormPage = (c: RoomContract) => {
     setEditingContract(c);
-    setPdfFile(null);
+    setPdfFiles([]);
+    setExistingAttachments(extractContractAttachments(c));
     setSpecSearch("");
-    const shiftId = (c.schedule_config?.shifts?.[0] || "fullday") as
-      "fullday" | "morning" | "afternoon" | "night";
 
     const fusionPct = Number(c.platform_fee_pct ?? 15);
     const hostPct =
@@ -1152,6 +1499,9 @@ export function AdminContractsTab({
       }),
     );
     setPricingTiers(savedTiers);
+
+    const rules = extractScheduleRulesFromConfig(c.schedule_config);
+    setScheduleRules(rules);
 
     setForm({
       room_id: c.room_id,
@@ -1174,10 +1524,6 @@ export function AdminContractsTab({
       host_split_pct: String(hostPct),
       allow_sublease: Boolean(c.allow_sublease),
       cohost_split_pct: String(c.cohost_split_pct ?? 80),
-      daysOfWeek: c.schedule_config?.daysOfWeek || [1],
-      selectedShift: shiftId,
-      startHour: c.schedule_config?.startHour ?? 8,
-      endHour: c.schedule_config?.endHour ?? 20,
       notes: c.notes || "",
     });
     setViewMode("form");
@@ -1220,6 +1566,22 @@ export function AdminContractsTab({
     }
 
     const isSubContractUnderCohost = Boolean(parentCohostForFormRoom);
+    const finalAllowSublease =
+      !isSubContractUnderCohost && form.contract_type === "monthly_exclusive"
+        ? form.allow_sublease
+        : false;
+
+    const isFullBlockedExclusive =
+      form.contract_type === "monthly_exclusive" && !finalAllowSublease;
+
+    if (!isFullBlockedExclusive && scheduleRules.length === 0) {
+      return toast({
+        variant: "destructive",
+        title: "Selecione ao menos um dia da semana",
+        description:
+          "Clique nos dias da semana que farão parte deste contrato e escolha o turno de cada um.",
+      });
+    }
 
     let effectiveStartDate = form.start_date;
     let effectiveEndDate = form.end_date;
@@ -1269,34 +1631,61 @@ export function AdminContractsTab({
             Number(form.session_value) || 0,
           );
 
-      let pdfUrl = editingContract?.pdf_url || null;
-      let pdfFilename = editingContract?.pdf_filename || null;
+      const uploadedNewAttachments: ContractAttachment[] = [];
 
-      if (pdfFile) {
-        try {
-          const uploaded = await uploadContractPdf(pdfFile, form.room_id);
-          pdfUrl = uploaded.url;
-          pdfFilename = uploaded.filename;
-        } catch (uploadError: any) {
-          console.warn("Aviso no upload do PDF:", uploadError);
+      if (pdfFiles.length > 0) {
+        for (const file of pdfFiles) {
+          try {
+            const uploaded = await uploadContractPdf(file, form.room_id);
+            uploadedNewAttachments.push({
+              id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              url: uploaded.url,
+              filename: uploaded.filename,
+              uploaded_at: new Date().toISOString(),
+            });
+          } catch (uploadError: any) {
+            console.warn("Aviso no upload do PDF:", uploadError);
+          }
         }
       }
 
-      const finalAllowSublease =
-        !isSubContractUnderCohost && form.contract_type === "monthly_exclusive"
-          ? form.allow_sublease
-          : false;
+      const finalAttachments = [
+        ...existingAttachments,
+        ...uploadedNewAttachments,
+      ];
+      const primaryPdf = finalAttachments[0] || null;
+      const pdfUrl = primaryPdf ? primaryPdf.url : null;
+      const pdfFilename = primaryPdf ? primaryPdf.filename : null;
+
+      const uniqueDays = isFullBlockedExclusive
+        ? [1, 2, 3, 4, 5, 6, 0]
+        : Array.from(new Set(scheduleRules.map((r) => r.dayOfWeek))).sort();
+
+      const uniqueShifts = isFullBlockedExclusive
+        ? (["fullday"] as const)
+        : Array.from(new Set(scheduleRules.map((r) => r.shift)));
+
+      const minStartH =
+        scheduleRules.length > 0
+          ? Math.min(...scheduleRules.map((r) => r.startHour))
+          : 8;
+      const maxEndH =
+        scheduleRules.length > 0
+          ? Math.max(...scheduleRules.map((r) => r.endHour))
+          : 20;
+
+      const dayHoursMap = buildDayHoursMapFromRules(scheduleRules);
 
       const scheduleConfig: ContractScheduleConfig = {
         ...(editingContract?.schedule_config || {}),
-        daysOfWeek:
-          form.contract_type === "monthly_exclusive" && !finalAllowSublease
-            ? [1, 2, 3, 4, 5, 6, 0]
-            : form.daysOfWeek,
-        shifts: [form.selectedShift],
-        startHour: Number(form.startHour),
-        endHour: Number(form.endHour),
+        daysOfWeek: uniqueDays,
+        shifts: uniqueShifts as any,
+        startHour: minStartH,
+        endHour: maxEndH,
+        scheduleRules: isFullBlockedExclusive ? [] : scheduleRules,
+        day_hours: dayHoursMap,
         pricingTiers: validTiers,
+        attachments: finalAttachments,
         fine_pct: parsedFinePct,
         interest_pct: parsedInterestPct,
       };
@@ -1361,10 +1750,10 @@ export function AdminContractsTab({
           ? "Contrato atualizado com sucesso"
           : "Contrato registrado e ativado",
         description: isSubContractUnderCohost
-          ? `Subcontrato vinculado ao Coanfitrião (${parsedHostPct}% Coanfitrião / ${parsedFusionPct}% Fusion). ${generatedCount} datas alocadas.`
+          ? `Subcontrato vinculado ao Coanfitrião (${parsedHostPct}% Coanfitrião / ${parsedFusionPct}% Fusion). ${generatedCount} turnos alocados.`
           : finalAllowSublease
             ? `Modo Coanfitrião ativo com ${generatedCount} dia(s) abertos na vitrine.`
-            : `Split configurado e ${generatedCount} bloqueio(s) sincronizados na agenda.`,
+            : `Grade sincronizada com ${generatedCount} turno(s) alocados na agenda.`,
       });
 
       setViewMode("list");
@@ -1416,33 +1805,6 @@ export function AdminContractsTab({
         description: err.message,
       });
     }
-  };
-
-  const toggleDayOfWeek = (dayId: number) => {
-    if (form.daysOfWeek.includes(dayId)) {
-      if (form.daysOfWeek.length === 1 && !form.allow_sublease) return;
-      setForm({
-        ...form,
-        daysOfWeek: form.daysOfWeek.filter((d) => d !== dayId),
-      });
-    } else {
-      setForm({
-        ...form,
-        daysOfWeek: [...form.daysOfWeek, dayId].sort(),
-      });
-    }
-  };
-
-  const handleShiftChange = (
-    shiftId: "fullday" | "morning" | "afternoon" | "night",
-  ) => {
-    const found = SHIFT_OPTIONS.find((s) => s.id === shiftId);
-    setForm({
-      ...form,
-      selectedShift: shiftId,
-      startHour: found ? found.start : 8,
-      endHour: found ? found.end : 20,
-    });
   };
 
   const getMonthlyPaymentState = (c: RoomContract) => {
@@ -1591,8 +1953,8 @@ export function AdminContractsTab({
         <div className="flex flex-col gap-1">
           <Badge className="bg-slate-900 text-white border-0 w-fit font-semibold text-[11px]">
             {c.contract_type === "fixed_shift"
-              ? "Subcontrato • Turno Fixo"
-              : "Subcontrato • Diária Fixa"}
+              ? "Subcontrato • Turnos Fixos"
+              : "Subcontrato • Diárias Fixas"}
           </Badge>
           <span className="text-[10px] font-semibold text-emerald-700">
             Coanfitrião: {parentCohost.specialist_name.split(" ")[0]}
@@ -1622,7 +1984,7 @@ export function AdminContractsTab({
       case "fixed_shift":
         return (
           <Badge className="bg-slate-100 text-slate-800 border-0 font-semibold text-[11px]">
-            Turno Fixo Semanal
+            Turnos Fixos Semanais
           </Badge>
         );
       case "fixed_daily":
@@ -1634,7 +1996,7 @@ export function AdminContractsTab({
       default:
         return (
           <Badge className="bg-slate-100 text-slate-700 border-0 font-semibold text-[11px]">
-            Contrato de Diárias
+            Grade Personalizada
           </Badge>
         );
     }
@@ -1669,21 +2031,38 @@ export function AdminContractsTab({
     }
   };
 
+  const formatScheduleSummaryFromRules = (rules: ContractScheduleRule[]) => {
+    if (!rules || rules.length === 0) return "Sem horários definidos";
+    const groupedByDay: string[] = [];
+
+    WEEK_DAYS.forEach((wd) => {
+      const dayRules = rules
+        .filter((r) => Number(r.dayOfWeek) === wd.id)
+        .sort((a, b) => a.startHour - b.startHour);
+      if (dayRules.length > 0) {
+        const intervals = dayRules
+          .map(
+            (r) =>
+              `${String(r.startHour).padStart(2, "0")}h–${String(r.endHour).padStart(2, "0")}h`,
+          )
+          .join(", ");
+        groupedByDay.push(`${wd.label}: ${intervals}`);
+      }
+    });
+
+    return groupedByDay.join(" • ");
+  };
+
   const formatScheduleSummary = (c: RoomContract) => {
-    const cfg = c.schedule_config;
     if (c.contract_type === "monthly_exclusive" && !c.allow_sublease) {
       return "Integral (Sala 100% reservada)";
     }
-    if (!cfg || !cfg.daysOfWeek) return "Personalizado";
-    const dayLabels = cfg.daysOfWeek
-      .map((d) => WEEK_DAYS.find((w) => w.id === d)?.label)
-      .filter(Boolean)
-      .join(", ");
+    const rules = extractScheduleRulesFromConfig(c.schedule_config);
     const prefix =
       c.contract_type === "monthly_exclusive" && c.allow_sublease
         ? "Sublocação: "
         : "";
-    return `${prefix}${dayLabels || "Configurado pelo Coanfitrião"} • ${String(cfg.startHour ?? 8).padStart(2, "0")}h às ${String(cfg.endHour ?? 20).padStart(2, "0")}h`;
+    return `${prefix}${formatScheduleSummaryFromRules(rules)}`;
   };
 
   const filteredSpecialists =
@@ -1704,8 +2083,6 @@ export function AdminContractsTab({
       : Number(form.contract_value) || 0;
   const previewFusionPct = Number(form.platform_fee_pct) || 0;
   const previewHostPct = Number(form.host_split_pct) || 0;
-  const previewFinePct = Number(form.fine_pct) || 0;
-  const previewInterestPct = Number(form.interest_pct) || 0;
 
   const activePayPreview = payContract
     ? getMonthlyPaymentState(payContract)
@@ -1742,8 +2119,8 @@ export function AdminContractsTab({
                   : "Novo Contrato de Locação de Sala"}
               </h1>
               <p className="text-xs text-slate-500 mt-0.5">
-                Configure a unidade, vigência, regras de coanfitrião, divisão de
-                repasses e anexe o instrumento assinado em PDF.
+                Escolha os dias da semana e defina a janela de horário
+                individual de cada dia (ex: Segunda de manhã, Terça à tarde).
               </p>
             </div>
           </div>
@@ -1781,7 +2158,6 @@ export function AdminContractsTab({
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           {/* COLUNA PRINCIPAL DO FORMULÁRIO (8 COLUNAS) */}
           <div className="lg:col-span-8 space-y-6">
-            {/* Aviso caso seja subcontrato dentro da sala de um Coanfitrião */}
             {parentCohostForFormRoom && (
               <div className="p-5 rounded-2xl bg-stone-100 border border-stone-200 space-y-1.5">
                 <div className="flex items-center justify-between">
@@ -1806,8 +2182,8 @@ export function AdminContractsTab({
                     parseISO(parentCohostForFormRoom.end_date),
                     "dd/MM/yyyy",
                   )}
-                  ). Este novo contrato bloqueará os dias escolhidos abaixo e
-                  direcionará o repasse líquido diretamente ao coanfitrião.
+                  ). Este novo contrato bloqueará os horários escolhidos abaixo
+                  e direcionará o repasse líquido ao coanfitrião.
                 </p>
               </div>
             )}
@@ -1845,7 +2221,7 @@ export function AdminContractsTab({
                         room_id: nextRoomId,
                         contract_type:
                           isSub && form.contract_type === "monthly_exclusive"
-                            ? "fixed_daily"
+                            ? "fixed_shift"
                             : form.contract_type,
                         allow_sublease: isSub ? false : form.allow_sublease,
                         platform_fee_pct: isSub ? "20" : form.platform_fee_pct,
@@ -1886,11 +2262,6 @@ export function AdminContractsTab({
                           !parentCohostForFormRoom
                             ? form.allow_sublease
                             : false,
-                        daysOfWeek:
-                          nextType === "monthly_exclusive" &&
-                          !form.allow_sublease
-                            ? [1, 2, 3, 4, 5, 6, 0]
-                            : form.daysOfWeek,
                       });
                     }}
                     className="mt-1.5 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 outline-none"
@@ -1901,12 +2272,14 @@ export function AdminContractsTab({
                       </option>
                     )}
                     <option value="fixed_shift">
-                      Turno Fixo Recorrente (Ex: Segunda Manhã)
+                      Turnos Fixos Semanais (Janelas por Dia)
                     </option>
                     <option value="fixed_daily">
                       Diária Fixa Recorrente (Ex: Segunda Dia Todo)
                     </option>
-                    <option value="custom_daily">Diárias Personalizadas</option>
+                    <option value="custom_daily">
+                      Grade Mista / Personalizada
+                    </option>
                   </select>
                 </div>
 
@@ -1931,7 +2304,6 @@ export function AdminContractsTab({
                 </div>
               </div>
 
-              {/* Opção de Direito de Coanfitrião (Sublocação) */}
               {form.contract_type === "monthly_exclusive" &&
                 !parentCohostForFormRoom && (
                   <div className="p-4 rounded-xl bg-[#FAF7F4] border border-stone-200/90 space-y-4">
@@ -1956,9 +2328,6 @@ export function AdminContractsTab({
                             ...form,
                             allow_sublease: checked,
                             cohost_split_pct: checked ? "80" : "0",
-                            daysOfWeek: checked
-                              ? [2, 4]
-                              : [1, 2, 3, 4, 5, 6, 0],
                           });
                         }}
                         className="h-4 w-4 accent-[#BF4B24] rounded mt-0.5 cursor-pointer"
@@ -2115,15 +2484,17 @@ export function AdminContractsTab({
               </div>
             </div>
 
-            {/* BLOCO 3: VIGÊNCIA E GRADE DE HORÁRIOS */}
+            {/* ============================================================== */}
+            {/* BLOCO 3: DIAS SELECIONADOS + JANELA DE HORÁRIO DE CADA DIA     */}
+            {/* ============================================================== */}
             <div className="bg-white p-6 rounded-2xl border border-slate-200/90 space-y-5">
               <div className="border-b border-slate-100 pb-3">
                 <h2 className="text-sm font-bold text-slate-900">
                   3. Vigência e Alocação de Agenda
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Período de validade do contrato e dias/turnos reservados na
-                  sala.
+                  Selecione os dias da semana abaixo e defina a Faixa de Turno /
+                  Horário individualmente para cada dia selecionado.
                 </p>
               </div>
 
@@ -2165,6 +2536,7 @@ export function AdminContractsTab({
                 </div>
               ) : (
                 <div className="space-y-4">
+                  {/* PÍLULAS DOS DIAS DA SEMANA (IGUAL AO SEU PRINT) */}
                   <div>
                     <Label className="text-xs font-semibold text-slate-700 mb-2 block">
                       {form.contract_type === "monthly_exclusive" &&
@@ -2174,15 +2546,17 @@ export function AdminContractsTab({
                     </Label>
                     <div className="flex flex-wrap gap-2">
                       {WEEK_DAYS.map((d) => {
-                        const active = form.daysOfWeek.includes(d.id);
+                        const active = scheduleRules.some(
+                          (r) => Number(r.dayOfWeek) === d.id,
+                        );
                         return (
                           <button
                             type="button"
                             key={d.id}
-                            onClick={() => toggleDayOfWeek(d.id)}
+                            onClick={() => handleToggleDayPill(d.id)}
                             className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
                               active
-                                ? "bg-slate-900 text-white border-slate-900"
+                                ? "bg-slate-900 text-white border-slate-900 shadow-2xs"
                                 : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
                             }`}
                           >
@@ -2193,63 +2567,130 @@ export function AdminContractsTab({
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                      <Label className="text-xs font-semibold text-slate-700">
-                        Faixa de Turno
-                      </Label>
-                      <select
-                        value={form.selectedShift}
-                        onChange={(e) =>
-                          handleShiftChange(e.target.value as any)
-                        }
-                        className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800"
-                      >
-                        {SHIFT_OPTIONS.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                  {/* LINHAS DE HORÁRIO INDEPENDENTES PARA CADA DIA CLICADO */}
+                  <div className="space-y-3 pt-1">
+                    {WEEK_DAYS.map((wd) => {
+                      const dayRules = scheduleRules.filter(
+                        (r) => Number(r.dayOfWeek) === wd.id,
+                      );
+                      if (dayRules.length === 0) return null;
 
-                    <div>
-                      <Label className="text-xs font-semibold text-slate-700">
-                        Hora Inicial
-                      </Label>
-                      <Input
-                        type="number"
-                        min="6"
-                        max="22"
-                        value={form.startHour}
-                        onChange={(e) =>
-                          setForm({
-                            ...form,
-                            startHour: Number(e.target.value),
-                          })
-                        }
-                        className="mt-1 h-10 text-xs font-semibold rounded-xl"
-                      />
-                    </div>
+                      return (
+                        <div
+                          key={wd.id}
+                          className="p-4 rounded-2xl bg-slate-50/80 border border-slate-200/90 space-y-3 animate-in fade-in duration-150"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="px-2.5 py-1 rounded-lg bg-slate-900 text-white text-xs font-bold">
+                                {wd.full}
+                              </span>
+                              <span className="text-[11px] font-medium text-slate-500">
+                                Configure a janela de horário de {wd.full}:
+                              </span>
+                            </div>
 
-                    <div>
-                      <Label className="text-xs font-semibold text-slate-700">
-                        Hora Final
-                      </Label>
-                      <Input
-                        type="number"
-                        min="7"
-                        max="23"
-                        value={form.endHour}
-                        onChange={(e) =>
-                          setForm({
-                            ...form,
-                            endHour: Number(e.target.value),
-                          })
-                        }
-                        className="mt-1 h-10 text-xs font-semibold rounded-xl"
-                      />
-                    </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleAddExtraShiftOnSameDay(wd.id)
+                              }
+                              className="text-xs font-bold text-[#BF4B24] hover:underline cursor-pointer"
+                            >
+                              + Outro turno em {wd.label}
+                            </button>
+                          </div>
+
+                          <div className="space-y-2.5">
+                            {dayRules.map((rule, idx) => (
+                              <div
+                                key={rule.id}
+                                className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end bg-white p-3 rounded-xl border border-slate-200/80"
+                              >
+                                <div className="md:col-span-5">
+                                  <Label className="text-xs font-semibold text-slate-700">
+                                    {dayRules.length > 1
+                                      ? `${idx + 1}ª Faixa de Turno (${wd.label})`
+                                      : "Faixa de Turno"}
+                                  </Label>
+                                  <select
+                                    value={rule.shift}
+                                    onChange={(e) =>
+                                      handleRuleShiftSelectChange(
+                                        rule.id,
+                                        e.target.value as any,
+                                      )
+                                    }
+                                    className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 outline-none focus:border-[#BF4B24]"
+                                  >
+                                    {SHIFT_OPTIONS.map((s) => (
+                                      <option key={s.id} value={s.id}>
+                                        {s.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+
+                                <div className="md:col-span-3">
+                                  <Label className="text-xs font-semibold text-slate-700">
+                                    Hora Inicial
+                                  </Label>
+                                  <Input
+                                    type="number"
+                                    min="6"
+                                    max="22"
+                                    value={rule.startHour}
+                                    onChange={(e) =>
+                                      handleRuleHourInputChange(
+                                        rule.id,
+                                        "startHour",
+                                        e.target.value,
+                                      )
+                                    }
+                                    className="mt-1 h-10 text-xs font-semibold rounded-xl bg-white"
+                                  />
+                                </div>
+
+                                <div className="md:col-span-3">
+                                  <Label className="text-xs font-semibold text-slate-700">
+                                    Hora Final
+                                  </Label>
+                                  <Input
+                                    type="number"
+                                    min="7"
+                                    max="23"
+                                    value={rule.endHour}
+                                    onChange={(e) =>
+                                      handleRuleHourInputChange(
+                                        rule.id,
+                                        "endHour",
+                                        e.target.value,
+                                      )
+                                    }
+                                    className="mt-1 h-10 text-xs font-semibold rounded-xl bg-white"
+                                  />
+                                </div>
+
+                                <div className="md:col-span-1 flex justify-end">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    title="Remover este horário"
+                                    onClick={() =>
+                                      handleRemoveSingleRule(rule.id)
+                                    }
+                                    className="h-10 w-10 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -2333,7 +2774,7 @@ export function AdminContractsTab({
 
                 <div>
                   <Label className="text-xs font-semibold text-slate-700">
-                    Valor por Sessão/Diária (R$)
+                    Valor por Turno/Sessão (R$)
                   </Label>
                   <Input
                     type="number"
@@ -2348,7 +2789,6 @@ export function AdminContractsTab({
                 </div>
               </div>
 
-              {/* Escalonamento por períodos (se ativo) */}
               {pricingTiers.length > 0 && (
                 <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
                   <div className="flex items-center justify-between">
@@ -2424,7 +2864,7 @@ export function AdminContractsTab({
                         </div>
                         <div className="md:col-span-2">
                           <Label className="text-[10px] font-semibold text-slate-500">
-                            Valor/Sessão
+                            Valor/Turno
                           </Label>
                           <Input
                             type="number"
@@ -2457,7 +2897,6 @@ export function AdminContractsTab({
                 </div>
               )}
 
-              {/* Split e Multa/Juros */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-2 border-t border-slate-100">
                 <div>
                   <Label className="text-xs font-semibold text-slate-700">
@@ -2527,16 +2966,23 @@ export function AdminContractsTab({
               </div>
             </div>
 
-            {/* BLOCO 5: ANEXO DO CONTRATO PDF E OBSERVAÇÕES */}
+            {/* ============================================================== */}
+            {/* BLOCO 5: MÚLTIPLOS DOCUMENTOS ASSINADOS (CONTRATO + ADITIVOS)  */}
+            {/* ============================================================== */}
             <div className="bg-white p-6 rounded-2xl border border-slate-200/90 space-y-4">
-              <div className="border-b border-slate-100 pb-3">
-                <h2 className="text-sm font-bold text-slate-900">
-                  5. Documento Assinado (PDF) e Observações
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Anexe o contrato em PDF referente a esta sala para que fique
-                  disponível no painel do profissional e da administração.
-                </p>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">
+                    5. Documentos Assinados — Contrato e Aditivos (PDF)
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Anexe o contrato principal e quantos termos aditivos forem
+                    necessários ao longo da vigência.
+                  </p>
+                </div>
+                <Badge className="bg-slate-100 text-slate-700 border-0 text-xs font-semibold w-fit">
+                  {existingAttachments.length + pdfFiles.length} documento(s)
+                </Badge>
               </div>
 
               <div className="p-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -2546,44 +2992,112 @@ export function AdminContractsTab({
                   </div>
                   <div>
                     <p className="text-xs font-bold text-slate-900">
-                      {pdfFile
-                        ? `Novo arquivo selecionado: ${pdfFile.name}`
-                        : editingContract?.pdf_filename
-                          ? `PDF anexado: ${editingContract.pdf_filename}`
-                          : "Nenhum PDF anexado a este contrato"}
+                      Adicionar Contrato ou Termo Aditivo (PDF)
                     </p>
                     <p className="text-[11px] text-slate-500">
-                      Formato aceito: PDF (disponibilizado automaticamente na
-                      sala selecionada).
+                      Você pode selecionar um ou vários arquivos PDF de uma só
+                      vez.
                     </p>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
-                  {editingContract?.pdf_url && !pdfFile && (
-                    <a
-                      href={editingContract.pdf_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-50 inline-flex items-center gap-1.5"
-                    >
-                      Ver PDF Atual
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-                  )}
-                  <label className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer transition-colors">
-                    {editingContract?.pdf_url || pdfFile
-                      ? "Substituir PDF"
-                      : "Escolher Arquivo PDF"}
-                    <input
-                      type="file"
-                      accept="application/pdf"
-                      className="hidden"
-                      onChange={(e) => setPdfFile(e.target.files?.[0] || null)}
-                    />
-                  </label>
-                </div>
+                <label className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer transition-colors shrink-0 text-center">
+                  + Anexar PDF / Aditivo
+                  <input
+                    type="file"
+                    accept="application/pdf"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      const selected = Array.from(e.target.files || []);
+                      if (selected.length > 0) {
+                        setPdfFiles((prev) => [...prev, ...selected]);
+                      }
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
               </div>
+
+              {(existingAttachments.length > 0 || pdfFiles.length > 0) && (
+                <div className="space-y-2">
+                  {existingAttachments.map((att, index) => (
+                    <div
+                      key={att.id}
+                      className="flex items-center justify-between gap-3 p-3 rounded-xl bg-white border border-slate-200 text-xs"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <FileCheck2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <div className="min-w-0">
+                          <span className="font-bold text-slate-900 block truncate">
+                            {index === 0
+                              ? `Contrato Principal: ${att.filename}`
+                              : `${index}º Aditivo / Anexo: ${att.filename}`}
+                          </span>
+                          <span className="text-[10px] text-slate-400">
+                            Salvo no cofre do contrato
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <a
+                          href={att.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 font-semibold hover:bg-emerald-100 inline-flex items-center gap-1"
+                        >
+                          Abrir
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExistingAttachments((prev) =>
+                              prev.filter((item) => item.id !== att.id),
+                            )
+                          }
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
+                          title="Remover este PDF"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  {pdfFiles.map((file, idx) => (
+                    <div
+                      key={`${file.name}_${idx}`}
+                      className="flex items-center justify-between gap-3 p-3 rounded-xl bg-orange-50/50 border border-orange-200 text-xs"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <FileText className="w-4 h-4 text-[#BF4B24] shrink-0" />
+                        <div className="min-w-0">
+                          <span className="font-bold text-slate-900 block truncate">
+                            {file.name}
+                          </span>
+                          <span className="text-[10px] font-semibold text-[#BF4B24]">
+                            Novo arquivo pronto para enviar ao salvar
+                          </span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPdfFiles((prev) =>
+                            prev.filter((_, i) => i !== idx),
+                          )
+                        }
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div>
                 <Label className="text-xs font-semibold text-slate-700">
@@ -2592,7 +3106,7 @@ export function AdminContractsTab({
                 <Input
                   value={form.notes}
                   onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                  placeholder="Ex: Condição comercial negociada, reajuste ou observação específica desta sala"
+                  placeholder="Ex: 1º Aditivo assinado para inclusão da Quarta-feira pela manhã"
                   className="mt-1 h-10 text-xs rounded-xl"
                 />
               </div>
@@ -2634,21 +3148,46 @@ export function AdminContractsTab({
                 </div>
 
                 <div className="flex justify-between text-slate-300">
-                  <span>Datas Alocadas no Período:</span>
-                  <span className="font-semibold text-white">
+                  <span>Turnos na Semana:</span>
+                  <span className="font-semibold text-amber-400">
                     {form.contract_type === "monthly_exclusive" &&
                     !form.allow_sublease
-                      ? "Sala 100% Exclusiva"
-                      : `${previewDates.length} ocorrências`}
+                      ? "Integral (7 dias)"
+                      : `${scheduleRules.length} turno(s) / semana`}
                   </span>
                 </div>
 
                 <div className="flex justify-between text-slate-300">
-                  <span>Encargos após vencimento:</span>
-                  <span className="text-slate-300">
-                    Multa {previewFinePct}% + {previewInterestPct}% a.m.
+                  <span>Total de Turnos na Vigência:</span>
+                  <span className="font-semibold text-white">
+                    {form.contract_type === "monthly_exclusive" &&
+                    !form.allow_sublease
+                      ? "Sala 100% Exclusiva"
+                      : `${previewRuleOccurrences.length} sessões alocadas`}
                   </span>
                 </div>
+
+                <div className="flex justify-between text-slate-300">
+                  <span>Documentos PDF:</span>
+                  <span className="font-semibold text-emerald-400">
+                    {existingAttachments.length + pdfFiles.length} anexo(s)
+                  </span>
+                </div>
+
+                {!(
+                  form.contract_type === "monthly_exclusive" &&
+                  !form.allow_sublease
+                ) &&
+                  scheduleRules.length > 0 && (
+                    <div className="p-3 rounded-xl bg-slate-800/80 border border-slate-700/80 text-[11px] text-slate-300 leading-relaxed">
+                      <span className="text-[10px] font-bold uppercase text-slate-400 block mb-1">
+                        Janelas por Dia da Semana:
+                      </span>
+                      <span className="text-white font-semibold">
+                        {formatScheduleSummaryFromRules(scheduleRules)}
+                      </span>
+                    </div>
+                  )}
               </div>
 
               <div className="p-4 rounded-xl bg-slate-800/90 border border-slate-700 space-y-2.5 text-xs">
@@ -2729,15 +3268,14 @@ export function AdminContractsTab({
   // ==========================================================================
   return (
     <div className="p-4 lg:p-8 w-full pb-32 font-sans">
-      {/* HEADER */}
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight">
             Contratos, Turnos Fixos & Coanfitriões
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Gestão de salas exclusivas, turnos fixos recorrentes, cobranças
-            mensais e documentos PDF por sala.
+            Gestão de salas exclusivas, grades multi-turnos por dia da semana,
+            cobranças mensais e múltiplos PDFs (Contrato + Aditivos).
           </p>
         </div>
         <Button
@@ -2838,7 +3376,7 @@ export function AdminContractsTab({
           <option value="monthly_exclusive">
             Sala Exclusiva / Coanfitrião
           </option>
-          <option value="fixed_shift">Turno Fixo Semanal</option>
+          <option value="fixed_shift">Turnos Fixos Semanais</option>
           <option value="fixed_daily">Diária Fixa Semanal</option>
         </select>
 
@@ -2880,7 +3418,7 @@ export function AdminContractsTab({
                 <tr>
                   <th className="px-6 py-3.5">Sala & Clínica</th>
                   <th className="px-6 py-3.5">Locatário / Coanfitrião</th>
-                  <th className="px-6 py-3.5">Modalidade & Alocação</th>
+                  <th className="px-6 py-3.5">Modalidade & Turnos</th>
                   <th className="px-6 py-3.5">Vigência</th>
                   <th className="px-6 py-3.5 text-center">
                     Fatura Mensal ({currentMonthLabel})
@@ -2888,7 +3426,9 @@ export function AdminContractsTab({
                   <th className="px-6 py-3.5 text-right">
                     Valor & Divisão (Split)
                   </th>
-                  <th className="px-6 py-3.5 text-center">Contrato (PDF)</th>
+                  <th className="px-6 py-3.5 text-center">
+                    Contratos & Aditivos (PDF)
+                  </th>
                   <th className="px-6 py-3.5 text-center">Status</th>
                   <th className="px-6 py-3.5 text-center">Ações</th>
                 </tr>
@@ -2907,6 +3447,7 @@ export function AdminContractsTab({
                   const recipientAmount =
                     effectivePricing.contractValue * (recipientPct / 100);
                   const tiersList = c.schedule_config?.pricingTiers || [];
+                  const attachments = extractContractAttachments(c);
 
                   return (
                     <tr
@@ -2936,8 +3477,14 @@ export function AdminContractsTab({
 
                       <td className="px-6 py-4">
                         {getContractTypeBadge(c)}
-                        <p className="text-[11px] text-slate-500 mt-1">
-                          {formatScheduleSummary(c)}
+                        <p
+                          title={formatScheduleSummary(c)}
+                          className="text-[11px] text-slate-600 font-medium mt-1 max-w-[300px] truncate flex items-center gap-1"
+                        >
+                          <Clock className="w-3 h-3 text-slate-400 shrink-0" />
+                          <span className="truncate">
+                            {formatScheduleSummary(c)}
+                          </span>
                         </p>
                       </td>
 
@@ -3050,52 +3597,72 @@ export function AdminContractsTab({
                         </div>
                       </td>
 
+                      {/* COLUNA DE MÚLTIPLOS PDFS (CONTRATO + ADITIVOS) */}
                       <td className="px-6 py-4 text-center">
-                        {c.pdf_url ? (
-                          <div className="flex items-center justify-center gap-1.5">
-                            <a
-                              href={c.pdf_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-semibold transition-colors"
-                            >
-                              <FileCheck2 className="w-3.5 h-3.5" />
-                              PDF
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
-                            <label
-                              title="Substituir PDF assinado desta sala"
-                              className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:text-slate-900 hover:bg-slate-50 cursor-pointer"
-                            >
-                              <UploadCloud className="w-3.5 h-3.5" />
-                              <input
-                                type="file"
-                                accept="application/pdf"
-                                className="hidden"
-                                onChange={(e) =>
-                                  handleQuickPdfUpload(c, e.target.files?.[0])
-                                }
-                              />
-                            </label>
-                          </div>
-                        ) : (
-                          <label className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-dashed border-slate-300 bg-slate-50 text-slate-700 hover:bg-slate-100 text-xs font-semibold cursor-pointer transition-colors">
+                        <div className="flex flex-col items-center gap-1.5">
+                          {attachments.length > 0 && (
+                            <div className="flex flex-wrap items-center justify-center gap-1 max-w-[230px]">
+                              {attachments.map((att, idx) => (
+                                <div
+                                  key={att.id}
+                                  className="inline-flex items-center rounded-lg bg-emerald-50 border border-emerald-200/80 overflow-hidden"
+                                >
+                                  <a
+                                    href={att.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title={att.filename}
+                                    className="inline-flex items-center gap-1 px-2 py-1 text-emerald-700 hover:bg-emerald-100 text-[11px] font-semibold transition-colors"
+                                  >
+                                    <FileCheck2 className="w-3 h-3 shrink-0" />
+                                    <span>
+                                      {idx === 0
+                                        ? "Contrato"
+                                        : `Aditivo ${idx}`}
+                                    </span>
+                                    <ExternalLink className="w-2.5 h-2.5" />
+                                  </a>
+                                  <button
+                                    type="button"
+                                    title={`Remover ${att.filename}`}
+                                    onClick={() =>
+                                      handleRemoveContractAttachment(c, att.id)
+                                    }
+                                    className="px-1.5 py-1 text-emerald-700/60 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          <label className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-dashed border-slate-300 bg-slate-50 text-slate-700 hover:bg-slate-100 text-[11px] font-semibold cursor-pointer transition-colors">
                             {uploadingPdfId === c.id ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <Loader2 className="w-3 h-3 animate-spin" />
                             ) : (
-                              <UploadCloud className="w-3.5 h-3.5 text-[#BF4B24]" />
+                              <UploadCloud className="w-3 h-3 text-[#BF4B24]" />
                             )}
-                            Anexar PDF
+                            <span>
+                              {attachments.length === 0
+                                ? "Anexar PDF"
+                                : "+ Aditivo PDF"}
+                            </span>
                             <input
                               type="file"
                               accept="application/pdf"
+                              multiple
                               className="hidden"
-                              onChange={(e) =>
-                                handleQuickPdfUpload(c, e.target.files?.[0])
-                              }
+                              onChange={(e) => {
+                                const filesArr = Array.from(
+                                  e.target.files || [],
+                                );
+                                e.target.value = "";
+                                handleQuickPdfUpload(c, filesArr);
+                              }}
                             />
                           </label>
-                        )}
+                        </div>
                       </td>
 
                       <td className="px-6 py-4 text-center">
