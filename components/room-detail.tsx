@@ -123,6 +123,83 @@ const parseSlotDateHelper = (dateStr: string, timeStr: string): Date => {
   return dateObj;
 };
 
+/**
+ * Avalia se uma hora específica (ex: 8 para 08:00 - 08:50) em uma data (YYYY-MM-DD)
+ * está bloqueada por algum contrato ativo/pendente da sala.
+ */
+function isDateAndHourBlockedByContract(
+  dateStr: string,
+  dayOfWeek: number,
+  hourNum: number,
+  contracts: any[],
+): boolean {
+  if (!Array.isArray(contracts) || contracts.length === 0) return false;
+
+  for (const c of contracts) {
+    if (!c || c.status === "cancelled" || c.status === "expired") continue;
+
+    // Contrato principal de Coanfitrião (allow_sublease = true) não bloqueia a sala,
+    // pois ele libera os horários na vitrine através do room.availability.
+    if (c.contract_type === "monthly_exclusive" && c.allow_sublease === true) {
+      continue;
+    }
+
+    const startIso = c.start_date ? String(c.start_date).slice(0, 10) : null;
+    const endIso = c.end_date ? String(c.end_date).slice(0, 10) : null;
+
+    if (startIso && dateStr < startIso) continue;
+    if (endIso && dateStr > endIso) continue;
+
+    // Sala 100% exclusiva sem sublocação bloqueia todos os horários
+    if (c.contract_type === "monthly_exclusive" && !c.allow_sublease) {
+      return true;
+    }
+
+    let sched = c.schedule_config;
+    if (typeof sched === "string") {
+      try {
+        sched = JSON.parse(sched);
+      } catch {
+        sched = {};
+      }
+    }
+    if (!sched || typeof sched !== "object") continue;
+
+    // 1. Verifica scheduleRules (múltiplos turnos independentes por dia da semana)
+    if (Array.isArray(sched.scheduleRules) && sched.scheduleRules.length > 0) {
+      const matchedRule = sched.scheduleRules.some((rule: any) => {
+        if (Number(rule.dayOfWeek) !== dayOfWeek) return false;
+        const sH = Number(rule.startHour ?? 8);
+        const eH = Number(rule.endHour ?? 20);
+        return hourNum >= sH && hourNum < eH;
+      });
+      if (matchedRule) return true;
+      continue;
+    }
+
+    // 2. Verifica mapa day_hours
+    if (sched.day_hours && typeof sched.day_hours === "object") {
+      const dayArr = sched.day_hours[String(dayOfWeek)];
+      if (Array.isArray(dayArr) && dayArr.length > 0) {
+        if (dayArr.map(Number).includes(hourNum)) return true;
+        continue;
+      }
+    }
+
+    // 3. Fallback legado: daysOfWeek + startHour / endHour
+    const legacyDays = Array.isArray(sched.daysOfWeek)
+      ? sched.daysOfWeek.map(Number)
+      : [];
+    if (legacyDays.includes(dayOfWeek)) {
+      const sH = Number(sched.startHour ?? 8);
+      const eH = Number(sched.endHour ?? 20);
+      if (hourNum >= sH && hourNum < eH) return true;
+    }
+  }
+
+  return false;
+}
+
 export function RoomDetail(props: RoomDetailProps) {
   const {
     onBack,
@@ -144,9 +221,6 @@ export function RoomDetail(props: RoomDetailProps) {
       ? props.room.preselectedSlot
       : null;
 
-  // ====================================================================
-  // 1. TODOS OS HOOKS DO COMPONENTE (ESTÁVEIS E NO TOPO)
-  // ====================================================================
   const router = useRouter();
   const [supabase] = useState(() => createClient());
   const { toast } = useToast();
@@ -177,7 +251,6 @@ export function RoomDetail(props: RoomDetailProps) {
     startOfMonth(initialTargetDate),
   );
 
-  // Campanhas visuais de desconto ativas para esta sala
   const [roomCampaigns, setRoomCampaigns] = useState<any[]>([]);
 
   const hasAppliedPreselectedSlotRef = useRef<boolean>(false);
@@ -188,6 +261,7 @@ export function RoomDetail(props: RoomDetailProps) {
   const lightboxRef = useRef<HTMLDivElement>(null);
 
   const [roomBookings, setRoomBookings] = useState<any[]>([]);
+  const [roomContracts, setRoomContracts] = useState<any[]>([]);
   const [highlightSchedule, setHighlightSchedule] = useState(false);
 
   const [selectedShift, setSelectedShift] = useState<
@@ -222,9 +296,7 @@ export function RoomDetail(props: RoomDetailProps) {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [currentTime, setCurrentTime] = useState<number>(() => Date.now());
 
-  // ====================================================================
-  // HOISTING DAS FUNÇÕES DE CHECKOUT PARA SEREM LIDAS PELO USEMOBILEBACK
-  // ====================================================================
+  // Busca reservas + contratos ativos da sala (via API Admin + fallback direto)
   const fetchRoomBookings = useCallback(async () => {
     if (!roomData?.id) return;
     try {
@@ -236,6 +308,9 @@ export function RoomDetail(props: RoomDetailProps) {
         const json = await res.json();
         if (Array.isArray(json.bookings)) {
           setRoomBookings(json.bookings);
+        }
+        if (Array.isArray(json.contracts)) {
+          setRoomContracts(json.contracts);
           return;
         }
       }
@@ -243,16 +318,28 @@ export function RoomDetail(props: RoomDetailProps) {
       console.error("Fallback para busca direta de reservas:", e);
     }
 
-    const { data, error } = await supabase
-      .from("bookings")
-      .select(
-        "id, start_time, end_time, status, created_at, asaas_payment_id, user_id",
-      )
-      .eq("room_id", roomData.id)
-      .neq("status", "cancelled");
+    const [bookingsRes, contractsRes] = await Promise.all([
+      supabase
+        .from("bookings")
+        .select(
+          "id, start_time, end_time, status, created_at, asaas_payment_id, user_id, contract_id, booking_origin",
+        )
+        .eq("room_id", roomData.id)
+        .neq("status", "cancelled"),
+      supabase
+        .from("room_contracts")
+        .select(
+          "id, room_id, specialist_id, specialist_name, contract_type, status, start_date, end_date, allow_sublease, schedule_config",
+        )
+        .eq("room_id", roomData.id)
+        .in("status", ["active", "pending_signature"]),
+    ]);
 
-    if (!error && data) {
-      setRoomBookings(data);
+    if (!bookingsRes.error && bookingsRes.data) {
+      setRoomBookings(bookingsRes.data);
+    }
+    if (!contractsRes.error && contractsRes.data) {
+      setRoomContracts(contractsRes.data);
     }
   }, [roomData?.id, supabase]);
 
@@ -332,9 +419,6 @@ export function RoomDetail(props: RoomDetailProps) {
     return () => clearInterval(interval);
   }, []);
 
-  // ====================================================================
-  // CARREGA CAMPANHAS DE CUPOM VISUAIS ATIVAS PARA ESTA SALA
-  // ====================================================================
   const fetchRoomCampaigns = useCallback(async () => {
     if (!targetRoomId) return;
     try {
@@ -386,13 +470,13 @@ export function RoomDetail(props: RoomDetailProps) {
     fetchRoomCampaigns();
   }, [fetchRoomCampaigns]);
 
-  // Verifica se uma data + horário específico tem promoção ativa
   const getCampaignForDateAndHour = useCallback(
     (dateObj: Date, hourNum?: number) => {
       if (roomCampaigns.length === 0) return null;
 
       const dateIso = format(dateObj, "yyyy-MM-dd");
       const dow = dateObj.getDay();
+      const dowKey = String(dow);
 
       for (const camp of roomCampaigns) {
         if (
@@ -418,22 +502,44 @@ export function RoomDetail(props: RoomDetailProps) {
           continue;
         }
 
-        if (rules?.enabled) {
-          if (
-            Array.isArray(rules.days_of_week) &&
-            rules.days_of_week.length > 0 &&
-            !rules.days_of_week.map(Number).includes(dow)
-          ) {
-            continue;
-          }
+        let eligibleHoursForDay: number[] = [];
 
-          if (
-            hourNum !== undefined &&
-            Array.isArray(rules.allowed_hours) &&
-            rules.allowed_hours.length > 0 &&
-            !rules.allowed_hours.map(Number).includes(hourNum)
-          ) {
-            continue;
+        if (rules?.enabled) {
+          if (rules.day_hours && typeof rules.day_hours === "object") {
+            const rawDayArr = rules.day_hours[dowKey];
+            eligibleHoursForDay = Array.isArray(rawDayArr)
+              ? rawDayArr.map(Number).filter((n: number) => !isNaN(n))
+              : [];
+
+            if (eligibleHoursForDay.length === 0) {
+              continue;
+            }
+
+            if (
+              hourNum !== undefined &&
+              !eligibleHoursForDay.includes(hourNum)
+            ) {
+              continue;
+            }
+          } else {
+            if (
+              Array.isArray(rules.days_of_week) &&
+              rules.days_of_week.length > 0 &&
+              !rules.days_of_week.map(Number).includes(dow)
+            ) {
+              continue;
+            }
+            if (
+              hourNum !== undefined &&
+              Array.isArray(rules.allowed_hours) &&
+              rules.allowed_hours.length > 0 &&
+              !rules.allowed_hours.map(Number).includes(hourNum)
+            ) {
+              continue;
+            }
+            eligibleHoursForDay = Array.isArray(rules.allowed_hours)
+              ? rules.allowed_hours.map(Number)
+              : [];
           }
         }
 
@@ -453,6 +559,7 @@ export function RoomDetail(props: RoomDetailProps) {
           type: camp.type,
           discountValue: discountVal,
           badgeText,
+          eligibleHoursForDay,
           autoApply:
             typeof camp.auto_apply === "boolean"
               ? camp.auto_apply
@@ -465,6 +572,9 @@ export function RoomDetail(props: RoomDetailProps) {
     [roomCampaigns],
   );
 
+  // ====================================================================
+  // VERIFICA SE O HORÁRIO ESTÁ OCUPADO (RESERVA AVULSA OU CONTRATO FIXO)
+  // ====================================================================
   const isSlotBooked = useCallback(
     (slotKey: string) => {
       try {
@@ -473,15 +583,40 @@ export function RoomDetail(props: RoomDetailProps) {
         const startSlotStr = parts[0];
         const endSlotStr = parts[1] || parts[0];
 
-        const slotStart = parseSlotDateHelper(dateStr, startSlotStr).getTime();
+        const slotStartObj = parseSlotDateHelper(dateStr, startSlotStr);
+        const slotStart = slotStartObj.getTime();
         const rawSlotEnd = parseSlotDateHelper(dateStr, endSlotStr).getTime();
         const slotEnd =
           rawSlotEnd > slotStart ? rawSlotEnd : slotStart + 50 * 60 * 1000;
 
+        const slotHour = slotStartObj.getHours();
+        const slotDow = slotStartObj.getDay();
+
+        // 1. Verifica bloqueio direto por Contrato Fixo na tabela room_contracts
+        if (
+          isDateAndHourBlockedByContract(
+            dateStr,
+            slotDow,
+            slotHour,
+            roomContracts,
+          )
+        ) {
+          return true;
+        }
+
+        // 2. Verifica reservas na tabela bookings
         return roomBookings.some((b: any) => {
           if (b.status === "cancelled" || b.status === "rejected") return false;
 
+          const isFromContract = Boolean(
+            b.contract_id ||
+            (b.booking_origin &&
+              String(b.booking_origin).startsWith("contract")),
+          );
+
+          // Reservas de contratos NUNCA expiram pela regra de 6 minutos do checkout avulso
           if (
+            !isFromContract &&
             (b.status === "pending_payment" || b.status === "pending") &&
             b.created_at
           ) {
@@ -507,7 +642,7 @@ export function RoomDetail(props: RoomDetailProps) {
         return false;
       }
     },
-    [roomBookings, currentTime],
+    [roomBookings, roomContracts, currentTime],
   );
 
   const isSlotPast = useCallback(
@@ -543,85 +678,107 @@ export function RoomDetail(props: RoomDetailProps) {
         avail = null;
       }
     }
-    if (!avail) return [];
 
-    const weekConfig = Array.isArray(avail.weekConfig) ? avail.weekConfig : [];
-    const exceptions = Array.isArray(avail.exceptions) ? avail.exceptions : [];
-
+    const dayOfWeek = selectedDate.getDay();
+    let baseSlots: string[] = [];
     let partialBlockedSlots: string[] = [];
 
-    if (exceptions.length > 0) {
-      const exception = exceptions.find(
-        (e: any) => e?.date && isSameDay(new Date(e.date), selectedDate),
-      );
-      if (exception) {
-        if (exception.type === "block" && exception.isFullDay) return [];
-        if (exception.type === "block" && !exception.isFullDay) {
-          partialBlockedSlots = (
-            Array.isArray(exception.hours) ? exception.hours : []
-          )
-            .map((h: string) => normalizeSlotLabel(h))
-            .filter(Boolean);
+    if (avail) {
+      const weekConfig = Array.isArray(avail.weekConfig)
+        ? avail.weekConfig
+        : [];
+      const exceptions = Array.isArray(avail.exceptions)
+        ? avail.exceptions
+        : [];
+
+      if (exceptions.length > 0) {
+        const exception = exceptions.find(
+          (e: any) => e?.date && isSameDay(new Date(e.date), selectedDate),
+        );
+        if (exception) {
+          if (exception.type === "block" && exception.isFullDay) return [];
+          if (exception.type === "block" && !exception.isFullDay) {
+            partialBlockedSlots = (
+              Array.isArray(exception.hours) ? exception.hours : []
+            )
+              .map((h: string) => normalizeSlotLabel(h))
+              .filter(Boolean);
+          }
+          if (exception.type === "extra") {
+            const extraHours: string[] = (
+              Array.isArray(exception.hours) ? exception.hours : []
+            )
+              .map((h: string) => normalizeSlotLabel(h))
+              .filter(Boolean);
+            return extraHours;
+          }
         }
-        if (exception.type === "extra") {
-          const extraHours: string[] = (
-            Array.isArray(exception.hours) ? exception.hours : []
-          )
+      }
+
+      const configForDay = weekConfig.find((c: any) => c?.day === dayOfWeek);
+      if (configForDay && configForDay.enabled) {
+        if (configForDay.rentalType === "hourly") {
+          const hours: string[] = Array.isArray(configForDay.availableHours)
+            ? configForDay.availableHours
+            : [];
+          baseSlots = hours
             .map((h: string) => normalizeSlotLabel(h))
             .filter(Boolean);
-          return extraHours;
+        } else {
+          const shifts: string[] = Array.isArray(configForDay.selectedShifts)
+            ? configForDay.selectedShifts
+            : [];
+
+          if (shifts.includes("morning"))
+            baseSlots.push(
+              "08:00 - 08:50",
+              "09:00 - 09:50",
+              "10:00 - 10:50",
+              "11:00 - 11:50",
+            );
+          if (shifts.includes("afternoon"))
+            baseSlots.push(
+              "13:00 - 13:50",
+              "14:00 - 14:50",
+              "15:00 - 15:50",
+              "16:00 - 16:50",
+              "17:00 - 17:50",
+            );
+          if (shifts.includes("night"))
+            baseSlots.push(
+              "18:00 - 18:50",
+              "19:00 - 19:50",
+              "20:00 - 20:50",
+              "21:00 - 21:50",
+            );
         }
       }
     }
 
-    const dayOfWeek = selectedDate.getDay();
-    const configForDay = weekConfig.find((c: any) => c?.day === dayOfWeek);
-    if (!configForDay || !configForDay.enabled) return [];
-
-    let baseSlots: string[] = [];
-
-    if (configForDay.rentalType === "hourly") {
-      const hours: string[] = Array.isArray(configForDay.availableHours)
-        ? configForDay.availableHours
-        : [];
-      baseSlots = hours
-        .map((h: string) => normalizeSlotLabel(h))
-        .filter(Boolean);
-    } else {
-      const shifts: string[] = Array.isArray(configForDay.selectedShifts)
-        ? configForDay.selectedShifts
-        : [];
-
-      if (shifts.includes("morning"))
-        baseSlots.push(
-          "08:00 - 08:50",
-          "09:00 - 09:50",
-          "10:00 - 10:50",
-          "11:00 - 11:50",
-        );
-      if (shifts.includes("afternoon"))
-        baseSlots.push(
-          "13:00 - 13:50",
-          "14:00 - 14:50",
-          "15:00 - 15:50",
-          "16:00 - 16:50",
-          "17:00 - 17:50",
-        );
-      if (shifts.includes("night"))
-        baseSlots.push(
-          "18:00 - 18:50",
-          "19:00 - 19:50",
-          "20:00 - 20:50",
-          "21:00 - 21:50",
-        );
-    }
-
     if (partialBlockedSlots.length > 0) {
-      return baseSlots.filter((s: string) => !partialBlockedSlots.includes(s));
+      baseSlots = baseSlots.filter(
+        (s: string) => !partialBlockedSlots.includes(s),
+      );
     }
 
-    return baseSlots;
-  }, [roomData, selectedDate, activeTab]);
+    // Garante que qualquer hora bloqueada por um Contrato Fixo nesta data também apareça na grade (marcada como "Ocupado")
+    const slotSet = new Set<string>(baseSlots);
+    for (let h = 8; h <= 21; h++) {
+      if (
+        isDateAndHourBlockedByContract(
+          selectedDateStr,
+          dayOfWeek,
+          h,
+          roomContracts,
+        )
+      ) {
+        const hh = String(h).padStart(2, "0");
+        slotSet.add(`${hh}:00 - ${hh}:50`);
+      }
+    }
+
+    return Array.from(slotSet).sort();
+  }, [roomData, selectedDate, activeTab, roomContracts]);
 
   const freeSlotsForSelectedDate = useMemo<string[]>(() => {
     const datePrefix = format(selectedDate, "yyyy-MM-dd");
@@ -713,6 +870,7 @@ export function RoomDetail(props: RoomDetailProps) {
     };
   }, [targetRoomId, preselectedSlotStr, initialModality, supabase]);
 
+  // Escuta alterações em tempo real tanto em `bookings` quanto em `room_contracts`
   useEffect(() => {
     if (!roomData?.id) return;
 
@@ -721,13 +879,25 @@ export function RoomDetail(props: RoomDetailProps) {
     const pollInterval = setInterval(fetchRoomBookings, 8000);
 
     const channel = supabase
-      .channel(`room_bookings_${roomData.id}`)
+      .channel(`room_bookings_and_contracts_${roomData.id}`)
       .on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table: "bookings",
+          filter: `room_id=eq.${roomData.id}`,
+        },
+        () => {
+          fetchRoomBookings();
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "room_contracts",
           filter: `room_id=eq.${roomData.id}`,
         },
         () => {
@@ -830,9 +1000,6 @@ export function RoomDetail(props: RoomDetailProps) {
     isSlotPast,
   ]);
 
-  // ====================================================================
-  // 2. RETORNOS CONDICIONAIS DE CARREGAMENTO
-  // ====================================================================
   if (loading) {
     return (
       <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-6 text-center">
@@ -861,9 +1028,6 @@ export function RoomDetail(props: RoomDetailProps) {
     );
   }
 
-  // ====================================================================
-  // 3. FUNÇÕES AUXILIARES PURAS E PRECIFICAÇÃO DINÂMICA POR SLOT
-  // ====================================================================
   let address = roomData.address_details || {};
   if (typeof address === "string") {
     try {
@@ -902,7 +1066,6 @@ export function RoomDetail(props: RoomDetailProps) {
     return commercialRate;
   };
 
-  // Calcula preço com campanha de horário (se elegível)
   const getSlotPricingDetails = (slotKey: string) => {
     const basePrice = getSlotBasePrice(slotKey);
     if (!slotKey.includes("|")) {
@@ -1002,7 +1165,6 @@ export function RoomDetail(props: RoomDetailProps) {
     }
   };
 
-  // Totais dos slots selecionados (com e sem desconto de campanha de horário)
   const selectedSlotsBreakdown = selectedSlots.map((slotKey) =>
     getSlotPricingDetails(slotKey),
   );
@@ -1096,7 +1258,7 @@ export function RoomDetail(props: RoomDetailProps) {
           if (isSlotBooked(slotKey)) {
             setSelectedSlots([]);
             throw new Error(
-              "Um dos horários selecionados acabou de ser reservado por outra pessoa. Escolha outro horário.",
+              "Um dos horários selecionados faz parte de um contrato fixo ou acabou de ser reservado. Escolha outro horário.",
             );
           }
         }
@@ -1271,9 +1433,8 @@ export function RoomDetail(props: RoomDetailProps) {
       const lockIds: string[] = (checkoutSummary as any).lockIds || [];
 
       let finalCreditsRequired = checkoutSummary.creditsRequired;
-      let finalHourlyCost = totalHourlyCost; // Já contempla o desconto proporcional dos slots em campanha!
+      let finalHourlyCost = totalHourlyCost;
 
-      // Se o usuário digitou outro cupom manualmente no modal e ainda não tinha campanha auto-aplicada
       if (appliedCoupon && totalCampaignDiscountBRL === 0) {
         if (appliedCoupon.type === "percentage") {
           finalCreditsRequired -=
@@ -1380,7 +1541,7 @@ export function RoomDetail(props: RoomDetailProps) {
         await fetchRoomBookings();
 
         toast({
-          title: "Reserva Confirmada! 🎉",
+          title: "Reserva Confirmada!",
           description: "A sala foi agendada e os créditos consumidos.",
         });
         setIsCheckoutOpen(false);
@@ -1505,7 +1666,7 @@ export function RoomDetail(props: RoomDetailProps) {
         await fetchRoomBookings();
 
         toast({
-          title: "Pagamento Aprovado! 🎉",
+          title: "Pagamento Aprovado!",
           description: "Sua reserva foi confirmada com sucesso.",
         });
         setIsCheckoutOpen(false);
@@ -1758,9 +1919,7 @@ export function RoomDetail(props: RoomDetailProps) {
         ? "VIP"
         : "Basic";
 
-  const primaryCampaign = roomCampaigns[0]
-    ? getCampaignForDateAndHour(selectedDate)
-    : null;
+  const selectedDayCampaign = getCampaignForDateAndHour(selectedDate);
 
   return (
     <div className="fixed inset-0 z-[100] bg-white flex flex-col animate-in slide-in-from-bottom-4 duration-300">
@@ -1989,7 +2148,6 @@ export function RoomDetail(props: RoomDetailProps) {
 
         <div className="px-5 py-6 max-w-5xl mx-auto flex flex-col lg:grid lg:grid-cols-12 gap-10">
           <div className="order-1 lg:order-1 lg:col-span-7 space-y-7">
-            {/* CREDIBILIDADE HUMANA DO ANFITRIÃO */}
             <div className="flex items-center justify-between pb-5 border-b border-slate-100">
               <div className="flex items-center gap-3.5">
                 <div className="w-11 h-11 rounded-full bg-stone-100 border border-stone-200 flex items-center justify-center text-slate-700 shrink-0">
@@ -2006,7 +2164,6 @@ export function RoomDetail(props: RoomDetailProps) {
               </div>
             </div>
 
-            {/* COMPONENTE DE ALTA CONVERSÃO FUSION PASS+ */}
             {packages.length > 0 && activeTab === "hora" && (
               <div
                 ref={fusionPassCardRef}
@@ -2290,7 +2447,7 @@ export function RoomDetail(props: RoomDetailProps) {
             </section>
           </div>
 
-          {/* COLUNA DE AGENDAMENTO (CALENDÁRIO DE RESERVAS COM DESTAQUE DE CAMPANHAS) */}
+          {/* COLUNA DE AGENDAMENTO */}
           <div
             ref={bookingSectionRef}
             className="order-2 lg:order-2 lg:col-span-5 flex flex-col gap-6 scroll-mt-20"
@@ -2364,28 +2521,37 @@ export function RoomDetail(props: RoomDetailProps) {
                     </div>
                   </div>
 
-                  {/* BANNER DE CAMPANHA PROMOCIONAL DE HORÁRIOS FRIOS */}
-                  {roomCampaigns.length > 0 && (
+                  {selectedDayCampaign ? (
                     <div className="mb-3 px-3.5 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
                         <Flame className="w-4 h-4 text-emerald-600 fill-emerald-600 shrink-0" />
                         <div>
                           <span className="text-[11px] font-black text-emerald-950 block">
-                            {primaryCampaign?.campaignName ||
-                              "Horários com Desconto Especial"}
+                            {selectedDayCampaign.campaignName}
                           </span>
                           <span className="text-[10px] font-medium text-emerald-800 block">
-                            Dias e horários sinalizados em verde estão mais
-                            baratos!
+                            {selectedDayCampaign.eligibleHoursForDay.length > 0
+                              ? `Horários em oferta hoje: ${selectedDayCampaign.eligibleHoursForDay
+                                  .map((h) => `${String(h).padStart(2, "0")}h`)
+                                  .join(", ")}`
+                              : "Horários selecionados com desconto especial!"}
                           </span>
                         </div>
                       </div>
-                      {primaryCampaign && (
-                        <span className="px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-black shrink-0">
-                          {primaryCampaign.badgeText} OFF
-                        </span>
-                      )}
+                      <span className="px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-black shrink-0">
+                        {selectedDayCampaign.badgeText} OFF
+                      </span>
                     </div>
+                  ) : (
+                    roomCampaigns.length > 0 && (
+                      <div className="mb-3 px-3.5 py-2 rounded-xl bg-stone-100 border border-stone-200 text-[11px] font-medium text-stone-700 flex items-center gap-2">
+                        <Flame className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>
+                          Toque nos <strong>dias em verde</strong> no calendário
+                          para ver horários com desconto!
+                        </span>
+                      </div>
+                    )
                   )}
 
                   {preselectedSlotStr && selectedSlots.length > 0 && (
@@ -2422,7 +2588,6 @@ export function RoomDetail(props: RoomDetailProps) {
                     </button>
                   )}
 
-                  {/* CALENDÁRIO COM INDICADOR DE DIAS MAIS BARATOS */}
                   <div className="w-full bg-stone-50/60 rounded-xl border border-stone-200/80 p-3.5 mb-5">
                     <div className="flex items-center justify-between mb-3">
                       <button
@@ -2539,7 +2704,6 @@ export function RoomDetail(props: RoomDetailProps) {
                     )}
                   </div>
 
-                  {/* GRADE DE HORÁRIOS COM DESCONTO POR SLOT */}
                   <div className="flex items-center justify-between mb-2.5">
                     <h3 className="text-xs font-bold text-slate-800">
                       Horários em{" "}
@@ -2658,7 +2822,7 @@ export function RoomDetail(props: RoomDetailProps) {
                           <div className="flex items-center justify-between text-xs bg-emerald-50 text-emerald-800 px-3 py-1.5 rounded-lg border border-emerald-200/80 font-bold">
                             <span>
                               Tarifa promocional aplicada (
-                              {matchedAutoCampaign?.campaignName})
+                              {matchedAutoCampaign?.campaignName || "Campanha"})
                             </span>
                             <span>
                               - R${" "}

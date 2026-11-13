@@ -942,13 +942,28 @@ export function AdminContractsTab({
     const deleteFromIso = new Date(
       `${contract.start_date}T00:00:00`,
     ).toISOString();
-    await supabase
-      .from("bookings")
-      .delete()
-      .eq("contract_id", contract.id)
-      .gte("start_time", deleteFromIso);
+
+    // 1. Limpa agendamentos anteriores deste contrato (via Admin API + Fallback local)
+    try {
+      await supabase
+        .from("bookings")
+        .delete()
+        .eq("contract_id", contract.id)
+        .gte("start_time", deleteFromIso);
+    } catch {}
 
     if (contract.status === "cancelled" || contract.status === "expired") {
+      try {
+        await fetch("/api/bookings/calculate", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contractId: contract.id,
+            deleteFromIso,
+            bookingsPayload: [],
+          }),
+        });
+      } catch {}
       return 0;
     }
 
@@ -963,6 +978,7 @@ export function AdminContractsTab({
     const rules = extractScheduleRulesFromConfig(cfg);
     const dayHoursMap = buildDayHoursMapFromRules(rules);
 
+    // CENÁRIO 1: MODO COANFITRIÃO (Libera os horários na vitrine da sala)
     if (
       contract.contract_type === "monthly_exclusive" &&
       contract.allow_sublease
@@ -1044,6 +1060,7 @@ export function AdminContractsTab({
       return openDaysCount;
     }
 
+    // CENÁRIO 2: CONTRATO DE TURNOS FIXOS, DIÁRIAS OU SALA EXCLUSIVA 100% FECHADA
     const effectiveRules: ContractScheduleRule[] =
       contract.contract_type === "monthly_exclusive" && !contract.allow_sublease
         ? [1, 2, 3, 4, 5, 6, 0].map((d) => ({
@@ -1136,6 +1153,24 @@ export function AdminContractsTab({
       };
     });
 
+    // Envia para a API do servidor gravar via supabaseAdmin (Service Role), ignorando travas de RLS
+    try {
+      const syncRes = await fetch("/api/bookings/calculate", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contractId: contract.id,
+          deleteFromIso,
+          bookingsPayload,
+        }),
+      });
+      if (syncRes.ok) {
+        const syncJson = await syncRes.json();
+        return syncJson.insertedCount ?? bookingsPayload.length;
+      }
+    } catch {}
+
+    // Fallback local caso necessário
     for (let i = 0; i < bookingsPayload.length; i += 100) {
       const chunk = bookingsPayload.slice(i, i + 100);
       const { error } = await supabase.from("bookings").insert(chunk);
