@@ -24,6 +24,7 @@ import {
   Copy,
   ArrowLeft,
   X,
+  Clock,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -135,45 +136,38 @@ const WEEK_DAYS = [
   { id: 0, label: "Dom", full: "Domingo" },
 ];
 
-const SHIFT_PRESETS = [
+const SHIFT_OPTIONS = [
+  {
+    id: "fullday" as const,
+    label: "Diária Completa (08h às 20h)",
+    start: 8,
+    end: 20,
+  },
   {
     id: "morning" as const,
-    shortLabel: "+ Manhã (08h–12h)",
-    badgeLabel: "Manhã",
+    label: "Manhã (08h às 12h)",
     start: 8,
     end: 12,
   },
   {
     id: "afternoon" as const,
-    shortLabel: "+ Tarde (13h–18h)",
-    badgeLabel: "Tarde",
+    label: "Tarde (13h às 18h)",
     start: 13,
     end: 18,
   },
   {
     id: "night" as const,
-    shortLabel: "+ Noite (18h–22h)",
-    badgeLabel: "Noite",
+    label: "Noite (18h às 22h)",
     start: 18,
     end: 22,
   },
   {
-    id: "fullday" as const,
-    shortLabel: "+ Diária (08h–20h)",
-    badgeLabel: "Diária",
-    start: 8,
-    end: 20,
-  },
-  {
     id: "custom" as const,
-    shortLabel: "+ Horário Livre",
-    badgeLabel: "Personalizado",
+    label: "Horário Personalizado",
     start: 8,
     end: 14,
   },
 ];
-
-const HOURS_OPTIONS = Array.from({ length: 18 }, (_, i) => i + 6); // 06h às 23h
 
 const formatBRL = (val: number) =>
   val.toLocaleString("pt-BR", {
@@ -181,17 +175,13 @@ const formatBRL = (val: number) =>
     maximumFractionDigits: 2,
   });
 
-/**
- * Converte qualquer `schedule_config` (novo ou legado) numa lista padronizada
- * de regras por dia e turno (`ContractScheduleRule[]`).
- */
 function extractScheduleRulesFromConfig(
   cfg?: Partial<ContractScheduleConfig> | null,
 ): ContractScheduleRule[] {
   if (!cfg) {
     return [
       {
-        id: "default_seg_morning",
+        id: "default_seg",
         dayOfWeek: 1,
         shift: "morning",
         startHour: 8,
@@ -228,10 +218,6 @@ function extractScheduleRulesFromConfig(
   }));
 }
 
-/**
- * Monta um mapa `day_hours` a partir das regras de turno para manter
- * integração total com o Mapa de Calor e com o painel de Coanfitrião.
- */
 function buildDayHoursMapFromRules(
   rules: ContractScheduleRule[],
 ): Record<string, number[]> {
@@ -261,10 +247,6 @@ function buildDayHoursMapFromRules(
   return map;
 }
 
-/**
- * Extrai todos os PDFs (Contrato Principal + Aditivos) de um contrato,
- * garantindo retrocompatibilidade com `pdf_url` de contratos antigos.
- */
 function extractContractAttachments(
   c?: RoomContract | null,
 ): ContractAttachment[] {
@@ -319,7 +301,7 @@ export function AdminContractsTab({
   >([]);
   const [specSearch, setSpecSearch] = useState("");
 
-  // Lista flexível de turnos por dia da semana
+  // Lista de janelas de horário por dia da semana (Segunda pode ter um horário, Terça outro, ou 2 turnos no mesmo dia)
   const [scheduleRules, setScheduleRules] = useState<ContractScheduleRule[]>([
     {
       id: "init_seg_morning",
@@ -567,117 +549,132 @@ export function AdminContractsTab({
   };
 
   // ==========================================================================
-  // MANIPULADORES DA GRADE MULTI-TURNOS POR DIA DA SEMANA
+  // CLIQUE NAS PÍLULAS DOS DIAS DA SEMANA + CONFIGURAÇÃO INDIVIDUAL POR DIA
   // ==========================================================================
-  const handleAddShiftRuleToDay = (
-    dayOfWeek: number,
-    presetId: "morning" | "afternoon" | "night" | "fullday" | "custom",
-  ) => {
-    const preset =
-      SHIFT_PRESETS.find((p) => p.id === presetId) || SHIFT_PRESETS[0];
-
+  const handleToggleDayPill = (dayId: number) => {
     setScheduleRules((prev) => {
-      const alreadyExists = prev.some(
-        (r) =>
-          r.dayOfWeek === dayOfWeek &&
-          r.startHour === preset.start &&
-          r.endHour === preset.end &&
-          presetId !== "custom",
-      );
-      if (alreadyExists) {
-        return prev.filter(
-          (r) =>
-            !(
-              r.dayOfWeek === dayOfWeek &&
-              r.startHour === preset.start &&
-              r.endHour === preset.end
-            ),
-        );
+      const hasThisDay = prev.some((r) => Number(r.dayOfWeek) === dayId);
+      if (hasThisDay) {
+        // Se só tem 1 dia ativo e não é sublocação, mantém pelo menos 1
+        const activeDaysSet = new Set(prev.map((r) => Number(r.dayOfWeek)));
+        if (activeDaysSet.size <= 1 && !form.allow_sublease) {
+          return prev;
+        }
+        return prev.filter((r) => Number(r.dayOfWeek) !== dayId);
       }
 
-      const newRule: ContractScheduleRule = {
-        id: `rule_${dayOfWeek}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        dayOfWeek,
-        shift: presetId,
-        startHour: preset.start,
-        endHour: preset.end,
-      };
+      // Ao ativar um novo dia (ex: Terça-feira), cria a linha de horário independente dele
+      const defaultShift =
+        form.contract_type === "fixed_daily" ? "fullday" : "morning";
+      const defaultStart = 8;
+      const defaultEnd = form.contract_type === "fixed_daily" ? 20 : 12;
 
-      return [...prev, newRule].sort((a, b) =>
-        a.dayOfWeek !== b.dayOfWeek
-          ? a.dayOfWeek - b.dayOfWeek
-          : a.startHour - b.startHour,
-      );
+      return [
+        ...prev,
+        {
+          id: `rule_${dayId}_${Date.now()}`,
+          dayOfWeek: dayId,
+          shift: defaultShift,
+          startHour: defaultStart,
+          endHour: defaultEnd,
+        },
+      ];
     });
   };
 
-  const handleUpdateRuleHours = (
+  // Permite adicionar um 2º ou 3º turno no mesmo dia (ex: Segunda Manhã + Segunda Tarde)
+  const handleAddExtraShiftOnSameDay = (dayId: number) => {
+    setScheduleRules((prev) => {
+      const existingOnDay = prev.filter((r) => Number(r.dayOfWeek) === dayId);
+      const hasMorning = existingOnDay.some((r) => r.startHour < 12);
+      const hasAfternoon = existingOnDay.some(
+        (r) => r.startHour >= 12 && r.startHour < 18,
+      );
+
+      let nextShift: ContractScheduleRule["shift"] = "afternoon";
+      let nextStart = 13;
+      let nextEnd = 18;
+
+      if (!hasMorning) {
+        nextShift = "morning";
+        nextStart = 8;
+        nextEnd = 12;
+      } else if (!hasAfternoon) {
+        nextShift = "afternoon";
+        nextStart = 13;
+        nextEnd = 18;
+      } else {
+        nextShift = "night";
+        nextStart = 18;
+        nextEnd = 22;
+      }
+
+      return [
+        ...prev,
+        {
+          id: `rule_${dayId}_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+          dayOfWeek: dayId,
+          shift: nextShift,
+          startHour: nextStart,
+          endHour: nextEnd,
+        },
+      ];
+    });
+  };
+
+  // Altera a Faixa de Turno (Manhã, Tarde, Noite, Diária) apenas daquela linha específica
+  const handleRuleShiftSelectChange = (
+    ruleId: string,
+    shiftId: "fullday" | "morning" | "afternoon" | "night" | "custom",
+  ) => {
+    const found = SHIFT_OPTIONS.find((s) => s.id === shiftId);
+    setScheduleRules((prev) =>
+      prev.map((r) =>
+        r.id === ruleId
+          ? {
+              ...r,
+              shift: shiftId,
+              startHour:
+                shiftId === "custom" ? r.startHour : found ? found.start : 8,
+              endHour:
+                shiftId === "custom" ? r.endHour : found ? found.end : 12,
+            }
+          : r,
+      ),
+    );
+  };
+
+  // Altera a Hora Inicial ou Hora Final apenas daquela linha específica
+  const handleRuleHourInputChange = (
     ruleId: string,
     field: "startHour" | "endHour",
-    val: number,
+    rawVal: string,
   ) => {
+    const numVal = Math.max(0, Math.min(23, Number(rawVal) || 0));
     setScheduleRules((prev) =>
       prev.map((r) => {
         if (r.id !== ruleId) return r;
-        const nextStart =
-          field === "startHour" ? val : Number(r.startHour ?? 8);
-        let nextEnd = field === "endHour" ? val : Number(r.endHour ?? 12);
-        if (nextEnd <= nextStart) {
-          nextEnd = Math.min(23, nextStart + 1);
-        }
+        const nextStart = field === "startHour" ? numVal : r.startHour;
+        const nextEnd = field === "endHour" ? numVal : r.endHour;
 
-        let detectedShift: ContractScheduleRule["shift"] = "custom";
-        if (nextStart === 8 && nextEnd === 12) detectedShift = "morning";
-        else if (nextStart === 13 && nextEnd === 18)
-          detectedShift = "afternoon";
-        else if (nextStart === 18 && nextEnd === 22) detectedShift = "night";
-        else if (nextStart === 8 && nextEnd === 20) detectedShift = "fullday";
+        let matchedShift: ContractScheduleRule["shift"] = "custom";
+        if (nextStart === 8 && nextEnd === 12) matchedShift = "morning";
+        else if (nextStart === 13 && nextEnd === 18) matchedShift = "afternoon";
+        else if (nextStart === 18 && nextEnd === 22) matchedShift = "night";
+        else if (nextStart === 8 && nextEnd === 20) matchedShift = "fullday";
 
         return {
           ...r,
           startHour: nextStart,
           endHour: nextEnd,
-          shift: detectedShift,
+          shift: matchedShift,
         };
       }),
     );
   };
 
-  const handleRemoveRule = (ruleId: string) => {
+  const handleRemoveSingleRule = (ruleId: string) => {
     setScheduleRules((prev) => prev.filter((r) => r.id !== ruleId));
-  };
-
-  const handleClearDayRules = (dayOfWeek: number) => {
-    setScheduleRules((prev) => prev.filter((r) => r.dayOfWeek !== dayOfWeek));
-  };
-
-  const handleReplicateDayToWeekdays = (sourceDay: number) => {
-    const sourceRules = scheduleRules.filter((r) => r.dayOfWeek === sourceDay);
-    if (sourceRules.length === 0) return;
-
-    setScheduleRules((prev) => {
-      const weekendRules = prev.filter(
-        (r) => r.dayOfWeek === 0 || r.dayOfWeek === 6,
-      );
-      const replicated: ContractScheduleRule[] = [];
-      [1, 2, 3, 4, 5].forEach((d) => {
-        sourceRules.forEach((sr, idx) => {
-          replicated.push({
-            id: `rep_${d}_${idx}_${Date.now()}`,
-            dayOfWeek: d,
-            shift: sr.shift,
-            startHour: sr.startHour,
-            endHour: sr.endHour,
-          });
-        });
-      });
-      return [...replicated, ...weekendRules];
-    });
-
-    toast({
-      title: "Turnos replicados para Segunda a Sexta",
-      description: `${sourceRules.length} turno(s) aplicados em todos os dias úteis.`,
-    });
   };
 
   const activeCohostContractByRoomId = useMemo(() => {
@@ -938,9 +935,6 @@ export function AdminContractsTab({
     });
   };
 
-  // ==========================================================================
-  // SINCRONIZADOR DE RESERVAS SUPORTANDO MÚLTIPLOS TURNOS POR DIA E SEMANA
-  // ==========================================================================
   const syncContractBookings = async (
     contract: RoomContract,
     fallbackUserId: string | null,
@@ -969,7 +963,6 @@ export function AdminContractsTab({
     const rules = extractScheduleRulesFromConfig(cfg);
     const dayHoursMap = buildDayHoursMapFromRules(rules);
 
-    // CENÁRIO 1: MODO COANFITRIÃO
     if (
       contract.contract_type === "monthly_exclusive" &&
       contract.allow_sublease
@@ -1051,7 +1044,6 @@ export function AdminContractsTab({
       return openDaysCount;
     }
 
-    // CENÁRIO 2: CONTRATO DE TURNOS FIXOS, DIÁRIAS OU SALA EXCLUSIVA 100% FECHADA
     const effectiveRules: ContractScheduleRule[] =
       contract.contract_type === "monthly_exclusive" && !contract.allow_sublease
         ? [1, 2, 3, 4, 5, 6, 0].map((d) => ({
@@ -1155,9 +1147,6 @@ export function AdminContractsTab({
     return bookingsPayload.length;
   };
 
-  // ==========================================================================
-  // GESTÃO DE MÚLTIPLOS ANEXOS PDF (CONTRATO PRINCIPAL + ADITIVOS)
-  // ==========================================================================
   const uploadContractPdf = async (
     file: File,
     roomId: string,
@@ -1588,9 +1577,9 @@ export function AdminContractsTab({
     if (!isFullBlockedExclusive && scheduleRules.length === 0) {
       return toast({
         variant: "destructive",
-        title: "Grade de horários vazia",
+        title: "Selecione ao menos um dia da semana",
         description:
-          "Adicione ao menos um dia e turno na seção de Alocação de Agenda.",
+          "Clique nos dias da semana que farão parte deste contrato e escolha o turno de cada um.",
       });
     }
 
@@ -2057,7 +2046,7 @@ export function AdminContractsTab({
               `${String(r.startHour).padStart(2, "0")}h–${String(r.endHour).padStart(2, "0")}h`,
           )
           .join(", ");
-        groupedByDay.push(`${wd.label} (${intervals})`);
+        groupedByDay.push(`${wd.label}: ${intervals}`);
       }
     });
 
@@ -2130,9 +2119,8 @@ export function AdminContractsTab({
                   : "Novo Contrato de Locação de Sala"}
               </h1>
               <p className="text-xs text-slate-500 mt-0.5">
-                Configure múltiplos turnos por dia da semana, regras de
-                coanfitrião, divisão de repasses e anexe o Contrato e seus
-                Aditivos em PDF.
+                Escolha os dias da semana e defina a janela de horário
+                individual de cada dia (ex: Segunda de manhã, Terça à tarde).
               </p>
             </div>
           </div>
@@ -2194,8 +2182,8 @@ export function AdminContractsTab({
                     parseISO(parentCohostForFormRoom.end_date),
                     "dd/MM/yyyy",
                   )}
-                  ). Este novo contrato bloqueará os turnos escolhidos abaixo e
-                  direcionará o repasse líquido ao coanfitrião.
+                  ). Este novo contrato bloqueará os horários escolhidos abaixo
+                  e direcionará o repasse líquido ao coanfitrião.
                 </p>
               </div>
             )}
@@ -2284,7 +2272,7 @@ export function AdminContractsTab({
                       </option>
                     )}
                     <option value="fixed_shift">
-                      Turnos Fixos Semanais (Ex: Seg Manhã + Ter Tarde)
+                      Turnos Fixos Semanais (Janelas por Dia)
                     </option>
                     <option value="fixed_daily">
                       Diária Fixa Recorrente (Ex: Segunda Dia Todo)
@@ -2497,24 +2485,17 @@ export function AdminContractsTab({
             </div>
 
             {/* ============================================================== */}
-            {/* BLOCO 3: CONSTRUTOR FLEXÍVEL DE MÚLTIPLOS TURNOS POR DIA       */}
+            {/* BLOCO 3: DIAS SELECIONADOS + JANELA DE HORÁRIO DE CADA DIA     */}
             {/* ============================================================== */}
             <div className="bg-white p-6 rounded-2xl border border-slate-200/90 space-y-5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
-                <div>
-                  <h2 className="text-sm font-bold text-slate-900">
-                    3. Vigência e Grade Flexível de Turnos por Dia
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Adicione quantos turnos quiser em cada dia da semana (ex:
-                    Segunda de Manhã + Segunda à Tarde + Quarta de Manhã).
-                  </p>
-                </div>
-                {scheduleRules.length > 0 && (
-                  <Badge className="bg-orange-50 text-[#BF4B24] border-0 font-bold text-xs w-fit">
-                    {scheduleRules.length} turno(s) / semana
-                  </Badge>
-                )}
+              <div className="border-b border-slate-100 pb-3">
+                <h2 className="text-sm font-bold text-slate-900">
+                  3. Vigência e Alocação de Agenda
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Selecione os dias da semana abaixo e defina a Faixa de Turno /
+                  Horário individualmente para cada dia selecionado.
+                </p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2554,202 +2535,159 @@ export function AdminContractsTab({
                   vigência.
                 </div>
               ) : (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-xs font-bold text-slate-700">
+                <div className="space-y-4">
+                  {/* PÍLULAS DOS DIAS DA SEMANA (IGUAL AO SEU PRINT) */}
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700 mb-2 block">
                       {form.contract_type === "monthly_exclusive" &&
                       form.allow_sublease
-                        ? "Configure os turnos de cada dia que o Coanfitrião deixará ABERTOS para sublocar:"
-                        : "Adicione os turnos contratados em cada dia da semana:"}
+                        ? "Dias da semana inicialmente abertos para sublocação:"
+                        : "Dias da semana reservados para este contrato:"}
                     </Label>
-                    {scheduleRules.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setScheduleRules([])}
-                        className="text-[11px] font-semibold text-red-600 hover:underline"
-                      >
-                        Limpar toda a semana
-                      </button>
-                    )}
+                    <div className="flex flex-wrap gap-2">
+                      {WEEK_DAYS.map((d) => {
+                        const active = scheduleRules.some(
+                          (r) => Number(r.dayOfWeek) === d.id,
+                        );
+                        return (
+                          <button
+                            type="button"
+                            key={d.id}
+                            onClick={() => handleToggleDayPill(d.id)}
+                            className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
+                              active
+                                ? "bg-slate-900 text-white border-slate-900 shadow-2xs"
+                                : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
+                            }`}
+                          >
+                            {d.full}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
-                  {/* Lista dos 7 Dias da Semana com adição livre de turnos */}
-                  <div className="space-y-2.5">
+                  {/* LINHAS DE HORÁRIO INDEPENDENTES PARA CADA DIA CLICADO */}
+                  <div className="space-y-3 pt-1">
                     {WEEK_DAYS.map((wd) => {
-                      const dayRules = scheduleRules
-                        .filter((r) => Number(r.dayOfWeek) === wd.id)
-                        .sort((a, b) => a.startHour - b.startHour);
-                      const hasRules = dayRules.length > 0;
+                      const dayRules = scheduleRules.filter(
+                        (r) => Number(r.dayOfWeek) === wd.id,
+                      );
+                      if (dayRules.length === 0) return null;
 
                       return (
                         <div
                           key={wd.id}
-                          className={`p-3.5 rounded-2xl border transition-all ${
-                            hasRules
-                              ? "bg-[#FAF7F4]/70 border-orange-200/90 shadow-2xs"
-                              : "bg-slate-50/60 border-slate-200/80"
-                          }`}
+                          className="p-4 rounded-2xl bg-slate-50/80 border border-slate-200/90 space-y-3 animate-in fade-in duration-150"
                         >
-                          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-2.5">
+                          <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
-                              <span
-                                className={`px-2.5 py-1 rounded-lg text-xs font-bold ${
-                                  hasRules
-                                    ? "bg-slate-900 text-white"
-                                    : "bg-slate-200/80 text-slate-600"
-                                }`}
-                              >
+                              <span className="px-2.5 py-1 rounded-lg bg-slate-900 text-white text-xs font-bold">
                                 {wd.full}
                               </span>
-                              <span className="text-[11px] font-semibold text-slate-500">
-                                {hasRules
-                                  ? `${dayRules.length} ${
-                                      dayRules.length === 1
-                                        ? "turno configurado"
-                                        : "turnos configurados"
-                                    }`
-                                  : "Sem alocação"}
+                              <span className="text-[11px] font-medium text-slate-500">
+                                Configure a janela de horário de {wd.full}:
                               </span>
                             </div>
 
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              {SHIFT_PRESETS.map((preset) => {
-                                const isAlreadyActive =
-                                  preset.id !== "custom" &&
-                                  dayRules.some(
-                                    (r) =>
-                                      r.startHour === preset.start &&
-                                      r.endHour === preset.end,
-                                  );
-
-                                return (
-                                  <button
-                                    key={preset.id}
-                                    type="button"
-                                    onClick={() =>
-                                      handleAddShiftRuleToDay(wd.id, preset.id)
-                                    }
-                                    className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer ${
-                                      isAlreadyActive
-                                        ? "bg-[#BF4B24] text-white border-[#BF4B24]"
-                                        : "bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50"
-                                    }`}
-                                  >
-                                    {preset.shortLabel}
-                                  </button>
-                                );
-                              })}
-
-                              {hasRules && (
-                                <>
-                                  <button
-                                    type="button"
-                                    title="Copiar os turnos deste dia para Segunda a Sexta"
-                                    onClick={() =>
-                                      handleReplicateDayToWeekdays(wd.id)
-                                    }
-                                    className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 cursor-pointer"
-                                  >
-                                    <Copy className="w-3 h-3" /> Replicar
-                                    Seg–Sex
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleClearDayRules(wd.id)}
-                                    className="px-2 py-1 rounded-lg text-[11px] font-semibold text-red-600 hover:bg-red-50 cursor-pointer"
-                                  >
-                                    Limpar
-                                  </button>
-                                </>
-                              )}
-                            </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleAddExtraShiftOnSameDay(wd.id)
+                              }
+                              className="text-xs font-bold text-[#BF4B24] hover:underline cursor-pointer"
+                            >
+                              + Outro turno em {wd.label}
+                            </button>
                           </div>
 
-                          {/* Lista de Turnos Adicionados neste Dia */}
-                          {hasRules && (
-                            <div className="mt-3 pt-2.5 border-t border-stone-200/70 flex flex-wrap gap-2">
-                              {dayRules.map((rule, idx) => {
-                                const presetMeta =
-                                  SHIFT_PRESETS.find(
-                                    (p) => p.id === rule.shift,
-                                  ) || SHIFT_PRESETS[4];
-                                const hoursCount = Math.max(
-                                  1,
-                                  rule.endHour - rule.startHour,
-                                );
-
-                                return (
-                                  <div
-                                    key={rule.id}
-                                    className="inline-flex items-center gap-2 bg-white border border-stone-200/90 px-3 py-1.5 rounded-xl shadow-2xs text-xs"
+                          <div className="space-y-2.5">
+                            {dayRules.map((rule, idx) => (
+                              <div
+                                key={rule.id}
+                                className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end bg-white p-3 rounded-xl border border-slate-200/80"
+                              >
+                                <div className="md:col-span-5">
+                                  <Label className="text-xs font-semibold text-slate-700">
+                                    {dayRules.length > 1
+                                      ? `${idx + 1}ª Faixa de Turno (${wd.label})`
+                                      : "Faixa de Turno"}
+                                  </Label>
+                                  <select
+                                    value={rule.shift}
+                                    onChange={(e) =>
+                                      handleRuleShiftSelectChange(
+                                        rule.id,
+                                        e.target.value as any,
+                                      )
+                                    }
+                                    className="mt-1 w-full h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 outline-none focus:border-[#BF4B24]"
                                   >
-                                    <span className="font-bold text-[#BF4B24]">
-                                      {dayRules.length > 1
-                                        ? `${idx + 1}º Turno (${presetMeta.badgeLabel}):`
-                                        : `${presetMeta.badgeLabel}:`}
-                                    </span>
+                                    {SHIFT_OPTIONS.map((s) => (
+                                      <option key={s.id} value={s.id}>
+                                        {s.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
 
-                                    <div className="flex items-center gap-1">
-                                      <select
-                                        value={rule.startHour}
-                                        onChange={(e) =>
-                                          handleUpdateRuleHours(
-                                            rule.id,
-                                            "startHour",
-                                            Number(e.target.value),
-                                          )
-                                        }
-                                        className="bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5 font-bold text-slate-900 outline-none cursor-pointer"
-                                      >
-                                        {HOURS_OPTIONS.filter(
-                                          (h) => h <= 22,
-                                        ).map((h) => (
-                                          <option key={h} value={h}>
-                                            {String(h).padStart(2, "0")}:00
-                                          </option>
-                                        ))}
-                                      </select>
+                                <div className="md:col-span-3">
+                                  <Label className="text-xs font-semibold text-slate-700">
+                                    Hora Inicial
+                                  </Label>
+                                  <Input
+                                    type="number"
+                                    min="6"
+                                    max="22"
+                                    value={rule.startHour}
+                                    onChange={(e) =>
+                                      handleRuleHourInputChange(
+                                        rule.id,
+                                        "startHour",
+                                        e.target.value,
+                                      )
+                                    }
+                                    className="mt-1 h-10 text-xs font-semibold rounded-xl bg-white"
+                                  />
+                                </div>
 
-                                      <span className="text-slate-400">às</span>
+                                <div className="md:col-span-3">
+                                  <Label className="text-xs font-semibold text-slate-700">
+                                    Hora Final
+                                  </Label>
+                                  <Input
+                                    type="number"
+                                    min="7"
+                                    max="23"
+                                    value={rule.endHour}
+                                    onChange={(e) =>
+                                      handleRuleHourInputChange(
+                                        rule.id,
+                                        "endHour",
+                                        e.target.value,
+                                      )
+                                    }
+                                    className="mt-1 h-10 text-xs font-semibold rounded-xl bg-white"
+                                  />
+                                </div>
 
-                                      <select
-                                        value={rule.endHour}
-                                        onChange={(e) =>
-                                          handleUpdateRuleHours(
-                                            rule.id,
-                                            "endHour",
-                                            Number(e.target.value),
-                                          )
-                                        }
-                                        className="bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5 font-bold text-slate-900 outline-none cursor-pointer"
-                                      >
-                                        {HOURS_OPTIONS.filter(
-                                          (h) => h > rule.startHour,
-                                        ).map((h) => (
-                                          <option key={h} value={h}>
-                                            {String(h).padStart(2, "0")}:00
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </div>
-
-                                    <span className="text-[11px] font-semibold text-slate-400">
-                                      ({hoursCount}h)
-                                    </span>
-
-                                    <button
-                                      type="button"
-                                      title="Remover este turno"
-                                      onClick={() => handleRemoveRule(rule.id)}
-                                      className="p-0.5 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
-                                    >
-                                      <X className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
+                                <div className="md:col-span-1 flex justify-end">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    title="Remover este horário"
+                                    onClick={() =>
+                                      handleRemoveSingleRule(rule.id)
+                                    }
+                                    className="h-10 w-10 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       );
                     })}
@@ -3057,7 +2995,8 @@ export function AdminContractsTab({
                       Adicionar Contrato ou Termo Aditivo (PDF)
                     </p>
                     <p className="text-[11px] text-slate-500">
-                      Pode selecionar um ou vários ficheiros PDF em simultâneo.
+                      Você pode selecionar um ou vários arquivos PDF de uma só
+                      vez.
                     </p>
                   </div>
                 </div>
@@ -3080,7 +3019,6 @@ export function AdminContractsTab({
                 </label>
               </div>
 
-              {/* Lista de PDFs já salvos + novos PDFs selecionados */}
               {(existingAttachments.length > 0 || pdfFiles.length > 0) && (
                 <div className="space-y-2">
                   {existingAttachments.map((att, index) => (
@@ -3097,7 +3035,7 @@ export function AdminContractsTab({
                               : `${index}º Aditivo / Anexo: ${att.filename}`}
                           </span>
                           <span className="text-[10px] text-slate-400">
-                            Guardado no cofre do contrato
+                            Salvo no cofre do contrato
                           </span>
                         </div>
                       </div>
@@ -3140,7 +3078,7 @@ export function AdminContractsTab({
                             {file.name}
                           </span>
                           <span className="text-[10px] font-semibold text-[#BF4B24]">
-                            Novo ficheiro pronto para enviar ao salvar
+                            Novo arquivo pronto para enviar ao salvar
                           </span>
                         </div>
                       </div>
@@ -3243,7 +3181,7 @@ export function AdminContractsTab({
                   scheduleRules.length > 0 && (
                     <div className="p-3 rounded-xl bg-slate-800/80 border border-slate-700/80 text-[11px] text-slate-300 leading-relaxed">
                       <span className="text-[10px] font-bold uppercase text-slate-400 block mb-1">
-                        Grade Semanal Configurada:
+                        Janelas por Dia da Semana:
                       </span>
                       <span className="text-white font-semibold">
                         {formatScheduleSummaryFromRules(scheduleRules)}
@@ -3541,9 +3479,12 @@ export function AdminContractsTab({
                         {getContractTypeBadge(c)}
                         <p
                           title={formatScheduleSummary(c)}
-                          className="text-[11px] text-slate-600 font-medium mt-1 max-w-[300px] truncate"
+                          className="text-[11px] text-slate-600 font-medium mt-1 max-w-[300px] truncate flex items-center gap-1"
                         >
-                          {formatScheduleSummary(c)}
+                          <Clock className="w-3 h-3 text-slate-400 shrink-0" />
+                          <span className="truncate">
+                            {formatScheduleSummary(c)}
+                          </span>
                         </p>
                       </td>
 
